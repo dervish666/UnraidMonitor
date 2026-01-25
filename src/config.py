@@ -190,3 +190,9 @@ class AppConfig:
     def log_level(self) -> str:
         """Get log level."""
         return self._settings.log_level
+
+    @property
+    def resource_monitoring(self) -> ResourceConfig:
+        """Get resource monitoring configuration."""
+        raw = self._yaml_config.get("resource_monitoring", {})
+        return ResourceConfig.from_dict(raw)

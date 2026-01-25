@@ -92,3 +92,47 @@ def test_resource_config_empty_dict():
 
     assert config.enabled is True
     assert config.poll_interval_seconds == 60
+
+
+def test_app_config_resource_monitoring_property():
+    """Test AppConfig exposes resource_monitoring config."""
+    from unittest.mock import MagicMock
+    from src.config import AppConfig, ResourceConfig
+
+    mock_settings = MagicMock()
+    mock_settings.config_path = "/nonexistent/path"
+
+    config = AppConfig(mock_settings)
+
+    # Should return default ResourceConfig when not in YAML
+    assert isinstance(config.resource_monitoring, ResourceConfig)
+    assert config.resource_monitoring.enabled is True
+
+
+def test_app_config_resource_monitoring_from_yaml(tmp_path):
+    """Test AppConfig loads resource_monitoring from YAML."""
+    from unittest.mock import MagicMock
+    from src.config import AppConfig, ResourceConfig
+
+    # Create a temp config file
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+resource_monitoring:
+  enabled: true
+  poll_interval_seconds: 30
+  defaults:
+    cpu_percent: 70
+  containers:
+    plex:
+      cpu_percent: 95
+""")
+
+    mock_settings = MagicMock()
+    mock_settings.config_path = str(config_file)
+
+    config = AppConfig(mock_settings)
+
+    assert isinstance(config.resource_monitoring, ResourceConfig)
+    assert config.resource_monitoring.poll_interval_seconds == 30
+    assert config.resource_monitoring.default_cpu_percent == 70
+    assert config.resource_monitoring.container_overrides == {"plex": {"cpu_percent": 95}}
