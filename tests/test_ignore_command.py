@@ -143,3 +143,11 @@ async def test_ignores_command_empty():
     message.answer.assert_called_once()
     response = message.answer.call_args[0][0]
     assert "no ignored" in response.lower() or "No ignored" in response
+
+
+def test_ignore_commands_in_help():
+    """Test that /ignore and /ignores are in help text."""
+    from src.bot.commands import HELP_TEXT
+
+    assert "/ignore" in HELP_TEXT
+    assert "/ignores" in HELP_TEXT

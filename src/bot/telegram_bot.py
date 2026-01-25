@@ -17,6 +17,7 @@ from src.bot.control_commands import (
 )
 from src.bot.confirmation import ConfirmationManager
 from src.bot.diagnose_command import diagnose_command
+from src.bot.ignore_command import ignore_command, ignores_command
 from src.bot.resources_command import resources_command
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
@@ -113,6 +114,8 @@ def register_commands(
     protected_containers: list[str] | None = None,
     anthropic_client: Any | None = None,
     resource_monitor: Any | None = None,
+    ignore_manager: Any | None = None,
+    recent_errors_buffer: Any | None = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -159,6 +162,17 @@ def register_commands(
             dp.message.register(
                 resources_command(resource_monitor),
                 Command("resources"),
+            )
+
+        # Register /ignore and /ignores commands
+        if ignore_manager is not None and recent_errors_buffer is not None:
+            dp.message.register(
+                ignore_command(recent_errors_buffer, ignore_manager),
+                Command("ignore"),
+            )
+            dp.message.register(
+                ignores_command(ignore_manager),
+                Command("ignores"),
             )
 
         return confirmation, diagnostic_service
