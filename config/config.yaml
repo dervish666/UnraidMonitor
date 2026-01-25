@@ -1,0 +1,17 @@
+# Unraid Monitor Bot Configuration
+
+monitoring:
+  health_check_interval: 60  # seconds (used in Phase 2)
+
+# Containers to ignore (won't be monitored or shown)
+ignored_containers:
+  - Kometa
+
+# Log filtering (Phase 2)
+log_filters:
+  error_patterns:
+    - "error"
+    - "exception"
+    - "fatal"
+  ignore_patterns:
+    - "DeprecationWarning"
