@@ -50,3 +50,69 @@ def test_container_stats_memory_display_mb():
 
     assert stats.memory_display == "477MB"
     assert stats.memory_limit_display == "1.9GB"
+
+
+def test_calculate_cpu_percent():
+    """Test CPU percentage calculation from Docker stats."""
+    from src.monitors.resource_monitor import calculate_cpu_percent
+
+    # Simulated Docker stats response
+    stats = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 200_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 4,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 900_000_000,
+        },
+    }
+
+    # CPU delta: 100_000_000, System delta: 100_000_000
+    # (100_000_000 / 100_000_000) * 4 * 100 = 400%
+    # This shows CPU usage where 100% = one full core
+    # With 4 cores at full usage: 400%
+    result = calculate_cpu_percent(stats)
+    assert result == 400.0  # 100% per core * 4 cores = 400%
+
+
+def test_calculate_cpu_percent_zero_delta():
+    """Test CPU calculation handles zero delta gracefully."""
+    from src.monitors.resource_monitor import calculate_cpu_percent
+
+    stats = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 4,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 1_000_000_000,
+        },
+    }
+
+    result = calculate_cpu_percent(stats)
+    assert result == 0.0
+
+
+def test_calculate_cpu_percent_missing_precpu():
+    """Test CPU calculation handles missing precpu_stats."""
+    from src.monitors.resource_monitor import calculate_cpu_percent
+
+    stats = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 4,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 0},
+            "system_cpu_usage": 0,
+        },
+    }
+
+    result = calculate_cpu_percent(stats)
+    # First reading has no baseline, should handle gracefully
+    assert isinstance(result, float)
