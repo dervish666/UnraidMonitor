@@ -7,11 +7,39 @@ monitoring:
 ignored_containers:
   - Kometa
 
-# Log filtering (Phase 2)
-log_filters:
+# Log watching configuration for Phase 2 alerts
+log_watching:
+  # Containers to watch for log errors
+  containers:
+    - plex
+    - radarr
+    - sonarr
+    - lidarr
+    - readarr
+    - prowlarr
+    - qbit
+    - sab
+    - tautulli
+    - overseerr
+    - mariadb
+    - postgresql14
+    - redis
+    - Brisbooks
+
+  # Patterns to match as errors (case-insensitive)
   error_patterns:
     - "error"
     - "exception"
     - "fatal"
+    - "failed"
+    - "critical"
+    - "panic"
+    - "traceback"
+
+  # Patterns to ignore even if they match error patterns
   ignore_patterns:
     - "DeprecationWarning"
+    - "DEBUG"
+
+  # Cooldown period before alerting on same error again (seconds)
+  cooldown_seconds: 900
