@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import signal
 import sys
 
 from src.config import Settings
@@ -48,24 +47,14 @@ async def main() -> None:
     dp = create_dispatcher(settings.telegram_allowed_users)
     register_commands(dp, state)
 
-    # Handle shutdown signals
-    shutdown_event = asyncio.Event()
-
-    def signal_handler(sig: int, frame) -> None:
-        logger.info(f"Received signal {sig}, shutting down...")
-        shutdown_event.set()
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
     # Start Docker event monitor as background task
     monitor_task = asyncio.create_task(monitor.start())
 
     logger.info("Starting Telegram bot...")
 
     try:
-        # Run bot until shutdown
-        await dp.start_polling(bot, handle_signals=False)
+        # Run bot until shutdown (aiogram handles SIGINT/SIGTERM)
+        await dp.start_polling(bot)
     finally:
         logger.info("Shutting down...")
         monitor.stop()
