@@ -21,7 +21,12 @@ class CustomEnvSettingsSource(EnvSettingsSource):
     ) -> Any:
         # Handle comma-separated list for telegram_allowed_users
         if field_name == "telegram_allowed_users" and isinstance(value, str):
-            return [int(x.strip()) for x in value.split(",")]
+            if not value.strip():
+                raise ValueError("TELEGRAM_ALLOWED_USERS cannot be empty")
+            try:
+                return [int(x.strip()) for x in value.split(",") if x.strip()]
+            except ValueError as e:
+                raise ValueError(f"TELEGRAM_ALLOWED_USERS must be comma-separated integers, got: {value}") from e
         return super().prepare_field_value(field_name, field, value, value_is_complex)
 
 
