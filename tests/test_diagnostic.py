@@ -66,3 +66,34 @@ def test_diagnostic_service_handles_missing_container():
     context = service.gather_context("nonexistent", lines=50)
 
     assert context is None
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_service_analyzes_with_claude():
+    """Test calling Claude API for analysis."""
+    from src.services.diagnostic import DiagnosticService, DiagnosticContext
+    from unittest.mock import AsyncMock
+
+    mock_client = MagicMock()
+
+    # Mock Anthropic client
+    mock_anthropic = MagicMock()
+    mock_message = MagicMock()
+    mock_message.content = [MagicMock(text="The container crashed due to OOM. Increase memory limits.")]
+    mock_anthropic.messages.create = MagicMock(return_value=mock_message)
+
+    service = DiagnosticService(docker_client=mock_client, anthropic_client=mock_anthropic)
+
+    context = DiagnosticContext(
+        container_name="overseerr",
+        logs="Error: JavaScript heap out of memory",
+        exit_code=137,
+        image="linuxserver/overseerr:latest",
+        uptime_seconds=3600,
+        restart_count=2,
+    )
+
+    result = await service.analyze(context)
+
+    assert "OOM" in result or "memory" in result.lower()
+    mock_anthropic.messages.create.assert_called_once()
