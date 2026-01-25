@@ -151,3 +151,79 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
         if hours > 0:
             return f"{hours}h {minutes}m"
         return f"{minutes}m"
+
+    def store_context(self, user_id: int, context: DiagnosticContext) -> None:
+        """Store diagnostic context for potential follow-up.
+
+        Args:
+            user_id: Telegram user ID.
+            context: DiagnosticContext to store.
+        """
+        self._pending[user_id] = context
+
+    def has_pending(self, user_id: int) -> bool:
+        """Check if user has pending diagnostic context.
+
+        Args:
+            user_id: Telegram user ID.
+
+        Returns:
+            True if user has pending context less than 10 minutes old.
+        """
+        context = self._pending.get(user_id)
+        if context is None:
+            return False
+
+        # Check if context is stale (> 10 minutes)
+        if context.created_at:
+            age = (datetime.now() - context.created_at).total_seconds()
+            if age > 600:  # 10 minutes
+                del self._pending[user_id]
+                return False
+
+        return True
+
+    async def get_details(self, user_id: int) -> str | None:
+        """Get detailed analysis for user's pending context.
+
+        Args:
+            user_id: Telegram user ID.
+
+        Returns:
+            Detailed analysis or None if no pending context.
+        """
+        if not self.has_pending(user_id):
+            return None
+
+        context = self._pending.pop(user_id)
+
+        if not self._anthropic:
+            return "❌ Anthropic API not configured."
+
+        prompt = f"""Based on your previous analysis, provide detailed help:
+
+Container: {context.container_name}
+Your brief analysis: {context.brief_summary}
+
+Logs:
+```
+{context.logs}
+```
+
+Provide:
+1. Detailed root cause analysis
+2. Step-by-step fix instructions
+3. How to prevent this in future
+
+Be specific and actionable."""
+
+        try:
+            message = self._anthropic.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=800,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return message.content[0].text
+        except Exception as e:
+            logger.error(f"Claude API error: {e}")
+            return f"❌ Error getting details: {e}"

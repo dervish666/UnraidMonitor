@@ -97,3 +97,43 @@ async def test_diagnostic_service_analyzes_with_claude():
 
     assert "OOM" in result or "memory" in result.lower()
     mock_anthropic.messages.create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_service_stores_and_retrieves_context():
+    """Test storing context for follow-up."""
+    from src.services.diagnostic import DiagnosticService, DiagnosticContext
+
+    mock_client = MagicMock()
+    mock_anthropic = MagicMock()
+    mock_message = MagicMock()
+    mock_message.content = [MagicMock(text="Detailed analysis: The root cause is...")]
+    mock_anthropic.messages.create = MagicMock(return_value=mock_message)
+
+    service = DiagnosticService(docker_client=mock_client, anthropic_client=mock_anthropic)
+
+    context = DiagnosticContext(
+        container_name="overseerr",
+        logs="Error log",
+        exit_code=1,
+        image="linuxserver/overseerr:latest",
+        uptime_seconds=3600,
+        restart_count=0,
+        brief_summary="Container crashed.",
+    )
+
+    # Store context for user
+    service.store_context(user_id=123, context=context)
+
+    # Check pending
+    assert service.has_pending(123) is True
+    assert service.has_pending(456) is False
+
+    # Get details
+    details = await service.get_details(123)
+
+    assert details is not None
+    assert "root cause" in details.lower() or "Detailed" in details
+
+    # Context should be cleared after retrieval
+    assert service.has_pending(123) is False
