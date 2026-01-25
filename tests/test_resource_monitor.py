@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import MagicMock, AsyncMock
 
 
 def test_container_stats_dataclass():
@@ -175,3 +176,45 @@ def test_parse_container_stats_with_cache():
     # Memory usage should exclude cache: 2GB - 500MB = 1.5GB
     assert result.memory_bytes == 1_500_000_000
     assert result.memory_percent == 37.5
+
+
+def test_resource_monitor_init():
+    """Test ResourceMonitor initialization."""
+    from src.monitors.resource_monitor import ResourceMonitor
+    from src.config import ResourceConfig
+
+    mock_docker = MagicMock()
+    config = ResourceConfig()
+    mock_alert_manager = MagicMock()
+    mock_rate_limiter = MagicMock()
+
+    monitor = ResourceMonitor(
+        docker_client=mock_docker,
+        config=config,
+        alert_manager=mock_alert_manager,
+        rate_limiter=mock_rate_limiter,
+    )
+
+    assert monitor._docker == mock_docker
+    assert monitor._config == config
+    assert monitor._alert_manager == mock_alert_manager
+    assert monitor._rate_limiter == mock_rate_limiter
+    assert monitor._violations == {}
+    assert monitor._running is False
+
+
+def test_resource_monitor_disabled():
+    """Test ResourceMonitor does nothing when disabled."""
+    from src.monitors.resource_monitor import ResourceMonitor
+    from src.config import ResourceConfig
+
+    config = ResourceConfig(enabled=False)
+
+    monitor = ResourceMonitor(
+        docker_client=MagicMock(),
+        config=config,
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    assert monitor.is_enabled is False

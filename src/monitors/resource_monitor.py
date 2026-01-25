@@ -1,4 +1,16 @@
+import logging
 from dataclasses import dataclass
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+import docker
+
+if TYPE_CHECKING:
+    from src.config import ResourceConfig
+    from src.alerts.manager import AlertManager
+    from src.alerts.rate_limiter import RateLimiter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,3 +103,36 @@ def parse_container_stats(name: str, stats: dict) -> ContainerStats:
         memory_bytes=memory_usage,
         memory_limit=memory_limit,
     )
+
+
+@dataclass
+class ViolationState:
+    """Tracks sustained threshold violation for a container."""
+
+    metric: str  # "cpu" or "memory"
+    started_at: datetime
+    current_value: float
+    threshold: float
+
+
+class ResourceMonitor:
+    """Monitors container resource usage and sends alerts."""
+
+    def __init__(
+        self,
+        docker_client: docker.DockerClient,
+        config: "ResourceConfig",
+        alert_manager: "AlertManager",
+        rate_limiter: "RateLimiter",
+    ):
+        self._docker = docker_client
+        self._config = config
+        self._alert_manager = alert_manager
+        self._rate_limiter = rate_limiter
+        self._violations: dict[str, dict[str, ViolationState]] = {}
+        self._running = False
+
+    @property
+    def is_enabled(self) -> bool:
+        """Check if resource monitoring is enabled."""
+        return self._config.enabled
