@@ -74,3 +74,90 @@ def test_config_raises_on_invalid_allowed_users():
         with pytest.raises(ValidationError) as exc_info:
             Settings(_env_file=None)
         assert "TELEGRAM_ALLOWED_USERS must be comma-separated integers" in str(exc_info.value)
+
+
+def test_log_watching_container_ignores(tmp_path):
+    """Test that container_ignores is parsed from config."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+log_watching:
+  containers:
+    - plex
+  error_patterns:
+    - error
+  ignore_patterns:
+    - DEBUG
+  container_ignores:
+    plex:
+      - connection timed out
+      - slow query
+    radarr:
+      - rate limit
+""")
+
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {
+        "TELEGRAM_BOT_TOKEN": "test",
+        "TELEGRAM_ALLOWED_USERS": "123",
+    }):
+        from src.config import Settings, AppConfig
+
+        settings = Settings(config_path=str(config_file))
+        config = AppConfig(settings)
+
+        log_watching = config.log_watching
+        assert "container_ignores" in log_watching
+        assert log_watching["container_ignores"]["plex"] == ["connection timed out", "slow query"]
+        assert log_watching["container_ignores"]["radarr"] == ["rate limit"]
+
+
+def test_log_watching_container_ignores_default_empty(tmp_path):
+    """Test that container_ignores defaults to empty dict."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+log_watching:
+  containers:
+    - plex
+""")
+
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {
+        "TELEGRAM_BOT_TOKEN": "test",
+        "TELEGRAM_ALLOWED_USERS": "123",
+    }):
+        from src.config import Settings, AppConfig
+
+        settings = Settings(config_path=str(config_file))
+        config = AppConfig(settings)
+
+        log_watching = config.log_watching
+        # container_ignores must always be present
+        assert "container_ignores" in log_watching
+        assert log_watching["container_ignores"] == {}
+
+
+def test_log_watching_container_ignores_default_when_no_config(tmp_path):
+    """Test that container_ignores is present even when no log_watching config exists."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("")
+
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {
+        "TELEGRAM_BOT_TOKEN": "test",
+        "TELEGRAM_ALLOWED_USERS": "123",
+    }):
+        from src.config import Settings, AppConfig
+
+        settings = Settings(config_path=str(config_file))
+        config = AppConfig(settings)
+
+        log_watching = config.log_watching
+        # container_ignores must be in default config
+        assert "container_ignores" in log_watching
+        assert log_watching["container_ignores"] == {}
