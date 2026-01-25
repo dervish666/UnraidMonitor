@@ -17,7 +17,7 @@ from src.bot.control_commands import (
 )
 from src.bot.confirmation import ConfirmationManager
 from src.bot.diagnose_command import diagnose_command
-from src.bot.ignore_command import ignore_command, ignores_command
+from src.bot.ignore_command import ignore_command, ignores_command, ignore_selection_handler, IgnoreSelectionState
 from src.bot.resources_command import resources_command
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
@@ -43,6 +43,20 @@ class DetailsFilter(Filter):
         if not message.text:
             return False
         return message.text.strip().lower() in self.TRIGGERS
+
+
+class IgnoreSelectionFilter(Filter):
+    """Filter for ignore selection responses (numbers like '1', '1,3', or 'all')."""
+
+    def __init__(self, selection_state: IgnoreSelectionState):
+        self.selection_state = selection_state
+
+    async def __call__(self, message: Message) -> bool:
+        if not message.text:
+            return False
+        user_id = message.from_user.id if message.from_user else 0
+        # Only match if user has a pending selection
+        return self.selection_state.has_pending(user_id)
 
 
 def create_details_handler(
@@ -166,13 +180,21 @@ def register_commands(
 
         # Register /ignore and /ignores commands
         if ignore_manager is not None and recent_errors_buffer is not None:
+            # Create shared state for ignore selections
+            selection_state = IgnoreSelectionState()
+
             dp.message.register(
-                ignore_command(recent_errors_buffer, ignore_manager),
+                ignore_command(recent_errors_buffer, ignore_manager, selection_state),
                 Command("ignore"),
             )
             dp.message.register(
                 ignores_command(ignore_manager),
                 Command("ignores"),
+            )
+            # Register handler for selection follow-up (numbers like "1,3" or "all")
+            dp.message.register(
+                ignore_selection_handler(ignore_manager, selection_state),
+                IgnoreSelectionFilter(selection_state),
             )
 
         return confirmation, diagnostic_service
