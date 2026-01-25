@@ -17,6 +17,7 @@ from src.bot.control_commands import (
 )
 from src.bot.confirmation import ConfirmationManager
 from src.services.container_control import ContainerController
+from src.services.diagnostic import DiagnosticService
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,37 @@ class YesFilter(Filter):
         if not message.text:
             return False
         return message.text.strip().lower() == "yes"
+
+
+class DetailsFilter(Filter):
+    """Filter for 'yes', 'more', 'details' follow-up messages."""
+
+    TRIGGERS = {"yes", "more", "details", "more details", "tell me more", "expand"}
+
+    async def __call__(self, message: Message) -> bool:
+        if not message.text:
+            return False
+        return message.text.strip().lower() in self.TRIGGERS
+
+
+def create_details_handler(
+    diagnostic_service: DiagnosticService,
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for details follow-up handler."""
+
+    async def handler(message: Message) -> None:
+        user_id = message.from_user.id
+
+        if not diagnostic_service.has_pending(user_id):
+            # No pending context - don't respond (might be unrelated)
+            return
+
+        details = await diagnostic_service.get_details(user_id)
+        if details:
+            response = f"*Detailed Analysis*\n\n{details}"
+            await message.answer(response, parse_mode="Markdown")
+
+    return handler
 
 
 class AuthMiddleware(BaseMiddleware):
