@@ -29,7 +29,7 @@ log_watching:
     - mariadb
     - postgresql14
     - redis
-    - Brisbooks
+    - brisbooks
 
   # Patterns to match as errors (case-insensitive)
   error_patterns:
