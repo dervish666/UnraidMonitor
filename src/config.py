@@ -1,56 +1,34 @@
-from typing import Any, Tuple, Type
+from typing import Any
 
-from pydantic.fields import FieldInfo
-from pydantic_settings import (
-    BaseSettings,
-    PydanticBaseSettingsSource,
-    SettingsConfigDict,
-)
-from pydantic_settings.sources import EnvSettingsSource
-
-
-class CustomEnvSettingsSource(EnvSettingsSource):
-    """Custom environment settings source that handles comma-separated lists."""
-
-    def prepare_field_value(
-        self,
-        field_name: str,
-        field: FieldInfo,
-        value: Any,
-        value_is_complex: bool,
-    ) -> Any:
-        # Handle comma-separated list for telegram_allowed_users
-        if field_name == "telegram_allowed_users" and isinstance(value, str):
-            if not value.strip():
-                raise ValueError("TELEGRAM_ALLOWED_USERS cannot be empty")
-            try:
-                return [int(x.strip()) for x in value.split(",") if x.strip()]
-            except ValueError as e:
-                raise ValueError(f"TELEGRAM_ALLOWED_USERS must be comma-separated integers, got: {value}") from e
-        return super().prepare_field_value(field_name, field, value, value_is_complex)
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     telegram_bot_token: str
-    telegram_allowed_users: list[int]
+    telegram_allowed_users: list[int] | str  # Accept string, convert to list
     anthropic_api_key: str | None = None
     config_path: str = "config/config.yaml"
     log_level: str = "INFO"
 
+    @field_validator("telegram_allowed_users", mode="before")
     @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: Type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> Tuple[PydanticBaseSettingsSource, ...]:
-        return (
-            init_settings,
-            CustomEnvSettingsSource(settings_cls),
-            dotenv_settings,
-            file_secret_settings,
-        )
+    def parse_allowed_users(cls, v: Any) -> list[int]:
+        """Parse comma-separated string of user IDs into list of integers."""
+        if isinstance(v, int):
+            return [v]
+        if isinstance(v, list):
+            return [int(x) for x in v]
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                raise ValueError("TELEGRAM_ALLOWED_USERS cannot be empty")
+            try:
+                return [int(x.strip()) for x in v.split(",") if x.strip()]
+            except ValueError:
+                raise ValueError(
+                    f"TELEGRAM_ALLOWED_USERS must be comma-separated integers, got: {v}"
+                )
+        raise ValueError(f"TELEGRAM_ALLOWED_USERS must be a string or list, got: {type(v)}")
