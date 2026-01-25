@@ -17,7 +17,7 @@ async def test_yes_message_triggers_confirm_handler():
     mock_client.containers.get.return_value = mock_container
 
     dp = create_dispatcher([123])
-    confirmation = register_commands(dp, state, mock_client, protected_containers=[])
+    confirmation, _ = register_commands(dp, state, mock_client, protected_containers=[])
 
     # Request confirmation
     confirmation.request(user_id=123, action="restart", container_name="radarr")

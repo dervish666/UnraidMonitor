@@ -12,6 +12,7 @@ HELP_TEXT = """📋 *Available Commands*
 /status - Container status overview
 /status <name> - Details for specific container
 /logs <name> [n] - Last n log lines (default 20)
+/diagnose <name> [n] - AI analysis of container logs
 /restart <name> - Restart a container
 /stop <name> - Stop a container
 /start <name> - Start a container
@@ -19,7 +20,8 @@ HELP_TEXT = """📋 *Available Commands*
 /help - Show this help message
 
 _Partial container names work: /status rad → radarr_
-_Control commands require confirmation_"""
+_Control commands require confirmation_
+_Reply /diagnose to a crash alert for quick analysis_"""
 
 
 def help_command(state: ContainerStateManager) -> Callable[[Message], Awaitable[None]]:

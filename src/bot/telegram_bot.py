@@ -16,6 +16,7 @@ from src.bot.control_commands import (
     create_confirm_handler,
 )
 from src.bot.confirmation import ConfirmationManager
+from src.bot.diagnose_command import diagnose_command
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 
@@ -109,10 +110,11 @@ def register_commands(
     state: ContainerStateManager,
     docker_client: docker.DockerClient | None = None,
     protected_containers: list[str] | None = None,
-) -> ConfirmationManager | None:
+    anthropic_client=None,
+) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
-    Returns ConfirmationManager if docker_client is provided, for use with the "yes" handler.
+    Returns tuple of (ConfirmationManager, DiagnosticService) if docker_client provided.
     """
     dp.message.register(help_command(state), Command("help"))
     dp.message.register(status_command(state), Command("status"))
@@ -136,6 +138,20 @@ def register_commands(
             YesFilter(),
         )
 
-        return confirmation
+        # Set up diagnostic service
+        diagnostic_service = DiagnosticService(docker_client, anthropic_client)
 
-    return None
+        dp.message.register(
+            diagnose_command(state, diagnostic_service),
+            Command("diagnose"),
+        )
+
+        # Register details follow-up handler
+        dp.message.register(
+            create_details_handler(diagnostic_service),
+            DetailsFilter(),
+        )
+
+        return confirmation, diagnostic_service
+
+    return None, None
