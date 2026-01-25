@@ -558,3 +558,85 @@ def test_resource_monitor_get_sustained_violations():
 
     assert len(sustained) == 1
     assert sustained[0].metric == "cpu"
+
+
+@pytest.mark.asyncio
+async def test_resource_monitor_send_alert():
+    """Test sending alert for sustained violation."""
+    from src.monitors.resource_monitor import ResourceMonitor, ContainerStats, ViolationState
+    from src.config import ResourceConfig
+    from datetime import datetime, timedelta
+
+    mock_alert_manager = MagicMock()
+    mock_alert_manager.send_resource_alert = AsyncMock()
+    mock_rate_limiter = MagicMock()
+    mock_rate_limiter.should_alert.return_value = True
+
+    monitor = ResourceMonitor(
+        docker_client=MagicMock(),
+        config=ResourceConfig(),
+        alert_manager=mock_alert_manager,
+        rate_limiter=mock_rate_limiter,
+    )
+
+    stats = ContainerStats(
+        name="plex",
+        cpu_percent=92.0,
+        memory_percent=50.0,
+        memory_bytes=4_000_000_000,
+        memory_limit=8_000_000_000,
+    )
+
+    violation = ViolationState(
+        metric="cpu",
+        started_at=datetime.now() - timedelta(minutes=3),
+        current_value=92.0,
+        threshold=80,
+    )
+
+    await monitor._send_alert(stats, violation)
+
+    mock_rate_limiter.should_alert.assert_called_once()
+    mock_rate_limiter.record_alert.assert_called_once()
+    mock_alert_manager.send_resource_alert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_resource_monitor_send_alert_rate_limited():
+    """Test that rate limiter prevents alert spam."""
+    from src.monitors.resource_monitor import ResourceMonitor, ContainerStats, ViolationState
+    from src.config import ResourceConfig
+    from datetime import datetime, timedelta
+
+    mock_alert_manager = MagicMock()
+    mock_alert_manager.send_resource_alert = AsyncMock()
+    mock_rate_limiter = MagicMock()
+    mock_rate_limiter.should_alert.return_value = False
+
+    monitor = ResourceMonitor(
+        docker_client=MagicMock(),
+        config=ResourceConfig(),
+        alert_manager=mock_alert_manager,
+        rate_limiter=mock_rate_limiter,
+    )
+
+    stats = ContainerStats(
+        name="plex",
+        cpu_percent=92.0,
+        memory_percent=50.0,
+        memory_bytes=4_000_000_000,
+        memory_limit=8_000_000_000,
+    )
+
+    violation = ViolationState(
+        metric="cpu",
+        started_at=datetime.now() - timedelta(minutes=3),
+        current_value=92.0,
+        threshold=80,
+    )
+
+    await monitor._send_alert(stats, violation)
+
+    mock_rate_limiter.should_alert.assert_called_once()
+    mock_rate_limiter.record_suppressed.assert_called_once()
+    mock_alert_manager.send_resource_alert.assert_not_called()

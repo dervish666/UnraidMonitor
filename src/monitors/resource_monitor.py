@@ -270,3 +270,34 @@ class ResourceMonitor:
         """
         container_violations = self._violations.get(container_name, {})
         return [v for v in container_violations.values() if self._is_sustained(v)]
+
+    async def _send_alert(self, stats: ContainerStats, violation: ViolationState) -> None:
+        """Send an alert for a sustained violation.
+
+        Args:
+            stats: Current container stats.
+            violation: The sustained violation.
+        """
+        # Use rate limiter key that includes metric to allow separate cpu/memory alerts
+        rate_key = f"{stats.name}:{violation.metric}"
+
+        if not self._rate_limiter.should_alert(rate_key):
+            self._rate_limiter.record_suppressed(rate_key)
+            logger.debug(f"Rate-limited {violation.metric} alert for {stats.name}")
+            return
+
+        self._rate_limiter.record_alert(rate_key)
+
+        duration = int((datetime.now() - violation.started_at).total_seconds())
+
+        await self._alert_manager.send_resource_alert(
+            container_name=stats.name,
+            metric=violation.metric,
+            current_value=violation.current_value,
+            threshold=violation.threshold,
+            duration_seconds=duration,
+            memory_bytes=stats.memory_bytes,
+            memory_limit=stats.memory_limit,
+            memory_percent=stats.memory_percent,
+            cpu_percent=stats.cpu_percent,
+        )
