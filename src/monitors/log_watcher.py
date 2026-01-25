@@ -6,6 +6,7 @@ import docker
 
 if TYPE_CHECKING:
     from src.alerts.ignore_manager import IgnoreManager
+    from src.alerts.recent_errors import RecentErrorsBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +71,15 @@ class LogWatcher:
         error_patterns: list[str],
         ignore_patterns: list[str],
         on_error: Callable[[str, str], Awaitable[None]] | None = None,
+        ignore_manager: "IgnoreManager | None" = None,
+        recent_errors_buffer: "RecentErrorsBuffer | None" = None,
     ):
         self.containers = containers
         self.error_patterns = error_patterns
         self.ignore_patterns = ignore_patterns
         self.on_error = on_error
+        self.ignore_manager = ignore_manager
+        self.recent_errors_buffer = recent_errors_buffer
         self._client: docker.DockerClient | None = None
         self._running = False
         self._tasks: list[asyncio.Task] = []
@@ -159,8 +164,19 @@ class LogWatcher:
                 if line is None:  # End of stream
                     break
 
-                if matches_error_pattern(line, self.error_patterns, self.ignore_patterns):
+                if should_alert_for_error(
+                    container=container_name,
+                    line=line,
+                    error_patterns=self.error_patterns,
+                    ignore_patterns=self.ignore_patterns,
+                    ignore_manager=self.ignore_manager,
+                ):
                     logger.info(f"Error detected in {container_name}: {line[:100]}")
+
+                    # Store in recent errors buffer
+                    if self.recent_errors_buffer:
+                        self.recent_errors_buffer.add(container_name, line)
+
                     if self.on_error:
                         await self.on_error(container_name, line)
         finally:

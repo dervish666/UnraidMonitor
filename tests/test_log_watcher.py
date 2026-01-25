@@ -188,3 +188,24 @@ async def test_log_watcher_respects_ignore_manager():
         ignore_patterns=[],
         ignore_manager=ignore_manager,
     )
+
+
+def test_log_watcher_accepts_ignore_manager_and_buffer():
+    """Test LogWatcher constructor accepts new parameters."""
+    from src.monitors.log_watcher import LogWatcher
+    from src.alerts.ignore_manager import IgnoreManager
+    from src.alerts.recent_errors import RecentErrorsBuffer
+
+    ignore_manager = IgnoreManager({}, json_path="/tmp/test.json")
+    recent_buffer = RecentErrorsBuffer()
+
+    watcher = LogWatcher(
+        containers=["plex"],
+        error_patterns=["error"],
+        ignore_patterns=[],
+        ignore_manager=ignore_manager,
+        recent_errors_buffer=recent_buffer,
+    )
+
+    assert watcher.ignore_manager is ignore_manager
+    assert watcher.recent_errors_buffer is recent_buffer
