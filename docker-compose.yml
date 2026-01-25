@@ -1,8 +1,14 @@
 services:
   unraid-monitor-bot:
-    build: .
+    build:
+      context: .
+      args:
+        # Match the docker group GID on the host
+        DOCKER_GID: ${DOCKER_GID:-999}
     container_name: unraid-monitor-bot
     restart: unless-stopped
+    # Run as root to access Docker socket (simpler and reliable)
+    user: root
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS}
