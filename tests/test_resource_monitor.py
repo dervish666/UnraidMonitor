@@ -218,3 +218,102 @@ def test_resource_monitor_disabled():
     )
 
     assert monitor.is_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_resource_monitor_get_all_stats():
+    """Test getting stats for all running containers."""
+    from src.monitors.resource_monitor import ResourceMonitor, ContainerStats
+    from src.config import ResourceConfig
+
+    mock_docker = MagicMock()
+    mock_container1 = MagicMock()
+    mock_container1.name = "plex"
+    mock_container1.status = "running"
+    mock_container1.stats.return_value = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 200_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 4,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 900_000_000,
+        },
+        "memory_stats": {
+            "usage": 4_000_000_000,
+            "limit": 8_000_000_000,
+        },
+    }
+
+    mock_container2 = MagicMock()
+    mock_container2.name = "radarr"
+    mock_container2.status = "running"
+    mock_container2.stats.return_value = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 50_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 4,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 40_000_000},
+            "system_cpu_usage": 900_000_000,
+        },
+        "memory_stats": {
+            "usage": 1_000_000_000,
+            "limit": 4_000_000_000,
+        },
+    }
+
+    mock_docker.containers.list.return_value = [mock_container1, mock_container2]
+
+    monitor = ResourceMonitor(
+        docker_client=mock_docker,
+        config=ResourceConfig(),
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    stats = await monitor.get_all_stats()
+
+    assert len(stats) == 2
+    assert stats[0].name == "plex"
+    assert stats[1].name == "radarr"
+    mock_container1.stats.assert_called_once_with(stream=False)
+    mock_container2.stats.assert_called_once_with(stream=False)
+
+
+@pytest.mark.asyncio
+async def test_resource_monitor_get_all_stats_skips_stopped():
+    """Test get_all_stats only includes running containers."""
+    from src.monitors.resource_monitor import ResourceMonitor
+    from src.config import ResourceConfig
+
+    mock_docker = MagicMock()
+    mock_running = MagicMock()
+    mock_running.name = "plex"
+    mock_running.status = "running"
+    mock_running.stats.return_value = {
+        "cpu_stats": {"cpu_usage": {"total_usage": 0}, "system_cpu_usage": 0, "online_cpus": 1},
+        "precpu_stats": {"cpu_usage": {"total_usage": 0}, "system_cpu_usage": 0},
+        "memory_stats": {"usage": 0, "limit": 1},
+    }
+
+    mock_stopped = MagicMock()
+    mock_stopped.name = "stopped"
+    mock_stopped.status = "exited"
+
+    mock_docker.containers.list.return_value = [mock_running, mock_stopped]
+
+    monitor = ResourceMonitor(
+        docker_client=mock_docker,
+        config=ResourceConfig(),
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    stats = await monitor.get_all_stats()
+
+    assert len(stats) == 1
+    assert stats[0].name == "plex"
+    mock_stopped.stats.assert_not_called()

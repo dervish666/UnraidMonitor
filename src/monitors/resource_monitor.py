@@ -136,3 +136,29 @@ class ResourceMonitor:
     def is_enabled(self) -> bool:
         """Check if resource monitoring is enabled."""
         return self._config.enabled
+
+    async def get_all_stats(self) -> list[ContainerStats]:
+        """Get current stats for all running containers.
+
+        Returns:
+            List of ContainerStats for all running containers.
+        """
+        import asyncio
+
+        containers = self._docker.containers.list(all=True)
+        stats_list = []
+
+        for container in containers:
+            if container.status != "running":
+                continue
+
+            try:
+                raw_stats = await asyncio.to_thread(
+                    container.stats, stream=False
+                )
+                stats = parse_container_stats(container.name, raw_stats)
+                stats_list.append(stats)
+            except Exception as e:
+                logger.warning(f"Failed to get stats for {container.name}: {e}")
+
+        return stats_list
