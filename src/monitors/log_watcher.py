@@ -1,8 +1,11 @@
 import asyncio
 import logging
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, TYPE_CHECKING
 
 import docker
+
+if TYPE_CHECKING:
+    from src.alerts.ignore_manager import IgnoreManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,36 @@ def matches_error_pattern(
             return True
 
     return False
+
+
+def should_alert_for_error(
+    container: str,
+    line: str,
+    error_patterns: list[str],
+    ignore_patterns: list[str],
+    ignore_manager: "IgnoreManager | None" = None,
+) -> bool:
+    """Check if an error line should trigger an alert.
+
+    Args:
+        container: Container name.
+        line: Log line to check.
+        error_patterns: Patterns that indicate an error.
+        ignore_patterns: Global patterns to ignore.
+        ignore_manager: Optional IgnoreManager for per-container ignores.
+
+    Returns:
+        True if should alert, False if should be ignored.
+    """
+    # First check if it matches an error pattern
+    if not matches_error_pattern(line, error_patterns, ignore_patterns):
+        return False
+
+    # Then check per-container ignores
+    if ignore_manager and ignore_manager.is_ignored(container, line):
+        return False
+
+    return True
 
 
 class LogWatcher:

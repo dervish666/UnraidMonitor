@@ -151,3 +151,40 @@ def test_log_watcher_stop():
     assert watcher._running is False
     mock_task1.cancel.assert_called_once()
     mock_task2.cancel.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_log_watcher_respects_ignore_manager():
+    """Test that LogWatcher checks IgnoreManager before alerting."""
+    from src.monitors.log_watcher import matches_error_pattern
+
+    # This tests the existing function - we need to add ignore_manager support
+    # First verify current behavior
+    assert matches_error_pattern("Error occurred", ["error"], [])
+
+    # Now test with ignore manager
+    from src.alerts.ignore_manager import IgnoreManager
+
+    ignore_manager = IgnoreManager(
+        config_ignores={"plex": ["known issue"]},
+        json_path="/tmp/test_ignores.json"
+    )
+
+    # This line should be ignored
+    from src.monitors.log_watcher import should_alert_for_error
+    assert not should_alert_for_error(
+        container="plex",
+        line="Error: known issue occurred",
+        error_patterns=["error"],
+        ignore_patterns=[],
+        ignore_manager=ignore_manager,
+    )
+
+    # This line should alert
+    assert should_alert_for_error(
+        container="plex",
+        line="Error: unknown problem",
+        error_patterns=["error"],
+        ignore_patterns=[],
+        ignore_manager=ignore_manager,
+    )
