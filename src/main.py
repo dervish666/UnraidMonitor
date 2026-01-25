@@ -112,7 +112,7 @@ async def main() -> None:
         sys.exit(1)
 
     # Register commands with docker client for /logs
-    register_commands(dp, state, docker_client=monitor._client)
+    register_commands(dp, state, docker_client=monitor._client, protected_containers=config.protected_containers)
 
     # Start Docker event monitor as background task
     monitor_task = asyncio.create_task(monitor.start())
