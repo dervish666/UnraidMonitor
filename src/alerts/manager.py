@@ -1,6 +1,8 @@
 import logging
 from aiogram import Bot
 
+from src.utils.formatting import format_bytes
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,8 +138,8 @@ Latest: `{error_line}`
             cpu_percent: CPU usage percentage.
         """
         duration_str = self._format_duration(duration_seconds)
-        memory_display = self._format_bytes(memory_bytes)
-        memory_limit_display = self._format_bytes(memory_limit)
+        memory_display = format_bytes(memory_bytes)
+        memory_limit_display = format_bytes(memory_limit)
 
         if metric == "cpu":
             title = "HIGH RESOURCE USAGE"
@@ -179,12 +181,3 @@ _Use /resources {container_name} or /diagnose {container_name} for details_"""
         if minutes > 0:
             return f"{minutes} minutes" if minutes > 1 else "1 minute"
         return f"{seconds} seconds"
-
-    @staticmethod
-    def _format_bytes(bytes_val: int) -> str:
-        """Format bytes as human-readable string."""
-        gb = bytes_val / (1024 ** 3)
-        if gb >= 1.0:
-            return f"{gb:.1f}GB"
-        mb = bytes_val / (1024 ** 2)
-        return f"{mb:.0f}MB"

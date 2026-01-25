@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 import docker
 
+from src.utils.formatting import format_bytes
+
 if TYPE_CHECKING:
     from src.config import ResourceConfig
     from src.alerts.manager import AlertManager
@@ -26,21 +28,12 @@ class ContainerStats:
     @property
     def memory_display(self) -> str:
         """Format memory usage for display."""
-        return self._format_bytes(self.memory_bytes)
+        return format_bytes(self.memory_bytes)
 
     @property
     def memory_limit_display(self) -> str:
         """Format memory limit for display."""
-        return self._format_bytes(self.memory_limit)
-
-    @staticmethod
-    def _format_bytes(bytes_val: int) -> str:
-        """Format bytes as human-readable string."""
-        gb = bytes_val / (1024**3)
-        if gb >= 1.0:
-            return f"{gb:.1f}GB"
-        mb = bytes_val / (1024**2)
-        return f"{mb:.0f}MB"
+        return format_bytes(self.memory_limit)
 
 
 def calculate_cpu_percent(stats: dict) -> float:
