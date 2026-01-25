@@ -8,6 +8,7 @@ from src.config import Settings, AppConfig
 from src.state import ContainerStateManager
 from src.monitors.docker_events import DockerEventMonitor
 from src.monitors.log_watcher import LogWatcher
+from src.monitors.resource_monitor import ResourceMonitor
 from src.alerts.manager import AlertManager, ChatIdStore
 from src.alerts.rate_limiter import RateLimiter
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_commands
@@ -42,6 +43,14 @@ class AlertManagerProxy:
             await manager.send_log_error_alert(**kwargs)
         else:
             logger.warning("No chat ID yet, cannot send log error alert")
+
+    async def send_resource_alert(self, **kwargs):
+        chat_id = self.chat_id_store.get_chat_id()
+        if chat_id:
+            manager = AlertManager(self.bot, chat_id)
+            await manager.send_resource_alert(**kwargs)
+        else:
+            logger.warning("No chat ID yet, cannot send resource alert")
 
 
 async def main() -> None:
@@ -121,6 +130,20 @@ async def main() -> None:
         logger.error(f"Failed to initialize log watcher: {e}")
         sys.exit(1)
 
+    # Initialize resource monitor if enabled
+    resource_monitor = None
+    resource_config = config.resource_monitoring
+    if resource_config.enabled:
+        resource_monitor = ResourceMonitor(
+            docker_client=monitor._client,
+            config=resource_config,
+            alert_manager=alert_manager,
+            rate_limiter=rate_limiter,
+        )
+        logger.info("Resource monitoring enabled")
+    else:
+        logger.info("Resource monitoring disabled")
+
     # Register commands with docker client for /logs
     confirmation, diagnostic_service = register_commands(
         dp,
@@ -128,6 +151,7 @@ async def main() -> None:
         docker_client=monitor._client,
         protected_containers=config.protected_containers,
         anthropic_client=anthropic_client,
+        resource_monitor=resource_monitor,
     )
 
     # Start Docker event monitor as background task
@@ -135,6 +159,11 @@ async def main() -> None:
 
     # Start log watcher as background task
     log_watcher_task = asyncio.create_task(log_watcher.start())
+
+    # Start resource monitor as background task (if enabled)
+    resource_monitor_task = None
+    if resource_monitor is not None:
+        resource_monitor_task = asyncio.create_task(resource_monitor.start())
 
     logger.info("Starting Telegram bot...")
 
@@ -145,8 +174,12 @@ async def main() -> None:
         logger.info("Shutting down...")
         monitor.stop()
         log_watcher.stop()
+        if resource_monitor is not None:
+            resource_monitor.stop()
         monitor_task.cancel()
         log_watcher_task.cancel()
+        if resource_monitor_task is not None:
+            resource_monitor_task.cancel()
         try:
             await monitor_task
         except asyncio.CancelledError:
@@ -155,6 +188,11 @@ async def main() -> None:
             await log_watcher_task
         except asyncio.CancelledError:
             pass
+        if resource_monitor_task is not None:
+            try:
+                await resource_monitor_task
+            except asyncio.CancelledError:
+                pass
         await bot.session.close()
 
 
