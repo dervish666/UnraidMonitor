@@ -1,6 +1,7 @@
 from typing import Callable, Awaitable
 
 from aiogram.types import Message
+import docker
 
 from src.models import ContainerInfo
 from src.state import ContainerStateManager
@@ -10,6 +11,7 @@ HELP_TEXT = """📋 *Available Commands*
 
 /status - Container status overview
 /status <name> - Details for specific container
+/logs <name> [n] - Last n log lines (default 20)
 /help - Show this help message
 
 _Partial container names work: /status rad → radarr_"""
@@ -102,5 +104,64 @@ def status_command(state: ContainerStateManager) -> Callable[[Message], Awaitabl
                 response = f"Multiple matches found: {names}\n\n_Be more specific_"
 
         await message.answer(response, parse_mode="Markdown")
+
+    return handler
+
+
+def logs_command(
+    state: ContainerStateManager,
+    docker_client: docker.DockerClient,
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /logs command handler."""
+    async def handler(message: Message) -> None:
+        text = message.text or ""
+        parts = text.strip().split()
+
+        if len(parts) < 2:
+            await message.answer("Usage: /logs <container> [lines]\n\nExample: /logs radarr 50")
+            return
+
+        container_name = parts[1]
+
+        # Parse optional line count
+        try:
+            lines = int(parts[2]) if len(parts) > 2 else 20
+        except ValueError:
+            lines = 20
+
+        # Cap at reasonable limit
+        lines = min(lines, 100)
+
+        # Find container
+        matches = state.find_by_name(container_name)
+
+        if not matches:
+            await message.answer(f"❌ No container found matching '{container_name}'")
+            return
+
+        if len(matches) > 1:
+            names = ", ".join(m.name for m in matches)
+            await message.answer(f"Multiple matches found: {names}\n\n_Be more specific_", parse_mode="Markdown")
+            return
+
+        container = matches[0]
+
+        try:
+            docker_container = docker_client.containers.get(container.name)
+            log_bytes = docker_container.logs(tail=lines, timestamps=False)
+            log_text = log_bytes.decode("utf-8", errors="replace")
+
+            # Truncate if too long for Telegram
+            if len(log_text) > 4000:
+                log_text = log_text[-4000:]
+                log_text = "...(truncated)\n" + log_text
+
+            response = f"📋 *Logs: {container.name}* (last {lines} lines)\n\n```\n{log_text}\n```"
+            await message.answer(response, parse_mode="Markdown")
+
+        except docker.errors.NotFound:
+            await message.answer(f"❌ Container '{container.name}' not found in Docker")
+        except Exception as e:
+            await message.answer(f"❌ Error getting logs: {e}")
 
     return handler

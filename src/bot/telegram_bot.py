@@ -4,9 +4,10 @@ from typing import Any, Awaitable, Callable
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.types import Message
+import docker
 
 from src.state import ContainerStateManager
-from src.bot.commands import help_command, status_command
+from src.bot.commands import help_command, status_command, logs_command
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,14 @@ def create_dispatcher(allowed_users: list[int], chat_id_store=None) -> Dispatche
     return dp
 
 
-def register_commands(dp: Dispatcher, state: ContainerStateManager) -> None:
+def register_commands(
+    dp: Dispatcher,
+    state: ContainerStateManager,
+    docker_client: docker.DockerClient | None = None,
+) -> None:
     """Register all command handlers."""
     dp.message.register(help_command(state), Command("help"))
     dp.message.register(status_command(state), Command("status"))
+
+    if docker_client:
+        dp.message.register(logs_command(state, docker_client), Command("logs"))
