@@ -76,3 +76,23 @@ async def test_alert_manager_formats_uptime():
     assert format_uptime(3600) == "1h 0m"
     assert format_uptime(86400) == "24h 0m"
     assert format_uptime(45) == "0m"
+
+
+@pytest.mark.asyncio
+async def test_chat_id_store_saves_and_retrieves():
+    from src.alerts.manager import ChatIdStore
+
+    store = ChatIdStore()
+
+    store.set_chat_id(12345)
+
+    assert store.get_chat_id() == 12345
+
+
+@pytest.mark.asyncio
+async def test_chat_id_store_returns_none_when_not_set():
+    from src.alerts.manager import ChatIdStore
+
+    store = ChatIdStore()
+
+    assert store.get_chat_id() is None

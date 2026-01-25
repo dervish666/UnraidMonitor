@@ -4,6 +4,21 @@ from aiogram import Bot
 logger = logging.getLogger(__name__)
 
 
+class ChatIdStore:
+    """Simple in-memory storage for the alert chat ID."""
+
+    def __init__(self):
+        self._chat_id: int | None = None
+
+    def set_chat_id(self, chat_id: int) -> None:
+        """Store the chat ID."""
+        self._chat_id = chat_id
+
+    def get_chat_id(self) -> int | None:
+        """Get the stored chat ID."""
+        return self._chat_id
+
+
 def format_uptime(seconds: int) -> str:
     """Format uptime in human-readable form."""
     hours = seconds // 3600

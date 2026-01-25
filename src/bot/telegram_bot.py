@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class AuthMiddleware(BaseMiddleware):
-    def __init__(self, allowed_users: list[int]):
+    def __init__(self, allowed_users: list[int], chat_id_store=None):
         self.allowed_users = set(allowed_users)
+        self.chat_id_store = chat_id_store
         super().__init__()
 
     async def __call__(
@@ -28,12 +29,16 @@ class AuthMiddleware(BaseMiddleware):
             logger.warning(f"Unauthorized access attempt from user {user_id}")
             return None
 
+        # Capture chat ID for alerts if store is provided
+        if self.chat_id_store is not None and event.chat:
+            self.chat_id_store.set_chat_id(event.chat.id)
+
         return await handler(event, data)
 
 
-def create_auth_middleware(allowed_users: list[int]) -> AuthMiddleware:
+def create_auth_middleware(allowed_users: list[int], chat_id_store=None) -> AuthMiddleware:
     """Factory function for auth middleware."""
-    return AuthMiddleware(allowed_users)
+    return AuthMiddleware(allowed_users, chat_id_store=chat_id_store)
 
 
 def create_bot(token: str) -> Bot:
@@ -41,10 +46,10 @@ def create_bot(token: str) -> Bot:
     return Bot(token=token)
 
 
-def create_dispatcher(allowed_users: list[int]) -> Dispatcher:
+def create_dispatcher(allowed_users: list[int], chat_id_store=None) -> Dispatcher:
     """Create dispatcher with auth middleware."""
     dp = Dispatcher()
-    dp.message.middleware(AuthMiddleware(allowed_users))
+    dp.message.middleware(AuthMiddleware(allowed_users, chat_id_store=chat_id_store))
     return dp
 
 
