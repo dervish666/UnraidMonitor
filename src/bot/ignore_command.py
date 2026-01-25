@@ -20,24 +20,35 @@ def extract_container_from_alert(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+class IgnoreSelectionState:
+    """Shared state for ignore selections across handlers."""
+
+    def __init__(self):
+        self.pending_selections: dict[int, tuple[str, list[str]]] = {}
+
+    def has_pending(self, user_id: int) -> bool:
+        return user_id in self.pending_selections
+
+    def get_pending(self, user_id: int) -> tuple[str, list[str]] | None:
+        return self.pending_selections.get(user_id)
+
+    def set_pending(self, user_id: int, container: str, errors: list[str]) -> None:
+        self.pending_selections[user_id] = (container, errors)
+
+    def clear_pending(self, user_id: int) -> None:
+        if user_id in self.pending_selections:
+            del self.pending_selections[user_id]
+
+
 def ignore_command(
     recent_buffer: "RecentErrorsBuffer",
     ignore_manager: "IgnoreManager",
+    selection_state: "IgnoreSelectionState",
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /ignore command handler."""
 
-    # Store pending ignore selections per user
-    pending_selections: dict[int, tuple[str, list[str]]] = {}
-
     async def handler(message: Message) -> None:
-        text = message.text or ""
         user_id = message.from_user.id if message.from_user else 0
-
-        # Check if this is a selection response (numbers like "1,3" or "all")
-        if user_id in pending_selections:
-            container, errors = pending_selections[user_id]
-            await handle_selection(message, container, errors, ignore_manager, pending_selections)
-            return
 
         # Must be replying to an error alert
         if not message.reply_to_message or not message.reply_to_message.text:
@@ -70,9 +81,65 @@ def ignore_command(
         lines.append('_Reply with numbers to ignore (e.g., "1,3" or "all")_')
 
         # Store pending selection
-        pending_selections[user_id] = (container, recent_errors)
+        selection_state.set_pending(user_id, container, recent_errors)
 
         await message.answer("\n".join(lines), parse_mode="Markdown")
+
+    return handler
+
+
+def ignore_selection_handler(
+    ignore_manager: "IgnoreManager",
+    selection_state: "IgnoreSelectionState",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for ignore selection follow-up handler."""
+
+    async def handler(message: Message) -> None:
+        user_id = message.from_user.id if message.from_user else 0
+
+        if not selection_state.has_pending(user_id):
+            # No pending selection - don't respond
+            return
+
+        pending = selection_state.get_pending(user_id)
+        if not pending:
+            return
+
+        container, errors = pending
+        text = (message.text or "").strip().lower()
+
+        # Clear pending selection
+        selection_state.clear_pending(user_id)
+
+        if text == "all":
+            indices = list(range(len(errors)))
+        else:
+            # Parse comma-separated numbers
+            try:
+                indices = [int(x.strip()) - 1 for x in text.split(",")]
+                # Validate indices
+                if any(i < 0 or i >= len(errors) for i in indices):
+                    await message.answer("Invalid selection. Numbers must be from the list.")
+                    return
+            except ValueError:
+                await message.answer("Invalid input. Use numbers like '1,3' or 'all'.")
+                return
+
+        # Add ignores
+        added = []
+        for i in indices:
+            error = errors[i]
+            if ignore_manager.add_ignore(container, error):
+                added.append(error)
+
+        if added:
+            lines = [f"✅ *Ignored for {container}:*\n"]
+            for error in added:
+                display = error[:60] + "..." if len(error) > 60 else error
+                lines.append(f"  • {display}")
+            await message.answer("\n".join(lines), parse_mode="Markdown")
+        else:
+            await message.answer("Those errors are already ignored.")
 
     return handler
 
@@ -113,48 +180,3 @@ def ignores_command(
         await message.answer("\n".join(lines), parse_mode="Markdown")
 
     return handler
-
-
-async def handle_selection(
-    message: Message,
-    container: str,
-    errors: list[str],
-    ignore_manager: "IgnoreManager",
-    pending_selections: dict,
-) -> None:
-    """Handle user's selection of errors to ignore."""
-    text = (message.text or "").strip().lower()
-    user_id = message.from_user.id if message.from_user else 0
-
-    # Clear pending selection
-    del pending_selections[user_id]
-
-    if text == "all":
-        indices = list(range(len(errors)))
-    else:
-        # Parse comma-separated numbers
-        try:
-            indices = [int(x.strip()) - 1 for x in text.split(",")]
-            # Validate indices
-            if any(i < 0 or i >= len(errors) for i in indices):
-                await message.answer("Invalid selection. Numbers must be from the list.")
-                return
-        except ValueError:
-            await message.answer("Invalid input. Use numbers like '1,3' or 'all'.")
-            return
-
-    # Add ignores
-    added = []
-    for i in indices:
-        error = errors[i]
-        if ignore_manager.add_ignore(container, error):
-            added.append(error)
-
-    if added:
-        lines = [f"✅ *Ignored for {container}:*\n"]
-        for error in added:
-            display = error[:60] + "..." if len(error) > 60 else error
-            lines.append(f"  • {display}")
-        await message.answer("\n".join(lines), parse_mode="Markdown")
-    else:
-        await message.answer("Those errors are already ignored.")
