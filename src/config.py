@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass, field
 from typing import Any
 
 import yaml
@@ -48,6 +49,42 @@ DEFAULT_LOG_WATCHING: dict[str, Any] = {
     "ignore_patterns": DEFAULT_IGNORE_PATTERNS,
     "cooldown_seconds": 900,
 }
+
+
+@dataclass
+class ResourceConfig:
+    """Configuration for resource monitoring."""
+
+    enabled: bool = True
+    poll_interval_seconds: int = 60
+    sustained_threshold_seconds: int = 120
+    default_cpu_percent: int = 80
+    default_memory_percent: int = 85
+    container_overrides: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ResourceConfig":
+        """Create ResourceConfig from YAML dict."""
+        defaults = data.get("defaults", {})
+        return cls(
+            enabled=data.get("enabled", True),
+            poll_interval_seconds=data.get("poll_interval_seconds", 60),
+            sustained_threshold_seconds=data.get("sustained_threshold_seconds", 120),
+            default_cpu_percent=defaults.get("cpu_percent", 80),
+            default_memory_percent=defaults.get("memory_percent", 85),
+            container_overrides=data.get("containers", {}),
+        )
+
+    def get_thresholds(self, container_name: str) -> tuple[int, int]:
+        """Get CPU and memory thresholds for a container.
+
+        Returns:
+            Tuple of (cpu_percent, memory_percent) thresholds.
+        """
+        overrides = self.container_overrides.get(container_name, {})
+        cpu = overrides.get("cpu_percent", self.default_cpu_percent)
+        memory = overrides.get("memory_percent", self.default_memory_percent)
+        return cpu, memory
 
 
 def load_yaml_config(path: str) -> dict[str, Any]:
