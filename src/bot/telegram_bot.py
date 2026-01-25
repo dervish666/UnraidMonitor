@@ -2,17 +2,32 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
-from aiogram.filters import Command
+from aiogram.filters import Command, Filter
 from aiogram.types import Message
 import docker
 
 from src.state import ContainerStateManager
 from src.bot.commands import help_command, status_command, logs_command
-from src.bot.control_commands import restart_command, stop_command, start_command, pull_command
+from src.bot.control_commands import (
+    restart_command,
+    stop_command,
+    start_command,
+    pull_command,
+    create_confirm_handler,
+)
 from src.bot.confirmation import ConfirmationManager
 from src.services.container_control import ContainerController
 
 logger = logging.getLogger(__name__)
+
+
+class YesFilter(Filter):
+    """Filter for 'yes' confirmation messages."""
+
+    async def __call__(self, message: Message) -> bool:
+        if not message.text:
+            return False
+        return message.text.strip().lower() == "yes"
 
 
 class AuthMiddleware(BaseMiddleware):
@@ -82,6 +97,12 @@ def register_commands(
         dp.message.register(stop_command(state, controller, confirmation), Command("stop"))
         dp.message.register(start_command(state, controller, confirmation), Command("start"))
         dp.message.register(pull_command(state, controller, confirmation), Command("pull"))
+
+        # Register "yes" handler for confirmations
+        dp.message.register(
+            create_confirm_handler(controller, confirmation),
+            YesFilter(),
+        )
 
         return confirmation
 
