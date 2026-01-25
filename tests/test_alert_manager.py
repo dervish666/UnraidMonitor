@@ -96,3 +96,70 @@ async def test_chat_id_store_returns_none_when_not_set():
     store = ChatIdStore()
 
     assert store.get_chat_id() is None
+
+
+@pytest.mark.asyncio
+async def test_send_resource_alert_cpu():
+    """Test sending CPU resource alert."""
+    from src.alerts.manager import AlertManager
+    from unittest.mock import AsyncMock
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    manager = AlertManager(mock_bot, chat_id=123)
+
+    await manager.send_resource_alert(
+        container_name="plex",
+        metric="cpu",
+        current_value=92.5,
+        threshold=80,
+        duration_seconds=180,
+        memory_bytes=4_000_000_000,
+        memory_limit=8_000_000_000,
+        memory_percent=50.0,
+        cpu_percent=92.5,
+    )
+
+    mock_bot.send_message.assert_called_once()
+    call_args = mock_bot.send_message.call_args
+    text = call_args.kwargs["text"]
+
+    assert "HIGH RESOURCE USAGE" in text
+    assert "plex" in text
+    assert "CPU: 92.5%" in text
+    assert "threshold: 80%" in text
+    assert "3 minutes" in text
+
+
+@pytest.mark.asyncio
+async def test_send_resource_alert_memory():
+    """Test sending memory resource alert."""
+    from src.alerts.manager import AlertManager
+    from unittest.mock import AsyncMock
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    manager = AlertManager(mock_bot, chat_id=123)
+
+    await manager.send_resource_alert(
+        container_name="radarr",
+        metric="memory",
+        current_value=95.0,
+        threshold=85,
+        duration_seconds=240,
+        memory_bytes=3_800_000_000,
+        memory_limit=4_000_000_000,
+        memory_percent=95.0,
+        cpu_percent=45.0,
+    )
+
+    mock_bot.send_message.assert_called_once()
+    call_args = mock_bot.send_message.call_args
+    text = call_args.kwargs["text"]
+
+    assert "HIGH MEMORY USAGE" in text
+    assert "radarr" in text
+    assert "Memory: 95.0%" in text
+    assert "4 minutes" in text

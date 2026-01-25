@@ -109,3 +109,82 @@ Latest: `{error_line}`
             logger.info(f"Sent log error alert for {container_name}")
         except Exception as e:
             logger.error(f"Failed to send log error alert: {e}")
+
+    async def send_resource_alert(
+        self,
+        container_name: str,
+        metric: str,
+        current_value: float,
+        threshold: int,
+        duration_seconds: int,
+        memory_bytes: int,
+        memory_limit: int,
+        memory_percent: float,
+        cpu_percent: float,
+    ) -> None:
+        """Send a resource threshold alert.
+
+        Args:
+            container_name: Container name.
+            metric: "cpu" or "memory".
+            current_value: Current metric value.
+            threshold: Threshold that was exceeded.
+            duration_seconds: How long threshold has been exceeded.
+            memory_bytes: Current memory usage in bytes.
+            memory_limit: Memory limit in bytes.
+            memory_percent: Memory usage percentage.
+            cpu_percent: CPU usage percentage.
+        """
+        duration_str = self._format_duration(duration_seconds)
+        memory_display = self._format_bytes(memory_bytes)
+        memory_limit_display = self._format_bytes(memory_limit)
+
+        if metric == "cpu":
+            title = "HIGH RESOURCE USAGE"
+            primary = f"CPU: {current_value}% (threshold: {threshold}%)"
+            secondary = f"Memory: {memory_display} / {memory_limit_display} ({memory_percent}%)"
+        else:
+            title = "HIGH MEMORY USAGE"
+            primary = f"Memory: {current_value}% (threshold: {threshold}%)"
+            primary += f"\n        {memory_display} / {memory_limit_display} limit"
+            secondary = f"CPU: {cpu_percent}% (normal)"
+
+        text = f"""⚠️ *{title}:* {container_name}
+
+{primary}
+Exceeded for: {duration_str}
+
+{secondary}
+
+_Use /resources {container_name} or /diagnose {container_name} for details_"""
+
+        try:
+            await self.bot.send_message(
+                chat_id=self.chat_id,
+                text=text,
+                parse_mode="Markdown",
+            )
+            logger.info(f"Sent resource alert for {container_name} ({metric})")
+        except Exception as e:
+            logger.error(f"Failed to send resource alert: {e}")
+
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        """Format duration in human-readable form."""
+        if seconds >= 3600:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{hours}h {minutes}m"
+        minutes = seconds // 60
+        if minutes > 0:
+            return f"{minutes} minutes" if minutes > 1 else "1 minute"
+        return f"{seconds} seconds"
+
+    @staticmethod
+    def _format_bytes(bytes_val: int) -> str:
+        """Format bytes as human-readable string."""
+        gb = bytes_val / (1024 ** 3)
+        if gb >= 1.0:
+            return f"{gb:.1f}GB"
+        mb = bytes_val / (1024 ** 2)
+        return f"{mb:.0f}MB"
