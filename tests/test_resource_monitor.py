@@ -489,3 +489,72 @@ def test_resource_monitor_check_thresholds_updates_violation():
     # Violation should be updated, not replaced
     assert monitor._violations["plex"]["cpu"].started_at == started
     assert monitor._violations["plex"]["cpu"].current_value == 92.0
+
+
+def test_resource_monitor_is_sustained_violation():
+    """Test detecting sustained violations."""
+    from src.monitors.resource_monitor import ResourceMonitor, ViolationState
+    from src.config import ResourceConfig
+    from datetime import datetime, timedelta
+
+    config = ResourceConfig(sustained_threshold_seconds=120)
+    monitor = ResourceMonitor(
+        docker_client=MagicMock(),
+        config=config,
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    # Violation started 3 minutes ago (sustained)
+    old_violation = ViolationState(
+        metric="cpu",
+        started_at=datetime.now() - timedelta(minutes=3),
+        current_value=90.0,
+        threshold=80,
+    )
+    assert monitor._is_sustained(old_violation) is True
+
+    # Violation started 30 seconds ago (not yet sustained)
+    new_violation = ViolationState(
+        metric="cpu",
+        started_at=datetime.now() - timedelta(seconds=30),
+        current_value=90.0,
+        threshold=80,
+    )
+    assert monitor._is_sustained(new_violation) is False
+
+
+def test_resource_monitor_get_sustained_violations():
+    """Test getting list of sustained violations for a container."""
+    from src.monitors.resource_monitor import ResourceMonitor, ViolationState
+    from src.config import ResourceConfig
+    from datetime import datetime, timedelta
+
+    config = ResourceConfig(sustained_threshold_seconds=120)
+    monitor = ResourceMonitor(
+        docker_client=MagicMock(),
+        config=config,
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    # Set up violations
+    monitor._violations["plex"] = {
+        "cpu": ViolationState(
+            metric="cpu",
+            started_at=datetime.now() - timedelta(minutes=3),  # Sustained
+            current_value=90.0,
+            threshold=80,
+        ),
+        "memory": ViolationState(
+            metric="memory",
+            started_at=datetime.now() - timedelta(seconds=30),  # Not sustained
+            current_value=88.0,
+            threshold=85,
+        ),
+    }
+
+    sustained = monitor._get_sustained_violations("plex")
+
+    assert len(sustained) == 1
+    assert sustained[0].metric == "cpu"

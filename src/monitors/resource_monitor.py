@@ -253,3 +253,27 @@ class ResourceMonitor:
         elif metric in violations:
             # Violation cleared
             del violations[metric]
+
+    def _is_sustained(self, violation: ViolationState) -> bool:
+        """Check if a violation has exceeded the sustained threshold.
+
+        Args:
+            violation: Violation state to check.
+
+        Returns:
+            True if violation is sustained.
+        """
+        elapsed = datetime.now() - violation.started_at
+        return elapsed.total_seconds() >= self._config.sustained_threshold_seconds
+
+    def _get_sustained_violations(self, container_name: str) -> list[ViolationState]:
+        """Get list of sustained violations for a container.
+
+        Args:
+            container_name: Container to check.
+
+        Returns:
+            List of sustained ViolationState objects.
+        """
+        container_violations = self._violations.get(container_name, {})
+        return [v for v in container_violations.values() if self._is_sustained(v)]
