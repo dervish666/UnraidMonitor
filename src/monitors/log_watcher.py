@@ -1,8 +1,12 @@
 import asyncio
 import logging
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, TYPE_CHECKING
 
 import docker
+
+if TYPE_CHECKING:
+    from src.alerts.ignore_manager import IgnoreManager
+    from src.alerts.recent_errors import RecentErrorsBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,36 @@ def matches_error_pattern(
     return False
 
 
+def should_alert_for_error(
+    container: str,
+    line: str,
+    error_patterns: list[str],
+    ignore_patterns: list[str],
+    ignore_manager: "IgnoreManager | None" = None,
+) -> bool:
+    """Check if an error line should trigger an alert.
+
+    Args:
+        container: Container name.
+        line: Log line to check.
+        error_patterns: Patterns that indicate an error.
+        ignore_patterns: Global patterns to ignore.
+        ignore_manager: Optional IgnoreManager for per-container ignores.
+
+    Returns:
+        True if should alert, False if should be ignored.
+    """
+    # First check if it matches an error pattern
+    if not matches_error_pattern(line, error_patterns, ignore_patterns):
+        return False
+
+    # Then check per-container ignores
+    if ignore_manager and ignore_manager.is_ignored(container, line):
+        return False
+
+    return True
+
+
 class LogWatcher:
     """Watch container logs for error patterns."""
 
@@ -37,11 +71,15 @@ class LogWatcher:
         error_patterns: list[str],
         ignore_patterns: list[str],
         on_error: Callable[[str, str], Awaitable[None]] | None = None,
+        ignore_manager: "IgnoreManager | None" = None,
+        recent_errors_buffer: "RecentErrorsBuffer | None" = None,
     ):
         self.containers = containers
         self.error_patterns = error_patterns
         self.ignore_patterns = ignore_patterns
         self.on_error = on_error
+        self.ignore_manager = ignore_manager
+        self.recent_errors_buffer = recent_errors_buffer
         self._client: docker.DockerClient | None = None
         self._running = False
         self._tasks: list[asyncio.Task] = []
@@ -126,8 +164,19 @@ class LogWatcher:
                 if line is None:  # End of stream
                     break
 
-                if matches_error_pattern(line, self.error_patterns, self.ignore_patterns):
+                if should_alert_for_error(
+                    container=container_name,
+                    line=line,
+                    error_patterns=self.error_patterns,
+                    ignore_patterns=self.ignore_patterns,
+                    ignore_manager=self.ignore_manager,
+                ):
                     logger.info(f"Error detected in {container_name}: {line[:100]}")
+
+                    # Store in recent errors buffer
+                    if self.recent_errors_buffer:
+                        self.recent_errors_buffer.add(container_name, line)
+
                     if self.on_error:
                         await self.on_error(container_name, line)
         finally:

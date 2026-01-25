@@ -19,6 +19,8 @@ HELP_TEXT = """📋 *Available Commands*
 /stop <name> - Stop a container
 /start <name> - Start a container
 /pull <name> - Pull latest image and recreate
+/ignore - Reply to error alert to ignore those errors
+/ignores - List all ignored error patterns
 /help - Show this help message
 
 _Partial container names work: /status rad → radarr_

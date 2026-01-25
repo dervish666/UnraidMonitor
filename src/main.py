@@ -11,6 +11,8 @@ from src.monitors.log_watcher import LogWatcher
 from src.monitors.resource_monitor import ResourceMonitor
 from src.alerts.manager import AlertManager, ChatIdStore
 from src.alerts.rate_limiter import RateLimiter
+from src.alerts.ignore_manager import IgnoreManager
+from src.alerts.recent_errors import RecentErrorsBuffer
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_commands
 
 
@@ -81,6 +83,16 @@ async def main() -> None:
     log_watching_config = config.log_watching
     rate_limiter = RateLimiter(cooldown_seconds=log_watching_config["cooldown_seconds"])
 
+    # Initialize ignore manager and recent errors buffer
+    ignore_manager = IgnoreManager(
+        config_ignores=log_watching_config.get("container_ignores", {}),
+        json_path="data/ignored_errors.json",
+    )
+    recent_errors_buffer = RecentErrorsBuffer(
+        max_age_seconds=log_watching_config.get("cooldown_seconds", 900),
+        max_per_container=50,
+    )
+
     # Initialize Telegram bot
     bot = create_bot(config.telegram_bot_token)
     dp = create_dispatcher(config.telegram_allowed_users, chat_id_store=chat_id_store)
@@ -122,6 +134,8 @@ async def main() -> None:
         error_patterns=log_watching_config["error_patterns"],
         ignore_patterns=log_watching_config["ignore_patterns"],
         on_error=on_log_error,
+        ignore_manager=ignore_manager,
+        recent_errors_buffer=recent_errors_buffer,
     )
 
     try:
@@ -152,6 +166,8 @@ async def main() -> None:
         protected_containers=config.protected_containers,
         anthropic_client=anthropic_client,
         resource_monitor=resource_monitor,
+        ignore_manager=ignore_manager,
+        recent_errors_buffer=recent_errors_buffer,
     )
 
     # Start Docker event monitor as background task

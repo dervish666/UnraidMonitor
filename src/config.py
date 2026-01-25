@@ -48,6 +48,7 @@ DEFAULT_LOG_WATCHING: dict[str, Any] = {
     "error_patterns": DEFAULT_ERROR_PATTERNS,
     "ignore_patterns": DEFAULT_IGNORE_PATTERNS,
     "cooldown_seconds": 900,
+    "container_ignores": {},
 }
 
 
@@ -169,7 +170,11 @@ class AppConfig:
 
         Returns YAML config if present, otherwise returns defaults.
         """
-        return self._yaml_config.get("log_watching", DEFAULT_LOG_WATCHING)
+        config = self._yaml_config.get("log_watching", DEFAULT_LOG_WATCHING)
+        # Ensure container_ignores exists
+        if "container_ignores" not in config:
+            config["container_ignores"] = {}
+        return config
 
     @property
     def telegram_bot_token(self) -> str:
