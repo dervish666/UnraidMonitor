@@ -640,3 +640,94 @@ async def test_resource_monitor_send_alert_rate_limited():
     mock_rate_limiter.should_alert.assert_called_once()
     mock_rate_limiter.record_suppressed.assert_called_once()
     mock_alert_manager.send_resource_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resource_monitor_start_stop():
+    """Test starting and stopping the monitor."""
+    from src.monitors.resource_monitor import ResourceMonitor
+    from src.config import ResourceConfig
+    import asyncio
+
+    mock_docker = MagicMock()
+    mock_docker.containers.list.return_value = []
+
+    monitor = ResourceMonitor(
+        docker_client=mock_docker,
+        config=ResourceConfig(poll_interval_seconds=1),
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    # Start monitor in background
+    task = asyncio.create_task(monitor.start())
+
+    # Let it run briefly
+    await asyncio.sleep(0.1)
+
+    assert monitor._running is True
+
+    # Stop it
+    monitor.stop()
+
+    # Wait for task to complete
+    try:
+        await asyncio.wait_for(task, timeout=2.0)
+    except asyncio.CancelledError:
+        pass
+
+    assert monitor._running is False
+
+
+@pytest.mark.asyncio
+async def test_resource_monitor_polls_and_checks():
+    """Test that monitor polls containers and checks thresholds."""
+    from src.monitors.resource_monitor import ResourceMonitor, ContainerStats
+    from src.config import ResourceConfig
+    import asyncio
+
+    mock_docker = MagicMock()
+    mock_container = MagicMock()
+    mock_container.name = "plex"
+    mock_container.status = "running"
+    mock_container.stats.return_value = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 200_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 4,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 900_000_000,
+        },
+        "memory_stats": {
+            "usage": 7_000_000_000,  # 87.5% - exceeds default 85%
+            "limit": 8_000_000_000,
+        },
+    }
+    mock_docker.containers.list.return_value = [mock_container]
+
+    monitor = ResourceMonitor(
+        docker_client=mock_docker,
+        config=ResourceConfig(poll_interval_seconds=1),
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    # Start monitor in background
+    task = asyncio.create_task(monitor.start())
+
+    # Let it run one poll cycle
+    await asyncio.sleep(0.2)
+
+    # Should have tracked the memory violation
+    assert "plex" in monitor._violations
+    assert "memory" in monitor._violations["plex"]
+
+    # Stop it
+    monitor.stop()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -301,3 +302,40 @@ class ResourceMonitor:
             memory_percent=stats.memory_percent,
             cpu_percent=stats.cpu_percent,
         )
+
+    async def start(self) -> None:
+        """Start the monitoring loop."""
+        if not self._config.enabled:
+            logger.info("Resource monitoring disabled")
+            return
+
+        self._running = True
+        logger.info(
+            f"Starting resource monitor (poll interval: {self._config.poll_interval_seconds}s)"
+        )
+
+        while self._running:
+            try:
+                await self._poll_cycle()
+            except Exception as e:
+                logger.error(f"Error in resource monitor poll cycle: {e}")
+
+            # Wait for next poll
+            await asyncio.sleep(self._config.poll_interval_seconds)
+
+    def stop(self) -> None:
+        """Stop the monitoring loop."""
+        self._running = False
+        logger.info("Stopping resource monitor")
+
+    async def _poll_cycle(self) -> None:
+        """Execute one polling cycle."""
+        stats_list = await self.get_all_stats()
+
+        for stats in stats_list:
+            self._check_thresholds(stats)
+
+            # Check for sustained violations and send alerts
+            sustained = self._get_sustained_violations(stats.name)
+            for violation in sustained:
+                await self._send_alert(stats, violation)
