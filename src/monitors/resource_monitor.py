@@ -162,3 +162,29 @@ class ResourceMonitor:
                 logger.warning(f"Failed to get stats for {container.name}: {e}")
 
         return stats_list
+
+    async def get_container_stats(self, name: str) -> ContainerStats | None:
+        """Get current stats for a specific container.
+
+        Args:
+            name: Container name.
+
+        Returns:
+            ContainerStats or None if container not found.
+        """
+        import asyncio
+
+        try:
+            container = self._docker.containers.get(name)
+            if container.status != "running":
+                return None
+
+            raw_stats = await asyncio.to_thread(
+                container.stats, stream=False
+            )
+            return parse_container_stats(name, raw_stats)
+        except docker.errors.NotFound:
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get stats for {name}: {e}")
+            return None

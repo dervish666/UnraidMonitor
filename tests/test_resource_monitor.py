@@ -317,3 +317,67 @@ async def test_resource_monitor_get_all_stats_skips_stopped():
     assert len(stats) == 1
     assert stats[0].name == "plex"
     mock_stopped.stats.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resource_monitor_get_container_stats():
+    """Test getting stats for a specific container."""
+    from src.monitors.resource_monitor import ResourceMonitor
+    from src.config import ResourceConfig
+
+    mock_docker = MagicMock()
+    mock_container = MagicMock()
+    mock_container.name = "plex"
+    mock_container.status = "running"
+    mock_container.stats.return_value = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 200_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 4,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 900_000_000,
+        },
+        "memory_stats": {
+            "usage": 4_000_000_000,
+            "limit": 8_000_000_000,
+        },
+    }
+
+    mock_docker.containers.get.return_value = mock_container
+
+    monitor = ResourceMonitor(
+        docker_client=mock_docker,
+        config=ResourceConfig(),
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    stats = await monitor.get_container_stats("plex")
+
+    assert stats is not None
+    assert stats.name == "plex"
+    mock_docker.containers.get.assert_called_once_with("plex")
+
+
+@pytest.mark.asyncio
+async def test_resource_monitor_get_container_stats_not_found():
+    """Test getting stats for non-existent container."""
+    from src.monitors.resource_monitor import ResourceMonitor
+    from src.config import ResourceConfig
+    import docker.errors
+
+    mock_docker = MagicMock()
+    mock_docker.containers.get.side_effect = docker.errors.NotFound("not found")
+
+    monitor = ResourceMonitor(
+        docker_client=mock_docker,
+        config=ResourceConfig(),
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    stats = await monitor.get_container_stats("nonexistent")
+
+    assert stats is None
