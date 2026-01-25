@@ -104,3 +104,11 @@ async def test_resources_command_no_containers():
     response = message.answer.call_args[0][0]
 
     assert "no running containers" in response.lower() or "no containers" in response.lower()
+
+
+def test_resources_command_in_help():
+    """Test that /resources is documented in help text."""
+    from src.bot.commands import HELP_TEXT
+
+    assert "/resources" in HELP_TEXT
+    assert "CPU" in HELP_TEXT or "resource" in HELP_TEXT.lower()

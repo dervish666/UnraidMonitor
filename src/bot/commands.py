@@ -11,6 +11,8 @@ HELP_TEXT = """📋 *Available Commands*
 
 /status - Container status overview
 /status <name> - Details for specific container
+/resources - CPU/memory usage for all containers
+/resources <name> - Detailed resource stats for container
 /logs <name> [n] - Last n log lines (default 20)
 /diagnose <name> [n] - AI analysis of container logs
 /restart <name> - Restart a container
