@@ -7,6 +7,11 @@ monitoring:
 ignored_containers:
   - Kometa
 
+# Containers that cannot be controlled via Telegram
+# (restart/stop/start/pull commands will be rejected)
+protected_containers:
+  - unraid-monitor-bot
+
 # Log watching configuration for Phase 2 alerts
 log_watching:
   # Containers to watch for log errors

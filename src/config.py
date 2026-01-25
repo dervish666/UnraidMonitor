@@ -122,6 +122,11 @@ class AppConfig:
         return self._yaml_config.get("ignored_containers", [])
 
     @property
+    def protected_containers(self) -> list[str]:
+        """Get list of containers that cannot be controlled via Telegram."""
+        return self._yaml_config.get("protected_containers", [])
+
+    @property
     def log_watching(self) -> dict[str, Any]:
         """Get log watching configuration.
 
