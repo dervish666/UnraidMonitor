@@ -87,3 +87,59 @@ async def test_ignore_command_not_error_alert():
     message.answer.assert_called_once()
     response = message.answer.call_args[0][0]
     assert "error alert" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_ignores_command_lists_all():
+    """Test /ignores lists all ignores."""
+    from src.bot.ignore_command import ignores_command
+    from src.alerts.ignore_manager import IgnoreManager
+    import json
+
+    # Create manager with config and runtime ignores
+    config_ignores = {"plex": ["config pattern"]}
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump({"plex": ["runtime pattern"], "radarr": ["another"]}, f)
+        json_path = f.name
+
+    manager = IgnoreManager(config_ignores, json_path=json_path)
+
+    handler = ignores_command(manager)
+
+    message = MagicMock()
+    message.text = "/ignores"
+    message.answer = AsyncMock()
+
+    await handler(message)
+
+    message.answer.assert_called_once()
+    response = message.answer.call_args[0][0]
+
+    assert "plex" in response
+    assert "config pattern" in response
+    assert "(config)" in response
+    assert "runtime pattern" in response
+    assert "radarr" in response
+
+
+@pytest.mark.asyncio
+async def test_ignores_command_empty():
+    """Test /ignores with no ignores."""
+    from src.bot.ignore_command import ignores_command
+    from src.alerts.ignore_manager import IgnoreManager
+
+    manager = IgnoreManager({}, json_path="/tmp/nonexistent.json")
+
+    handler = ignores_command(manager)
+
+    message = MagicMock()
+    message.text = "/ignores"
+    message.answer = AsyncMock()
+
+    await handler(message)
+
+    message.answer.assert_called_once()
+    response = message.answer.call_args[0][0]
+    assert "no ignored" in response.lower() or "No ignored" in response

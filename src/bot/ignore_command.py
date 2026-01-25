@@ -77,6 +77,44 @@ def ignore_command(
     return handler
 
 
+def ignores_command(
+    ignore_manager: "IgnoreManager",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /ignores command handler."""
+
+    async def handler(message: Message) -> None:
+        # Collect all ignores across containers
+        all_containers: set[str] = set()
+
+        # Get containers from config ignores
+        all_containers.update(ignore_manager._config_ignores.keys())
+
+        # Get containers from runtime ignores
+        all_containers.update(ignore_manager._runtime_ignores.keys())
+
+        if not all_containers:
+            await message.answer("🔇 No ignored errors configured.\n\n_Use /ignore to add some._", parse_mode="Markdown")
+            return
+
+        lines = ["🔇 *Ignored Errors*\n"]
+
+        for container in sorted(all_containers):
+            ignores = ignore_manager.get_all_ignores(container)
+            if ignores:
+                lines.append(f"*{container}* ({len(ignores)}):")
+                for pattern, source in ignores:
+                    display = pattern[:50] + "..." if len(pattern) > 50 else pattern
+                    source_tag = " (config)" if source == "config" else ""
+                    lines.append(f"  • {display}{source_tag}")
+                lines.append("")
+
+        lines.append("_Use /ignore to add more_")
+
+        await message.answer("\n".join(lines), parse_mode="Markdown")
+
+    return handler
+
+
 async def handle_selection(
     message: Message,
     container: str,
