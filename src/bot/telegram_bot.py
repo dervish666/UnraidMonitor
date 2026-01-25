@@ -17,6 +17,7 @@ from src.bot.control_commands import (
 )
 from src.bot.confirmation import ConfirmationManager
 from src.bot.diagnose_command import diagnose_command
+from src.bot.resources_command import resources_command
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 
@@ -110,7 +111,8 @@ def register_commands(
     state: ContainerStateManager,
     docker_client: docker.DockerClient | None = None,
     protected_containers: list[str] | None = None,
-    anthropic_client=None,
+    anthropic_client: Any | None = None,
+    resource_monitor: Any | None = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -151,6 +153,13 @@ def register_commands(
             create_details_handler(diagnostic_service),
             DetailsFilter(),
         )
+
+        # Register /resources command
+        if resource_monitor is not None:
+            dp.message.register(
+                resources_command(resource_monitor),
+                Command("resources"),
+            )
 
         return confirmation, diagnostic_service
 

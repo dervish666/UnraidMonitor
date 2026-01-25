@@ -52,3 +52,26 @@ async def test_register_commands_adds_handlers():
     # aiogram 3.x stores handlers in router
     message_handlers = dp.message.handlers
     assert len(message_handlers) >= 2  # /status and /help
+
+
+def test_register_commands_with_resource_monitor():
+    """Test register_commands accepts resource_monitor parameter."""
+    from src.bot.telegram_bot import create_dispatcher, register_commands
+    from src.state import ContainerStateManager
+    from unittest.mock import MagicMock
+
+    state = ContainerStateManager()
+    mock_docker = MagicMock()
+    mock_resource_monitor = MagicMock()
+
+    dp = create_dispatcher([123])
+    result = register_commands(
+        dp,
+        state,
+        docker_client=mock_docker,
+        protected_containers=[],
+        resource_monitor=mock_resource_monitor,
+    )
+
+    # Should return tuple with confirmation manager and diagnostic service
+    assert isinstance(result, tuple)
