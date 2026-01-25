@@ -103,3 +103,51 @@ class DiagnosticService:
             uptime_seconds=uptime_seconds,
             restart_count=restart_count,
         )
+
+    async def analyze(self, context: DiagnosticContext) -> str:
+        """Analyze container issue using Claude API.
+
+        Args:
+            context: DiagnosticContext with container info.
+
+        Returns:
+            Brief analysis summary.
+        """
+        if not self._anthropic:
+            return "❌ Anthropic API not configured. Set ANTHROPIC_API_KEY in .env"
+
+        uptime_str = self._format_uptime(context.uptime_seconds) if context.uptime_seconds else "unknown"
+
+        prompt = f"""You are a Docker container diagnostics assistant. Analyze this container issue and provide a brief, actionable summary.
+
+Container: {context.container_name}
+Image: {context.image}
+Exit Code: {context.exit_code}
+Uptime before exit: {uptime_str}
+Restart Count: {context.restart_count}
+
+Last log lines:
+```
+{context.logs}
+```
+
+Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. Be specific and actionable. If you see a clear command to run, include it."""
+
+        try:
+            message = self._anthropic.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return message.content[0].text
+        except Exception as e:
+            logger.error(f"Claude API error: {e}")
+            return f"❌ Error analyzing container: {e}"
+
+    def _format_uptime(self, seconds: int) -> str:
+        """Format uptime in human-readable form."""
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
