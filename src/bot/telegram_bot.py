@@ -8,6 +8,9 @@ import docker
 
 from src.state import ContainerStateManager
 from src.bot.commands import help_command, status_command, logs_command
+from src.bot.control_commands import restart_command, stop_command, start_command, pull_command
+from src.bot.confirmation import ConfirmationManager
+from src.services.container_control import ContainerController
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +61,28 @@ def register_commands(
     dp: Dispatcher,
     state: ContainerStateManager,
     docker_client: docker.DockerClient | None = None,
-) -> None:
-    """Register all command handlers."""
+    protected_containers: list[str] | None = None,
+) -> ConfirmationManager | None:
+    """Register all command handlers.
+
+    Returns ConfirmationManager if docker_client is provided, for use with the "yes" handler.
+    """
     dp.message.register(help_command(state), Command("help"))
     dp.message.register(status_command(state), Command("status"))
 
     if docker_client:
         dp.message.register(logs_command(state, docker_client), Command("logs"))
+
+        # Create controller and confirmation manager for control commands
+        controller = ContainerController(docker_client, protected_containers or [])
+        confirmation = ConfirmationManager()
+
+        # Register control commands
+        dp.message.register(restart_command(state, controller, confirmation), Command("restart"))
+        dp.message.register(stop_command(state, controller, confirmation), Command("stop"))
+        dp.message.register(start_command(state, controller, confirmation), Command("start"))
+        dp.message.register(pull_command(state, controller, confirmation), Command("pull"))
+
+        return confirmation
+
+    return None
