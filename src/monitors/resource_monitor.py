@@ -60,3 +60,34 @@ def calculate_cpu_percent(stats: dict) -> float:
         return (cpu_delta / system_delta) * num_cpus * 100.0
 
     return 0.0
+
+
+def parse_container_stats(name: str, stats: dict) -> ContainerStats:
+    """Parse Docker stats response into ContainerStats.
+
+    Args:
+        name: Container name.
+        stats: Docker stats response dict.
+
+    Returns:
+        ContainerStats with parsed values.
+    """
+    cpu_percent = calculate_cpu_percent(stats)
+
+    memory_stats = stats.get("memory_stats", {})
+    memory_usage = memory_stats.get("usage", 0)
+    memory_limit = memory_stats.get("limit", 1)  # Avoid division by zero
+
+    # Subtract cache from memory usage if available
+    cache = memory_stats.get("stats", {}).get("cache", 0)
+    memory_usage = memory_usage - cache
+
+    memory_percent = (memory_usage / memory_limit) * 100.0 if memory_limit > 0 else 0.0
+
+    return ContainerStats(
+        name=name,
+        cpu_percent=round(cpu_percent, 1),
+        memory_percent=round(memory_percent, 1),
+        memory_bytes=memory_usage,
+        memory_limit=memory_limit,
+    )

@@ -116,3 +116,62 @@ def test_calculate_cpu_percent_missing_precpu():
     result = calculate_cpu_percent(stats)
     # First reading has no baseline, should handle gracefully
     assert isinstance(result, float)
+
+
+def test_parse_container_stats():
+    """Test parsing Docker stats response to ContainerStats."""
+    from src.monitors.resource_monitor import parse_container_stats
+
+    # Simulated Docker stats response
+    docker_stats = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 200_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 4,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 900_000_000,
+        },
+        "memory_stats": {
+            "usage": 4_000_000_000,
+            "limit": 8_000_000_000,
+        },
+    }
+
+    result = parse_container_stats("plex", docker_stats)
+
+    assert result.name == "plex"
+    assert result.cpu_percent == 400.0  # 100% per core * 4 cores
+    assert result.memory_percent == 50.0
+    assert result.memory_bytes == 4_000_000_000
+    assert result.memory_limit == 8_000_000_000
+
+
+def test_parse_container_stats_with_cache():
+    """Test parsing Docker stats with memory cache included."""
+    from src.monitors.resource_monitor import parse_container_stats
+
+    # Some containers report cache separately
+    docker_stats = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 100_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 2,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": 50_000_000},
+            "system_cpu_usage": 900_000_000,
+        },
+        "memory_stats": {
+            "usage": 2_000_000_000,
+            "stats": {"cache": 500_000_000},
+            "limit": 4_000_000_000,
+        },
+    }
+
+    result = parse_container_stats("radarr", docker_stats)
+
+    # Memory usage should exclude cache: 2GB - 500MB = 1.5GB
+    assert result.memory_bytes == 1_500_000_000
+    assert result.memory_percent == 37.5
