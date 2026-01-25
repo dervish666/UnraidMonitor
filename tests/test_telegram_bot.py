@@ -36,3 +36,19 @@ async def test_auth_middleware_blocks_unauthorized_user():
 
     handler.assert_not_called()
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_register_commands_adds_handlers():
+    from src.bot.telegram_bot import create_dispatcher, register_commands
+    from src.state import ContainerStateManager
+
+    state = ContainerStateManager()
+    dp = create_dispatcher(allowed_users=[123])
+
+    register_commands(dp, state)
+
+    # Check that handlers were registered
+    # aiogram 3.x stores handlers in router
+    message_handlers = dp.message.handlers
+    assert len(message_handlers) >= 2  # /status and /help

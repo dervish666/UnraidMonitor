@@ -2,7 +2,11 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
+from aiogram.filters import Command
 from aiogram.types import Message
+
+from src.state import ContainerStateManager
+from src.bot.commands import help_command, status_command
 
 logger = logging.getLogger(__name__)
 
@@ -42,3 +46,9 @@ def create_dispatcher(allowed_users: list[int]) -> Dispatcher:
     dp = Dispatcher()
     dp.message.middleware(AuthMiddleware(allowed_users))
     return dp
+
+
+def register_commands(dp: Dispatcher, state: ContainerStateManager) -> None:
+    """Register all command handlers."""
+    dp.message.register(help_command(state), Command("help"))
+    dp.message.register(status_command(state), Command("status"))
