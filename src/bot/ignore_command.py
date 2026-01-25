@@ -108,9 +108,7 @@ def ignore_selection_handler(
         container, errors = pending
         text = (message.text or "").strip().lower()
 
-        # Clear pending selection
-        selection_state.clear_pending(user_id)
-
+        # Parse the selection first, before clearing pending state
         if text == "all":
             indices = list(range(len(errors)))
         else:
@@ -124,6 +122,9 @@ def ignore_selection_handler(
             except ValueError:
                 await message.answer("Invalid input. Use numbers like '1,3' or 'all'.")
                 return
+
+        # Only clear pending selection after successful parse
+        selection_state.clear_pending(user_id)
 
         # Add ignores
         added = []

@@ -54,6 +54,9 @@ class IgnoreSelectionFilter(Filter):
     async def __call__(self, message: Message) -> bool:
         if not message.text:
             return False
+        # Don't intercept commands - let them be processed normally
+        if message.text.startswith("/"):
+            return False
         user_id = message.from_user.id if message.from_user else 0
         # Only match if user has a pending selection
         return self.selection_state.has_pending(user_id)
