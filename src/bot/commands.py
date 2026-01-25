@@ -2,6 +2,7 @@ from typing import Callable, Awaitable
 
 from aiogram.types import Message
 
+from src.models import ContainerInfo
 from src.state import ContainerStateManager
 
 
@@ -54,6 +55,30 @@ def format_status_summary(state: ContainerStateManager) -> str:
     return "\n".join(lines)
 
 
+def format_container_details(container: ContainerInfo) -> str:
+    """Format detailed container info."""
+    health_emoji = {
+        "healthy": "✅",
+        "unhealthy": "⚠️",
+        "starting": "🔄",
+        None: "➖",
+    }
+    status_emoji = "🟢" if container.status == "running" else "🔴"
+
+    lines = [
+        f"*{container.name}*",
+        "",
+        f"Status: {status_emoji} {container.status}",
+        f"Health: {health_emoji.get(container.health, '➖')} {container.health or 'no healthcheck'}",
+        f"Image: `{container.image}`",
+    ]
+
+    if container.started_at:
+        lines.append(f"Started: {container.started_at.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    return "\n".join(lines)
+
+
 def status_command(state: ContainerStateManager) -> Callable[[Message], Awaitable[None]]:
     """Factory for /status command handler."""
     async def handler(message: Message) -> None:
@@ -63,9 +88,19 @@ def status_command(state: ContainerStateManager) -> Callable[[Message], Awaitabl
         if len(parts) == 1:
             # No argument - show summary
             response = format_status_summary(state)
-            await message.answer(response, parse_mode="Markdown")
         else:
-            # Has argument - will handle in next task
-            await message.answer("Container details not yet implemented")
+            # Search for container
+            query = parts[1].strip()
+            matches = state.find_by_name(query)
+
+            if not matches:
+                response = f"❌ No container found matching '{query}'"
+            elif len(matches) == 1:
+                response = format_container_details(matches[0])
+            else:
+                names = ", ".join(m.name for m in matches)
+                response = f"Multiple matches found: {names}\n\n_Be more specific_"
+
+        await message.answer(response, parse_mode="Markdown")
 
     return handler
