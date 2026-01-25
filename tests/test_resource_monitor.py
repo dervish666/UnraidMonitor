@@ -381,3 +381,111 @@ async def test_resource_monitor_get_container_stats_not_found():
     stats = await monitor.get_container_stats("nonexistent")
 
     assert stats is None
+
+
+def test_resource_monitor_check_thresholds_starts_violation():
+    """Test that exceeding threshold starts violation tracking."""
+    from src.monitors.resource_monitor import ResourceMonitor, ContainerStats
+    from src.config import ResourceConfig
+
+    config = ResourceConfig(default_cpu_percent=80, default_memory_percent=85)
+    monitor = ResourceMonitor(
+        docker_client=MagicMock(),
+        config=config,
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    stats = ContainerStats(
+        name="plex",
+        cpu_percent=90.0,  # Exceeds 80%
+        memory_percent=50.0,  # Below 85%
+        memory_bytes=4_000_000_000,
+        memory_limit=8_000_000_000,
+    )
+
+    monitor._check_thresholds(stats)
+
+    assert "plex" in monitor._violations
+    assert "cpu" in monitor._violations["plex"]
+    assert "memory" not in monitor._violations["plex"]
+
+
+def test_resource_monitor_check_thresholds_clears_violation():
+    """Test that going below threshold clears violation."""
+    from src.monitors.resource_monitor import ResourceMonitor, ContainerStats, ViolationState
+    from src.config import ResourceConfig
+    from datetime import datetime
+
+    config = ResourceConfig(default_cpu_percent=80, default_memory_percent=85)
+    monitor = ResourceMonitor(
+        docker_client=MagicMock(),
+        config=config,
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    # Set up existing violation
+    monitor._violations["plex"] = {
+        "cpu": ViolationState(
+            metric="cpu",
+            started_at=datetime.now(),
+            current_value=90.0,
+            threshold=80,
+        )
+    }
+
+    # Stats now below threshold
+    stats = ContainerStats(
+        name="plex",
+        cpu_percent=70.0,  # Below 80%
+        memory_percent=50.0,
+        memory_bytes=4_000_000_000,
+        memory_limit=8_000_000_000,
+    )
+
+    monitor._check_thresholds(stats)
+
+    # Violation should be cleared
+    assert "cpu" not in monitor._violations.get("plex", {})
+
+
+def test_resource_monitor_check_thresholds_updates_violation():
+    """Test that continued violation updates current value."""
+    from src.monitors.resource_monitor import ResourceMonitor, ContainerStats, ViolationState
+    from src.config import ResourceConfig
+    from datetime import datetime, timedelta
+
+    config = ResourceConfig(default_cpu_percent=80, default_memory_percent=85)
+    monitor = ResourceMonitor(
+        docker_client=MagicMock(),
+        config=config,
+        alert_manager=MagicMock(),
+        rate_limiter=MagicMock(),
+    )
+
+    # Set up existing violation from 1 minute ago
+    started = datetime.now() - timedelta(minutes=1)
+    monitor._violations["plex"] = {
+        "cpu": ViolationState(
+            metric="cpu",
+            started_at=started,
+            current_value=85.0,
+            threshold=80,
+        )
+    }
+
+    # Stats still above threshold
+    stats = ContainerStats(
+        name="plex",
+        cpu_percent=92.0,  # Still above 80%
+        memory_percent=50.0,
+        memory_bytes=4_000_000_000,
+        memory_limit=8_000_000_000,
+    )
+
+    monitor._check_thresholds(stats)
+
+    # Violation should be updated, not replaced
+    assert monitor._violations["plex"]["cpu"].started_at == started
+    assert monitor._violations["plex"]["cpu"].current_value == 92.0

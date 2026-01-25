@@ -188,3 +188,68 @@ class ResourceMonitor:
         except Exception as e:
             logger.warning(f"Failed to get stats for {name}: {e}")
             return None
+
+    def _check_thresholds(self, stats: ContainerStats) -> None:
+        """Check if container exceeds thresholds and track violations.
+
+        Args:
+            stats: Current container stats.
+        """
+        cpu_threshold, memory_threshold = self._config.get_thresholds(stats.name)
+
+        # Ensure container has a violations dict
+        if stats.name not in self._violations:
+            self._violations[stats.name] = {}
+
+        container_violations = self._violations[stats.name]
+
+        # Check CPU
+        self._update_violation(
+            container_violations,
+            metric="cpu",
+            current_value=stats.cpu_percent,
+            threshold=cpu_threshold,
+        )
+
+        # Check Memory
+        self._update_violation(
+            container_violations,
+            metric="memory",
+            current_value=stats.memory_percent,
+            threshold=memory_threshold,
+        )
+
+        # Clean up empty violation dicts
+        if not container_violations:
+            del self._violations[stats.name]
+
+    def _update_violation(
+        self,
+        violations: dict[str, ViolationState],
+        metric: str,
+        current_value: float,
+        threshold: int,
+    ) -> None:
+        """Update violation state for a single metric.
+
+        Args:
+            violations: Container's violation dict to update.
+            metric: "cpu" or "memory".
+            current_value: Current metric value.
+            threshold: Threshold value.
+        """
+        if current_value > threshold:
+            if metric in violations:
+                # Update existing violation
+                violations[metric].current_value = current_value
+            else:
+                # Start new violation
+                violations[metric] = ViolationState(
+                    metric=metric,
+                    started_at=datetime.now(),
+                    current_value=current_value,
+                    threshold=threshold,
+                )
+        elif metric in violations:
+            # Violation cleared
+            del violations[metric]
