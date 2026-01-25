@@ -3,7 +3,6 @@ import logging
 from typing import Callable, Awaitable
 
 import docker
-from docker.models.containers import Container
 
 logger = logging.getLogger(__name__)
 
@@ -95,21 +94,45 @@ class LogWatcher:
 
         container = self._client.containers.get(container_name)
 
-        # Stream logs (blocking, run in thread)
-        def stream():
-            for line in container.logs(stream=True, follow=True, tail=0):
-                if not self._running:
-                    break
-                yield line.decode("utf-8", errors="replace").strip()
+        # Use queue to bridge blocking log stream to async processing
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
 
-        async def process_lines():
-            for line in await asyncio.to_thread(lambda: list(stream())):
-                if not self._running:
+        def stream_to_queue():
+            """Blocking function that streams logs and puts them in the queue."""
+            try:
+                for line in container.logs(stream=True, follow=True, tail=0):
+                    if not self._running:
+                        break
+                    decoded = line.decode("utf-8", errors="replace").strip()
+                    if decoded:  # Skip empty lines
+                        queue.put_nowait(decoded)
+            except Exception as e:
+                logger.error(f"Error streaming logs from {container_name}: {e}")
+            finally:
+                # Signal end of stream
+                queue.put_nowait(None)
+
+        # Start the blocking stream in a thread
+        stream_task = asyncio.create_task(asyncio.to_thread(stream_to_queue))
+
+        try:
+            # Process lines from queue as they arrive
+            while self._running:
+                try:
+                    line = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
+                if line is None:  # End of stream
                     break
 
                 if matches_error_pattern(line, self.error_patterns, self.ignore_patterns):
-                    logger.debug(f"Error in {container_name}: {line[:100]}")
+                    logger.info(f"Error detected in {container_name}: {line[:100]}")
                     if self.on_error:
                         await self.on_error(container_name, line)
-
-        await process_lines()
+        finally:
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass

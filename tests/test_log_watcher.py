@@ -104,7 +104,7 @@ async def test_log_watcher_calls_on_error_for_matching_lines():
     mock_client = MagicMock()
     mock_container = MagicMock()
 
-    # Simulate log lines
+    # Simulate log lines as an iterator (like real Docker logs)
     log_lines = [
         b"Normal log line\n",
         b"ERROR: Something went wrong\n",
@@ -112,12 +112,12 @@ async def test_log_watcher_calls_on_error_for_matching_lines():
         b"FATAL: Critical failure\n",
     ]
 
-    mock_container.logs.return_value = log_lines
+    mock_container.logs.return_value = iter(log_lines)
     mock_client.containers.get.return_value = mock_container
     watcher._client = mock_client
     watcher._running = True
 
-    # Process logs
+    # Process logs - this will run the streaming in a thread
     await watcher._stream_logs("test-container")
 
     # Should be called twice (ERROR and FATAL, but not DEBUG)
