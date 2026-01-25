@@ -2,6 +2,8 @@ import asyncio
 import logging
 import sys
 
+import anthropic
+
 from src.config import Settings, AppConfig
 from src.state import ContainerStateManager
 from src.monitors.docker_events import DockerEventMonitor
@@ -53,6 +55,14 @@ async def main() -> None:
 
     logging.getLogger().setLevel(config.log_level)
     logger.info("Configuration loaded")
+
+    # Initialize Anthropic client if API key is configured
+    anthropic_client = None
+    if config.anthropic_api_key:
+        anthropic_client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        logger.info("Anthropic client initialized for AI diagnostics")
+    else:
+        logger.warning("ANTHROPIC_API_KEY not set - /diagnose command will be disabled")
 
     # Initialize state manager
     state = ContainerStateManager()
@@ -112,7 +122,13 @@ async def main() -> None:
         sys.exit(1)
 
     # Register commands with docker client for /logs
-    register_commands(dp, state, docker_client=monitor._client, protected_containers=config.protected_containers)
+    confirmation, diagnostic_service = register_commands(
+        dp,
+        state,
+        docker_client=monitor._client,
+        protected_containers=config.protected_containers,
+        anthropic_client=anthropic_client,
+    )
 
     # Start Docker event monitor as background task
     monitor_task = asyncio.create_task(monitor.start())
