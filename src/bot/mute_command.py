@@ -149,3 +149,79 @@ def format_duration(delta: timedelta) -> str:
             return f"{hours}h {mins}m"
         return f"{hours}h"
     return f"{total_minutes}m"
+
+
+def mutes_command(
+    mute_manager: "MuteManager",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /mutes command handler."""
+
+    async def handler(message: Message) -> None:
+        mutes = mute_manager.get_active_mutes()
+
+        if not mutes:
+            await message.answer(
+                "🔇 No active mutes.\n\n_Use `/mute <container> <duration>` to mute._",
+                parse_mode="Markdown",
+            )
+            return
+
+        lines = ["🔇 *Active Mutes*\n"]
+        for container, expiry in sorted(mutes, key=lambda x: x[1]):
+            time_str = expiry.strftime("%H:%M")
+            lines.append(f"• *{container}* until {time_str}")
+
+        lines.append("\n_Use `/unmute <container>` to unmute early._")
+        await message.answer("\n".join(lines), parse_mode="Markdown")
+
+    return handler
+
+
+def unmute_command(
+    state: "ContainerStateManager",
+    mute_manager: "MuteManager",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /unmute command handler."""
+
+    async def handler(message: Message) -> None:
+        text = (message.text or "").strip()
+        parts = text.split()
+
+        if len(parts) < 2:
+            await message.answer(
+                "Usage: `/unmute <container>`",
+                parse_mode="Markdown",
+            )
+            return
+
+        container_query = parts[1]
+
+        # Find container by partial match in active mutes first
+        mutes = mute_manager.get_active_mutes()
+        muted_containers = [c for c, _ in mutes]
+        matches = [c for c in muted_containers if container_query.lower() in c.lower()]
+
+        if len(matches) == 1:
+            container = matches[0]
+        elif len(matches) > 1:
+            await message.answer(
+                f"Ambiguous: `{container_query}` matches {', '.join(matches)}",
+                parse_mode="Markdown",
+            )
+            return
+        else:
+            container = container_query
+
+        # Try to unmute
+        if mute_manager.remove_mute(container):
+            await message.answer(
+                f"🔔 *Unmuted {container}*\n\nAlerts are now enabled.",
+                parse_mode="Markdown",
+            )
+        else:
+            await message.answer(
+                f"`{container}` is not muted.",
+                parse_mode="Markdown",
+            )
+
+    return handler
