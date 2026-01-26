@@ -48,3 +48,10 @@ log_watching:
 
   # Cooldown period before alerting on same error again (seconds)
   cooldown_seconds: 900
+
+unraid:                                                                                                                     
+    enabled: true                                                                                                             
+    host: "192.168.0.190"                                                                                                     
+    thresholds:                                                                                                               
+      cpu_temp: 80                                                                                                            
+      memory_usage: 90     
