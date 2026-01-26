@@ -12,24 +12,15 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-# Introspection query to discover available fields
-INTROSPECTION_QUERY = """
-    query {
-        __schema {
-            queryType {
-                fields {
-                    name
-                }
-            }
-        }
-    }
-"""
-
-# Minimal system info query - just os info which should be stable
-SYSTEM_INFO_QUERY = """
+# System metrics query - discovered via introspection
+SYSTEM_METRICS_QUERY = """
     query {
         info {
             os { uptime hostname }
+        }
+        metrics {
+            cpu { percentTotal }
+            memory { total used free percentTotal }
         }
     }
 """
@@ -236,20 +227,29 @@ class UnraidClientWrapper:
         Returns:
             Dict with cpu_percent, cpu_temperature, memory_percent, etc.
         """
-        # Get basic system info
-        info_data = await self._execute_query(SYSTEM_INFO_QUERY)
-        info = info_data.get("info", {})
+        data = await self._execute_query(SYSTEM_METRICS_QUERY)
+
+        info = data.get("info", {})
+        metrics = data.get("metrics", {})
 
         uptime = info.get("os", {}).get("uptime", "")
         hostname = info.get("os", {}).get("hostname", "")
 
+        cpu_metrics = metrics.get("cpu", {})
+        cpu_percent = cpu_metrics.get("percentTotal", 0)
+
+        mem_metrics = metrics.get("memory", {})
+        memory_percent = mem_metrics.get("percentTotal", 0)
+        memory_used = mem_metrics.get("used", 0)
+        memory_total = mem_metrics.get("total", 0)
+
         return {
             "hostname": hostname,
-            "cpu_percent": 0,
-            "cpu_temperature": 0,
-            "memory_percent": 0,
-            "memory_used": 0,
-            "memory_total": 0,
+            "cpu_percent": cpu_percent,
+            "cpu_temperature": 0,  # Not available in this schema
+            "memory_percent": memory_percent,
+            "memory_used": memory_used,
+            "memory_total": memory_total,
             "uptime": uptime,
         }
 

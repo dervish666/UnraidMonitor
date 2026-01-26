@@ -54,13 +54,21 @@ async def test_unraid_client_get_system_metrics():
 
     with patch("src.unraid.client.aiohttp.ClientSession") as MockSession, \
          patch("src.unraid.client.aiohttp.TCPConnector"):
-        # Mock response for system info query
+        # Mock response for combined system metrics query
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={
             "data": {
                 "info": {
                     "os": {"uptime": "5 days, 3 hours", "hostname": "Tower"},
+                },
+                "metrics": {
+                    "cpu": {"percentTotal": 25.5},
+                    "memory": {
+                        "total": 34359738368,
+                        "used": 17179869184,
+                        "percentTotal": 50.0,
+                    },
                 },
             }
         })
@@ -83,8 +91,10 @@ async def test_unraid_client_get_system_metrics():
 
         assert metrics["hostname"] == "Tower"
         assert metrics["uptime"] == "5 days, 3 hours"
-        assert "cpu_percent" in metrics
-        assert "memory_percent" in metrics
+        assert metrics["cpu_percent"] == 25.5
+        assert metrics["memory_percent"] == 50.0
+        assert metrics["memory_used"] == 17179869184
+        assert metrics["memory_total"] == 34359738368
 
 
 @pytest.mark.asyncio
