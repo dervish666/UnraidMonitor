@@ -13,6 +13,7 @@ from src.alerts.manager import AlertManager, ChatIdStore
 from src.alerts.rate_limiter import RateLimiter
 from src.alerts.ignore_manager import IgnoreManager
 from src.alerts.recent_errors import RecentErrorsBuffer
+from src.alerts.mute_manager import MuteManager
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_commands
 
 
@@ -93,6 +94,9 @@ async def main() -> None:
         max_per_container=50,
     )
 
+    # Initialize mute manager
+    mute_manager = MuteManager(json_path="data/mutes.json")
+
     # Initialize Telegram bot
     bot = create_bot(config.telegram_bot_token)
     dp = create_dispatcher(config.telegram_allowed_users, chat_id_store=chat_id_store)
@@ -106,6 +110,7 @@ async def main() -> None:
         ignored_containers=config.ignored_containers,
         alert_manager=alert_manager,
         rate_limiter=rate_limiter,
+        mute_manager=mute_manager,
     )
 
     try:
@@ -118,6 +123,11 @@ async def main() -> None:
     # Initialize log watcher
     async def on_log_error(container_name: str, error_line: str):
         """Handle log errors with rate limiting."""
+        # Check if muted
+        if mute_manager.is_muted(container_name):
+            logger.debug(f"Suppressed log error alert for muted container: {container_name}")
+            return
+
         if rate_limiter.should_alert(container_name):
             suppressed = rate_limiter.get_suppressed_count(container_name)
             await alert_manager.send_log_error_alert(
@@ -153,6 +163,7 @@ async def main() -> None:
             config=resource_config,
             alert_manager=alert_manager,
             rate_limiter=rate_limiter,
+            mute_manager=mute_manager,
         )
         logger.info("Resource monitoring enabled")
     else:
@@ -168,6 +179,7 @@ async def main() -> None:
         resource_monitor=resource_monitor,
         ignore_manager=ignore_manager,
         recent_errors_buffer=recent_errors_buffer,
+        mute_manager=mute_manager,
     )
 
     # Start Docker event monitor as background task

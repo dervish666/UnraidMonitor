@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from src.config import ResourceConfig
     from src.alerts.manager import AlertManager
     from src.alerts.rate_limiter import RateLimiter
+    from src.alerts.mute_manager import MuteManager
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +119,13 @@ class ResourceMonitor:
         config: "ResourceConfig",
         alert_manager: "AlertManager",
         rate_limiter: "RateLimiter",
+        mute_manager: "MuteManager | None" = None,
     ):
         self._docker = docker_client
         self._config = config
         self._alert_manager = alert_manager
         self._rate_limiter = rate_limiter
+        self._mute_manager = mute_manager
         self._violations: dict[str, dict[str, ViolationState]] = {}
         self._running = False
 
@@ -279,6 +282,11 @@ class ResourceMonitor:
             stats: Current container stats.
             violation: The sustained violation.
         """
+        # Check if muted
+        if self._mute_manager and self._mute_manager.is_muted(stats.name):
+            logger.debug(f"Suppressed resource alert for muted container: {stats.name}")
+            return
+
         # Use rate limiter key that includes metric to allow separate cpu/memory alerts
         rate_key = f"{stats.name}:{violation.metric}"
 

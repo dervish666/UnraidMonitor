@@ -12,6 +12,7 @@ from src.state import ContainerStateManager
 if TYPE_CHECKING:
     from src.alerts.manager import AlertManager
     from src.alerts.rate_limiter import RateLimiter
+    from src.alerts.mute_manager import MuteManager
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,13 @@ class DockerEventMonitor:
         ignored_containers: list[str] | None = None,
         alert_manager: "AlertManager | None" = None,
         rate_limiter: "RateLimiter | None" = None,
+        mute_manager: "MuteManager | None" = None,
     ):
         self.state_manager = state_manager
         self.ignored_containers = set(ignored_containers or [])
         self.alert_manager = alert_manager
         self.rate_limiter = rate_limiter
+        self.mute_manager = mute_manager
         self._client: docker.DockerClient | None = None
         self._running = False
         self._pending_alerts: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -186,6 +189,11 @@ class DockerEventMonitor:
         # Skip if container is in ignored list
         if container_name in self.ignored_containers:
             logger.debug(f"Ignoring crash alert for ignored container: {container_name}")
+            return
+
+        # Check if muted
+        if self.mute_manager and self.mute_manager.is_muted(container_name):
+            logger.debug(f"Suppressed crash alert for muted container: {container_name}")
             return
 
         # Check rate limiter if available
