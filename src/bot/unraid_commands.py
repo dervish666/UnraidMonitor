@@ -5,8 +5,11 @@ from typing import Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message
 
+from src.alerts.mute_manager import parse_duration
+
 if TYPE_CHECKING:
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
+    from src.alerts.server_mute_manager import ServerMuteManager
 
 logger = logging.getLogger(__name__)
 
@@ -61,5 +64,65 @@ def server_command(
                 f"Uptime: {uptime}"
             )
             await message.answer(response, parse_mode="Markdown")
+
+    return handler
+
+
+def mute_server_command(
+    mute_manager: "ServerMuteManager",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /mute-server command handler."""
+
+    async def handler(message: Message) -> None:
+        text = (message.text or "").strip()
+        parts = text.split()
+
+        if len(parts) < 2:
+            await message.answer(
+                "Usage: `/mute-server <duration>`\n\n"
+                "Examples: `2h`, `30m`, `24h`\n\n"
+                "This mutes ALL server alerts (system, array, UPS).",
+                parse_mode="Markdown",
+            )
+            return
+
+        duration_str = parts[1]
+        duration = parse_duration(duration_str)
+
+        if not duration:
+            await message.answer(
+                f"Invalid duration: `{duration_str}`\n"
+                "Use format like `15m`, `2h`, `24h`",
+                parse_mode="Markdown",
+            )
+            return
+
+        expiry = mute_manager.mute_server(duration)
+        time_str = expiry.strftime("%H:%M")
+
+        await message.answer(
+            f"🔇 *Muted all server alerts* until {time_str}\n\n"
+            f"System, array, and UPS alerts suppressed.\n"
+            f"Use `/unmute-server` to unmute early.",
+            parse_mode="Markdown",
+        )
+
+    return handler
+
+
+def unmute_server_command(
+    mute_manager: "ServerMuteManager",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /unmute-server command handler."""
+
+    async def handler(message: Message) -> None:
+        if mute_manager.unmute_server():
+            await message.answer(
+                "🔔 *Unmuted all server alerts*\n\n"
+                "System, array, and UPS alerts are now enabled.",
+                parse_mode="Markdown",
+            )
+        else:
+            await message.answer("Server alerts are not currently muted.")
 
     return handler
