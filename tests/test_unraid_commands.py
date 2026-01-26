@@ -292,18 +292,19 @@ async def test_array_command_with_issues():
 
 @pytest.mark.asyncio
 async def test_disks_command():
-    """Test /disks lists all disks."""
+    """Test /disks lists all disks with sizes."""
     from src.bot.unraid_commands import disks_command
 
     mock_monitor = MagicMock()
+    # Size is in kilobytes from the API (4TB = 4,000,000,000 KB)
     mock_monitor.get_array_status = AsyncMock(return_value={
         "state": "STARTED",
         "disks": [
-            {"name": "disk1", "temp": 35, "status": "DISK_OK", "size": 4000000000000},
-            {"name": "disk2", "temp": 37, "status": "DISK_OK", "size": 8000000000000},
+            {"name": "disk1", "temp": 35, "status": "DISK_OK", "size": 4000000000},
+            {"name": "disk2", "temp": 37, "status": "DISK_OK", "size": 8000000000},
         ],
-        "parities": [{"name": "parity", "temp": 33, "status": "DISK_OK", "size": 8000000000000}],
-        "caches": [{"name": "cache", "temp": 38, "status": "DISK_OK", "size": 1000000000000}],
+        "parities": [{"name": "parity", "temp": 33, "status": "DISK_OK", "size": 8000000000}],
+        "caches": [{"name": "cache", "temp": 38, "status": "DISK_OK", "size": 1000000000}],
     })
 
     handler = disks_command(mock_monitor)
@@ -321,6 +322,8 @@ async def test_disks_command():
     assert "parity" in response
     assert "cache" in response
     assert "35" in response  # temp
+    assert "4.0TB" in response  # disk1 size
+    assert "8.0TB" in response  # disk2/parity size
 
 
 @pytest.mark.asyncio

@@ -268,10 +268,10 @@ def _format_disk_line(disk: dict) -> str:
     name = disk.get("name", "unknown")
     temp = disk.get("temp", 0)
     status = disk.get("status", "").replace("DISK_", "")
-    size = disk.get("size", 0)
+    size_kb = disk.get("size", 0)
 
-    # Convert size to TB (size is in bytes from API)
-    size_tb = size / (1000 * 1000 * 1000 * 1000) if size else 0
+    # Convert size from kilobytes to TB (decimal: 1 TB = 10^12 bytes = 10^9 KB)
+    size_tb = size_kb / (1000 * 1000 * 1000) if size_kb else 0
 
     status_icon = "✅" if status == "OK" else "⚠️"
 
