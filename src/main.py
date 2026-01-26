@@ -14,7 +14,10 @@ from src.alerts.rate_limiter import RateLimiter
 from src.alerts.ignore_manager import IgnoreManager
 from src.alerts.recent_errors import RecentErrorsBuffer
 from src.alerts.mute_manager import MuteManager
+from src.alerts.server_mute_manager import ServerMuteManager
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_commands
+from src.unraid.client import UnraidClientWrapper
+from src.unraid.monitors.system_monitor import UnraidSystemMonitor
 
 
 logging.basicConfig(
@@ -104,6 +107,44 @@ async def main() -> None:
     # Create alert manager proxy
     alert_manager = AlertManagerProxy(bot, chat_id_store)
 
+    # Initialize Unraid components if configured
+    unraid_client = None
+    unraid_system_monitor = None
+    server_mute_manager = None
+
+    unraid_config = config.unraid
+    if unraid_config.enabled and settings.unraid_api_key:
+        logger.info("Initializing Unraid monitoring...")
+
+        server_mute_manager = ServerMuteManager(json_path="data/server_mutes.json")
+
+        unraid_client = UnraidClientWrapper(
+            host=unraid_config.host,
+            api_key=settings.unraid_api_key,
+            port=unraid_config.port,
+        )
+
+        # Alert callback for Unraid
+        async def on_server_alert(title: str, message: str, alert_type: str) -> None:
+            chat_id = chat_id_store.get_chat_id()
+            if chat_id:
+                alert_text = f"SERVER ALERT: {title}\n\n{message}"
+                await bot.send_message(chat_id, alert_text)
+            else:
+                logger.warning("No chat ID yet, cannot send server alert")
+
+        unraid_system_monitor = UnraidSystemMonitor(
+            client=unraid_client,
+            config=unraid_config,
+            on_alert=on_server_alert,
+            mute_manager=server_mute_manager,
+        )
+    else:
+        if not unraid_config.enabled:
+            logger.info("Unraid monitoring disabled in config")
+        elif not settings.unraid_api_key:
+            logger.warning("UNRAID_API_KEY not set - Unraid monitoring disabled")
+
     # Initialize Docker monitor with alert support
     monitor = DockerEventMonitor(
         state_manager=state,
@@ -180,6 +221,8 @@ async def main() -> None:
         ignore_manager=ignore_manager,
         recent_errors_buffer=recent_errors_buffer,
         mute_manager=mute_manager,
+        unraid_system_monitor=unraid_system_monitor,
+        server_mute_manager=server_mute_manager,
     )
 
     # Start Docker event monitor as background task
@@ -192,6 +235,17 @@ async def main() -> None:
     resource_monitor_task = None
     if resource_monitor is not None:
         resource_monitor_task = asyncio.create_task(resource_monitor.start())
+
+    # Connect to Unraid and start monitoring
+    unraid_monitor_task = None
+    if unraid_client:
+        try:
+            await unraid_client.connect()
+            if unraid_system_monitor:
+                unraid_monitor_task = asyncio.create_task(unraid_system_monitor.start())
+                logger.info("Unraid system monitoring started")
+        except Exception as e:
+            logger.error(f"Failed to connect to Unraid: {e}")
 
     logger.info("Starting Telegram bot...")
 
@@ -221,6 +275,16 @@ async def main() -> None:
                 await resource_monitor_task
             except asyncio.CancelledError:
                 pass
+        if unraid_system_monitor:
+            await unraid_system_monitor.stop()
+        if unraid_monitor_task:
+            unraid_monitor_task.cancel()
+            try:
+                await unraid_monitor_task
+            except asyncio.CancelledError:
+                pass
+        if unraid_client:
+            await unraid_client.disconnect()
         await bot.session.close()
 
 
