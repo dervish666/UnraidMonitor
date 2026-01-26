@@ -237,7 +237,7 @@ async def test_unraid_client_get_ups_status():
 
 @pytest.mark.asyncio
 async def test_unraid_client_verify_ssl_false():
-    """Test client can be created with verify_ssl=False."""
+    """Test client can be created with verify_ssl=False and use_ssl=True."""
     from src.unraid.client import UnraidClientWrapper
 
     with patch("src.unraid.client.aiohttp.ClientSession") as MockSession, \
@@ -253,6 +253,7 @@ async def test_unraid_client_verify_ssl_false():
             api_key="test-key",
             port=443,
             verify_ssl=False,
+            use_ssl=True,
         )
 
         await wrapper.connect()
@@ -260,6 +261,51 @@ async def test_unraid_client_verify_ssl_false():
         # Verify SSL context was configured for no verification
         mock_ssl.assert_called_once()
         assert mock_ssl_context.check_hostname is False
+
+
+@pytest.mark.asyncio
+async def test_unraid_client_http_mode():
+    """Test client uses HTTP when use_ssl=False."""
+    from src.unraid.client import UnraidClientWrapper
+
+    wrapper = UnraidClientWrapper(
+        host="192.168.1.100",
+        api_key="test-key",
+        port=80,
+        use_ssl=False,
+    )
+
+    assert wrapper._base_url == "http://192.168.1.100/graphql"
+
+
+@pytest.mark.asyncio
+async def test_unraid_client_https_mode():
+    """Test client uses HTTPS when use_ssl=True."""
+    from src.unraid.client import UnraidClientWrapper
+
+    wrapper = UnraidClientWrapper(
+        host="192.168.1.100",
+        api_key="test-key",
+        port=443,
+        use_ssl=True,
+    )
+
+    assert wrapper._base_url == "https://192.168.1.100/graphql"
+
+
+@pytest.mark.asyncio
+async def test_unraid_client_custom_port():
+    """Test client includes port in URL for non-standard ports."""
+    from src.unraid.client import UnraidClientWrapper
+
+    wrapper = UnraidClientWrapper(
+        host="192.168.1.100",
+        api_key="test-key",
+        port=8080,
+        use_ssl=False,
+    )
+
+    assert wrapper._base_url == "http://192.168.1.100:8080/graphql"
 
 
 @pytest.mark.asyncio

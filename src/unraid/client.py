@@ -117,24 +117,32 @@ class UnraidClientWrapper:
         self,
         host: str,
         api_key: str,
-        port: int = 443,
+        port: int = 80,
         verify_ssl: bool = True,
+        use_ssl: bool = False,
     ):
         """Initialize the wrapper.
 
         Args:
             host: Unraid server hostname or IP.
             api_key: API key for authentication.
-            port: HTTPS port (default 443).
+            port: HTTP/HTTPS port (default 80).
             verify_ssl: Whether to verify SSL certificates (default True).
+            use_ssl: Whether to use HTTPS (default False for Unraid).
         """
         self._host = host
         self._api_key = api_key
         self._port = port
         self._verify_ssl = verify_ssl
+        self._use_ssl = use_ssl
         self._session: aiohttp.ClientSession | None = None
         self._connected = False
-        self._base_url = f"https://{host}:{port}/graphql"
+
+        # Build URL based on protocol
+        protocol = "https" if use_ssl else "http"
+        default_port = 443 if use_ssl else 80
+        port_suffix = f":{port}" if port != default_port else ""
+        self._base_url = f"{protocol}://{host}{port_suffix}/graphql"
 
     @property
     def is_connected(self) -> bool:
@@ -143,13 +151,16 @@ class UnraidClientWrapper:
 
     async def connect(self) -> None:
         """Establish connection to Unraid server."""
-        # Create SSL context
-        if self._verify_ssl:
-            ssl_context: ssl.SSLContext | bool = True
+        # Create SSL context only if using SSL
+        if self._use_ssl:
+            if self._verify_ssl:
+                ssl_context: ssl.SSLContext | bool = True
+            else:
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
         else:
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context = False
 
         connector = aiohttp.TCPConnector(ssl=ssl_context)
 

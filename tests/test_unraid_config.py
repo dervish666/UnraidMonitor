@@ -41,7 +41,8 @@ def test_unraid_config_defaults():
 
     assert config.enabled is False
     assert config.host == ""
-    assert config.port == 443
+    assert config.port == 80  # HTTP default
+    assert config.use_ssl is False
     assert config.poll_system_seconds == 30
     assert config.cpu_temp_threshold == 80
     assert config.memory_usage_threshold == 90

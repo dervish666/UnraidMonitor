@@ -123,6 +123,7 @@ async def main() -> None:
             api_key=settings.unraid_api_key,
             port=unraid_config.port,
             verify_ssl=unraid_config.verify_ssl,
+            use_ssl=unraid_config.use_ssl,
         )
 
         # Alert callback for Unraid
