@@ -30,6 +30,7 @@ log_watching:
     - postgresql14
     - redis
     - brisbooks
+    - CouchDB
 
   # Patterns to match as errors (case-insensitive)
   error_patterns:
@@ -45,6 +46,7 @@ log_watching:
   ignore_patterns:
     - "DeprecationWarning"
     - "DEBUG"
+    - "INFO"
 
   # Cooldown period before alerting on same error again (seconds)
   cooldown_seconds: 900
