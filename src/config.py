@@ -151,6 +151,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     telegram_allowed_users: list[int] | str  # Accept string, convert to list
     anthropic_api_key: str | None = None
+    unraid_api_key: str | None = None
     config_path: str = "config/config.yaml"
     log_level: str = "INFO"
 
@@ -239,3 +240,8 @@ class AppConfig:
         """Get resource monitoring configuration."""
         raw = self._yaml_config.get("resource_monitoring", {})
         return ResourceConfig.from_dict(raw)
+
+    @property
+    def unraid(self) -> UnraidConfig:
+        """Get Unraid configuration."""
+        return UnraidConfig.from_dict(self._yaml_config.get("unraid", {}))
