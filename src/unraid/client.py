@@ -30,6 +30,7 @@ ARRAY_STATUS_QUERY = """
         array {
             state
             capacity {
+                kilobytes { free used total }
                 disks { free used total }
             }
             caches {

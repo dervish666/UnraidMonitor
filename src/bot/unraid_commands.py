@@ -98,14 +98,17 @@ def server_command(
             array = await system_monitor.get_array_status()
             if array:
                 state = array.get("state", "Unknown")
-                capacity = array.get("capacity", {}).get("disks", {})
-                used_tb = int(capacity.get("used", 0))
-                total_tb = int(capacity.get("total", 0))
-                free_tb = int(capacity.get("free", 0))
+                # Use kilobytes for actual storage values (not disk counts)
+                capacity_kb = array.get("capacity", {}).get("kilobytes", {})
+                # Convert kilobytes to TB (divide by 1024^3)
+                kb_to_tb = 1024 * 1024 * 1024
+                used_tb = float(capacity_kb.get("used", 0)) / kb_to_tb
+                total_tb = float(capacity_kb.get("total", 0)) / kb_to_tb
+                free_tb = float(capacity_kb.get("free", 0)) / kb_to_tb
 
                 lines.append(f"\n*Array:* {state}")
-                if total_tb:
-                    lines.append(f"*Storage:* {used_tb} / {total_tb} TB ({free_tb} TB free)")
+                if total_tb > 0:
+                    lines.append(f"*Storage:* {used_tb:.1f} / {total_tb:.1f} TB ({free_tb:.1f} TB free)")
 
                 # Cache info
                 caches = array.get("caches", [])
@@ -113,12 +116,14 @@ def server_command(
                     name = cache.get("name", "cache")
                     cache_temp = cache.get("temp", 0)
                     status = cache.get("status", "").replace("DISK_", "")
-                    fs_used = cache.get("fsUsed", 0) or 0
-                    fs_size = cache.get("fsSize", 0) or 0
-                    if fs_size:
-                        used_gb = fs_used / (1024**3)
-                        size_gb = fs_size / (1024**3)
-                        pct = (fs_used / fs_size * 100) if fs_size else 0
+                    # fsUsed and fsSize are in kilobytes
+                    fs_used_kb = cache.get("fsUsed", 0) or 0
+                    fs_size_kb = cache.get("fsSize", 0) or 0
+                    if fs_size_kb:
+                        # Convert KB to GB
+                        used_gb = fs_used_kb / (1024 * 1024)
+                        size_gb = fs_size_kb / (1024 * 1024)
+                        pct = (fs_used_kb / fs_size_kb * 100) if fs_size_kb else 0
                         lines.append(f"*{name.title()}:* {pct:.0f}% ({used_gb:.0f}/{size_gb:.0f} GB) • {cache_temp}°C • {status}")
                     else:
                         lines.append(f"*{name.title()}:* {cache_temp}°C • {status}")

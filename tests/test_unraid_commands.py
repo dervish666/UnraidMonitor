@@ -94,8 +94,11 @@ async def test_server_command_detailed():
     })
     mock_monitor.get_array_status = AsyncMock(return_value={
         "state": "STARTED",
-        "capacity": {"disks": {"free": "22", "used": "8", "total": "30"}},
-        "caches": [{"name": "cache", "size": 976761560, "temp": 37, "status": "DISK_OK"}],
+        "capacity": {
+            "kilobytes": {"free": "11476754432", "used": "34729066496", "total": "46205820928"},
+            "disks": {"free": "22", "used": "8", "total": "30"},
+        },
+        "caches": [{"name": "cache", "size": 976761560, "temp": 37, "status": "DISK_OK", "fsSize": 976761560, "fsUsed": 808000000}],
     })
 
     handler = server_command(mock_monitor)
