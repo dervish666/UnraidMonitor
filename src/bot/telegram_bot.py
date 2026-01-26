@@ -18,6 +18,7 @@ from src.bot.control_commands import (
 from src.bot.confirmation import ConfirmationManager
 from src.bot.diagnose_command import diagnose_command
 from src.bot.ignore_command import ignore_command, ignores_command, ignore_selection_handler, IgnoreSelectionState
+from src.bot.mute_command import mute_command, mutes_command, unmute_command
 from src.bot.resources_command import resources_command
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
@@ -133,6 +134,7 @@ def register_commands(
     resource_monitor: Any | None = None,
     ignore_manager: Any | None = None,
     recent_errors_buffer: Any | None = None,
+    mute_manager: Any | None = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -198,6 +200,21 @@ def register_commands(
             dp.message.register(
                 ignore_selection_handler(ignore_manager, selection_state),
                 IgnoreSelectionFilter(selection_state),
+            )
+
+        # Register /mute, /mutes, /unmute commands
+        if mute_manager is not None:
+            dp.message.register(
+                mute_command(state, mute_manager),
+                Command("mute"),
+            )
+            dp.message.register(
+                mutes_command(mute_manager),
+                Command("mutes"),
+            )
+            dp.message.register(
+                unmute_command(state, mute_manager),
+                Command("unmute"),
             )
 
         return confirmation, diagnostic_service

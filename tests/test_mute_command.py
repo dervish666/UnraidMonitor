@@ -250,3 +250,12 @@ async def test_unmute_command_not_muted(tmp_path):
     message.answer.assert_called_once()
     response = message.answer.call_args[0][0]
     assert "not muted" in response.lower()
+
+
+def test_mute_commands_in_help():
+    """Test that /mute, /mutes, /unmute are in help text."""
+    from src.bot.commands import HELP_TEXT
+
+    assert "/mute" in HELP_TEXT
+    assert "/mutes" in HELP_TEXT
+    assert "/unmute" in HELP_TEXT

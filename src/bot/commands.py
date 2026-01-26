@@ -21,6 +21,9 @@ HELP_TEXT = """📋 *Available Commands*
 /pull <name> - Pull latest image and recreate
 /ignore - Reply to error alert to ignore those errors
 /ignores - List all ignored error patterns
+/mute <name> <duration> - Mute all alerts for container (e.g., 2h, 30m)
+/mutes - List active mutes
+/unmute <name> - Unmute a container
 /help - Show this help message
 
 _Partial container names work: /status rad → radarr_
