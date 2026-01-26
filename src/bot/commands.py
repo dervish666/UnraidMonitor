@@ -24,6 +24,13 @@ HELP_TEXT = """📋 *Available Commands*
 /mute <name> <duration> - Mute all alerts for container (e.g., 2h, 30m)
 /mutes - List active mutes
 /unmute <name> - Unmute a container
+
+*Unraid Server*
+/server - Unraid system status (CPU, memory, temp)
+/server detailed - Full system metrics
+/mute-server <duration> - Mute all server alerts
+/unmute-server - Unmute server alerts
+
 /help - Show this help message
 
 _Partial container names work: /status rad → radarr_

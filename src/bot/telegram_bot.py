@@ -20,6 +20,7 @@ from src.bot.diagnose_command import diagnose_command
 from src.bot.ignore_command import ignore_command, ignores_command, ignore_selection_handler, IgnoreSelectionState
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
 from src.bot.resources_command import resources_command
+from src.bot.unraid_commands import server_command, mute_server_command, unmute_server_command
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 
@@ -135,6 +136,8 @@ def register_commands(
     ignore_manager: Any | None = None,
     recent_errors_buffer: Any | None = None,
     mute_manager: Any | None = None,
+    unraid_system_monitor: Any | None = None,
+    server_mute_manager: Any | None = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -215,6 +218,23 @@ def register_commands(
             dp.message.register(
                 unmute_command(state, mute_manager),
                 Command("unmute"),
+            )
+
+        # Register Unraid commands
+        if unraid_system_monitor is not None:
+            dp.message.register(
+                server_command(unraid_system_monitor),
+                Command("server"),
+            )
+
+        if server_mute_manager is not None:
+            dp.message.register(
+                mute_server_command(server_mute_manager),
+                Command("mute-server"),
+            )
+            dp.message.register(
+                unmute_server_command(server_mute_manager),
+                Command("unmute-server"),
             )
 
         return confirmation, diagnostic_service

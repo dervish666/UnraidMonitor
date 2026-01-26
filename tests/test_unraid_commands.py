@@ -156,3 +156,12 @@ async def test_unmute_server_command(tmp_path):
 
     assert "Unmuted" in response
     assert not mute_manager.is_server_muted()
+
+
+def test_unraid_commands_in_help():
+    """Test that Unraid commands are in help text."""
+    from src.bot.commands import HELP_TEXT
+
+    assert "/server" in HELP_TEXT
+    assert "/mute-server" in HELP_TEXT
+    assert "/unmute-server" in HELP_TEXT
