@@ -217,11 +217,10 @@ def test_unraid_commands_in_help():
     from src.bot.commands import HELP_TEXT
 
     assert "/server" in HELP_TEXT
-    assert "/mute-server" in HELP_TEXT
-    assert "/unmute-server" in HELP_TEXT
-    assert "/mute-array" in HELP_TEXT
-    assert "/unmute-array" in HELP_TEXT
     assert "/array" in HELP_TEXT
+    assert "/disks" in HELP_TEXT
+    assert "/mute-server" in HELP_TEXT
+    assert "/mute-array" in HELP_TEXT
 
 
 @pytest.mark.asyncio

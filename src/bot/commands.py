@@ -7,39 +7,23 @@ from src.models import ContainerInfo
 from src.state import ContainerStateManager
 
 
-HELP_TEXT = """📋 *Available Commands*
+HELP_TEXT = """📋 *Commands*
 
-/status - Container status overview
-/status <name> - Details for specific container
-/resources - CPU/memory usage for all containers
-/resources <name> - Detailed resource stats for container
-/logs <name> [n] - Last n log lines (default 20)
-/diagnose <name> [n] - AI analysis of container logs
-/restart <name> - Restart a container
-/stop <name> - Stop a container
-/start <name> - Start a container
-/pull <name> - Pull latest image and recreate
-/ignore - Reply to error alert to ignore those errors
-/ignores - List all ignored error patterns
-/mute <name> <duration> - Mute all alerts for container (e.g., 2h, 30m)
-/mutes - List active mutes
-/unmute <name> - Unmute a container
+*Containers*
+/status [name] • /resources [name]
+/logs <name> [n] • /diagnose <name>
+/restart • /stop • /start • /pull
 
 *Unraid Server*
-/server - Unraid system status (CPU, memory, temp)
-/server detailed - Full system metrics
-/array - Array status summary (storage, disks, issues)
-/disks - List all disks with details
-/mute-server <duration> - Mute all server alerts
-/unmute-server - Unmute server alerts
-/mute-array <duration> - Mute array alerts only
-/unmute-array - Unmute array alerts
+/server [detailed] • /array • /disks
 
-/help - Show this help message
+*Alerts*
+/mute <name> <dur> • /unmute <name>
+/mute-server • /mute-array + unmute
+/mutes • /ignore • /ignores
 
-_Partial container names work: /status rad → radarr_
-_Control commands require confirmation_
-_Reply /diagnose to a crash alert for quick analysis_"""
+_Partial names work: /status rad → radarr_
+_Reply /diagnose to crash alerts for AI analysis_"""
 
 
 def help_command(state: ContainerStateManager) -> Callable[[Message], Awaitable[None]]:
