@@ -202,6 +202,67 @@ def unmute_server_command(
     return handler
 
 
+def _format_disk_line(disk: dict) -> str:
+    """Format a single disk for display."""
+    name = disk.get("name", "unknown")
+    temp = disk.get("temp", 0)
+    status = disk.get("status", "").replace("DISK_", "")
+    size = disk.get("size", 0)
+
+    # Convert size to TB (size is in bytes from API)
+    size_tb = size / (1000 * 1000 * 1000 * 1000) if size else 0
+
+    status_icon = "✅" if status == "OK" else "⚠️"
+
+    if size_tb > 0:
+        return f"  {status_icon} {name}: {size_tb:.1f}TB • {temp}°C • {status}"
+    return f"  {status_icon} {name}: {temp}°C • {status}"
+
+
+def disks_command(
+    system_monitor: "UnraidSystemMonitor",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /disks command handler."""
+
+    async def handler(message: Message) -> None:
+        array = await system_monitor.get_array_status()
+
+        if not array:
+            await message.answer("💾 Disk status unavailable.")
+            return
+
+        # Get disk lists
+        parities = array.get("parities", [])
+        disks = array.get("disks", [])
+        caches = array.get("caches", [])
+
+        lines = ["💾 *Disk Status*\n"]
+
+        # Parity disks
+        if parities:
+            lines.append("*Parity:*")
+            for parity in parities:
+                lines.append(_format_disk_line(parity))
+            lines.append("")
+
+        # Data disks
+        if disks:
+            lines.append("*Data Disks:*")
+            for disk in disks:
+                lines.append(_format_disk_line(disk))
+            lines.append("")
+
+        # Cache disks
+        if caches:
+            lines.append("*Cache:*")
+            for cache in caches:
+                lines.append(_format_disk_line(cache))
+
+        await message.answer("\n".join(lines).rstrip(), parse_mode="Markdown")
+
+    return handler
+
+
 def array_command(
     system_monitor: "UnraidSystemMonitor",
 ) -> Callable[[Message], Awaitable[None]]:

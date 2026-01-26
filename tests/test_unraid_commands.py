@@ -286,3 +286,36 @@ async def test_array_command_with_issues():
     assert "Issues" in response or "issues" in response
     assert "disk3" in response
     assert "DSBL" in response
+
+
+@pytest.mark.asyncio
+async def test_disks_command():
+    """Test /disks lists all disks."""
+    from src.bot.unraid_commands import disks_command
+
+    mock_monitor = MagicMock()
+    mock_monitor.get_array_status = AsyncMock(return_value={
+        "state": "STARTED",
+        "disks": [
+            {"name": "disk1", "temp": 35, "status": "DISK_OK", "size": 4000000000000},
+            {"name": "disk2", "temp": 37, "status": "DISK_OK", "size": 8000000000000},
+        ],
+        "parities": [{"name": "parity", "temp": 33, "status": "DISK_OK", "size": 8000000000000}],
+        "caches": [{"name": "cache", "temp": 38, "status": "DISK_OK", "size": 1000000000000}],
+    })
+
+    handler = disks_command(mock_monitor)
+
+    message = MagicMock()
+    message.text = "/disks"
+    message.answer = AsyncMock()
+
+    await handler(message)
+
+    response = message.answer.call_args[0][0]
+
+    assert "disk1" in response
+    assert "disk2" in response
+    assert "parity" in response
+    assert "cache" in response
+    assert "35" in response  # temp

@@ -29,6 +29,7 @@ HELP_TEXT = """📋 *Available Commands*
 /server - Unraid system status (CPU, memory, temp)
 /server detailed - Full system metrics
 /array - Array status summary (storage, disks, issues)
+/disks - List all disks with details
 /mute-server <duration> - Mute all server alerts
 /unmute-server - Unmute server alerts
 

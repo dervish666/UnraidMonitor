@@ -20,7 +20,7 @@ from src.bot.diagnose_command import diagnose_command
 from src.bot.ignore_command import ignore_command, ignores_command, ignore_selection_handler, IgnoreSelectionState
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
 from src.bot.resources_command import resources_command
-from src.bot.unraid_commands import server_command, mute_server_command, unmute_server_command
+from src.bot.unraid_commands import server_command, mute_server_command, unmute_server_command, array_command, disks_command
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 
@@ -225,6 +225,14 @@ def register_commands(
             dp.message.register(
                 server_command(unraid_system_monitor),
                 Command("server"),
+            )
+            dp.message.register(
+                array_command(unraid_system_monitor),
+                Command("array"),
+            )
+            dp.message.register(
+                disks_command(unraid_system_monitor),
+                Command("disks"),
             )
 
         if server_mute_manager is not None:
