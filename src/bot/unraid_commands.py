@@ -1,6 +1,7 @@
 """Unraid server monitoring commands."""
 
 import logging
+from datetime import datetime, timezone
 from typing import Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message
@@ -12,6 +13,45 @@ if TYPE_CHECKING:
     from src.alerts.server_mute_manager import ServerMuteManager
 
 logger = logging.getLogger(__name__)
+
+
+def format_uptime(uptime_str: str) -> str:
+    """Format ISO timestamp uptime to human-readable format.
+
+    Args:
+        uptime_str: Either an ISO timestamp (boot time) or already formatted string.
+
+    Returns:
+        Human-readable uptime like "24 days, 19 hours".
+    """
+    if not uptime_str:
+        return "Unknown"
+
+    # Try to parse as ISO timestamp
+    try:
+        # Handle ISO format like "2026-01-02T18:14:24.693Z"
+        boot_time = datetime.fromisoformat(uptime_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        delta = now - boot_time
+
+        days = delta.days
+        hours = delta.seconds // 3600
+        minutes = (delta.seconds % 3600) // 60
+
+        parts = []
+        if days > 0:
+            parts.append(f"{days} day{'s' if days != 1 else ''}")
+        if hours > 0:
+            parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        if not parts and minutes > 0:
+            parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        if not parts:
+            return "Just started"
+
+        return ", ".join(parts)
+    except (ValueError, TypeError):
+        # Already formatted or unknown format
+        return uptime_str
 
 
 def server_command(
@@ -33,7 +73,7 @@ def server_command(
         temp = metrics.get("cpu_temperature", 0)
         memory = metrics.get("memory_percent", 0)
         memory_gb = metrics.get("memory_used", 0) / (1024**3)
-        uptime = metrics.get("uptime", "Unknown")
+        uptime = format_uptime(metrics.get("uptime", ""))
 
         if detailed:
             swap = metrics.get("swap_percent", 0)
