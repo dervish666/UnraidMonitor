@@ -1,8 +1,10 @@
-import json
+"""Mute manager for container alerts."""
+
 import re
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
+
+from src.alerts.base_mute_manager import BaseMuteManager
 
 logger = logging.getLogger(__name__)
 
@@ -39,109 +41,26 @@ def parse_duration(text: str) -> timedelta | None:
     return None
 
 
-class MuteManager:
+class MuteManager(BaseMuteManager):
     """Manages temporary mutes for containers."""
 
-    def __init__(self, json_path: str):
-        """Initialize MuteManager.
-
-        Args:
-            json_path: Path to JSON file for persistence.
-        """
-        self._json_path = Path(json_path)
-        self._mutes: dict[str, datetime] = {}
-        self._load()
-
     def is_muted(self, container: str) -> bool:
-        """Check if container is currently muted.
-
-        Returns False if mute has expired.
-        """
-        if container not in self._mutes:
-            return False
-
-        expiry = self._mutes[container]
-        if datetime.now() >= expiry:
-            # Expired, clean up
-            del self._mutes[container]
-            self._save()
-            return False
-
-        return True
+        """Check if container is currently muted."""
+        return self._is_muted(container)
 
     def add_mute(self, container: str, duration: timedelta) -> datetime:
-        """Add a mute for container.
-
-        Args:
-            container: Container name.
-            duration: How long to mute.
-
-        Returns:
-            Expiry datetime.
-        """
-        expiry = datetime.now() + duration
-        self._mutes[container] = expiry
-        self._save()
+        """Add a mute for container."""
+        expiry = self._add_mute(container, duration)
         logger.info(f"Muted {container} until {expiry}")
         return expiry
 
     def remove_mute(self, container: str) -> bool:
-        """Remove a mute early.
-
-        Returns:
-            True if mute was removed, False if not found.
-        """
-        if container not in self._mutes:
-            return False
-
-        del self._mutes[container]
-        self._save()
-        logger.info(f"Unmuted {container}")
-        return True
+        """Remove a mute early."""
+        removed = self._remove_mute(container)
+        if removed:
+            logger.info(f"Unmuted {container}")
+        return removed
 
     def get_active_mutes(self) -> list[tuple[str, datetime]]:
-        """Get list of active mutes.
-
-        Returns:
-            List of (container, expiry) tuples.
-        """
-        # Clean expired mutes first
-        now = datetime.now()
-        expired = [c for c, exp in self._mutes.items() if now >= exp]
-        for c in expired:
-            del self._mutes[c]
-        if expired:
-            self._save()
-
-        return [(c, exp) for c, exp in self._mutes.items()]
-
-    def _load(self) -> None:
-        """Load mutes from JSON file."""
-        if not self._json_path.exists():
-            self._mutes = {}
-            return
-
-        try:
-            with open(self._json_path, encoding="utf-8") as f:
-                data = json.load(f)
-                self._mutes = {
-                    c: datetime.fromisoformat(exp)
-                    for c, exp in data.items()
-                }
-        except (json.JSONDecodeError, IOError, ValueError) as e:
-            logger.warning(f"Failed to load mutes: {e}")
-            self._mutes = {}
-
-    def _save(self) -> None:
-        """Save mutes to JSON file."""
-        self._json_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            data = {
-                c: exp.isoformat()
-                for c, exp in self._mutes.items()
-            }
-            with open(self._json_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except IOError as e:
-            logger.error(f"Failed to save mutes: {e}")
+        """Get list of active mutes."""
+        return self._get_active_mutes()

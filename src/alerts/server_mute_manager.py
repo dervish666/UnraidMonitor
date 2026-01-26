@@ -1,25 +1,17 @@
-import json
+"""Mute manager for Unraid server alerts."""
+
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
+
+from src.alerts.base_mute_manager import BaseMuteManager
 
 logger = logging.getLogger(__name__)
 
 
-class ServerMuteManager:
+class ServerMuteManager(BaseMuteManager):
     """Manages mutes for Unraid server alerts (separate from container mutes)."""
 
     CATEGORIES = ("server", "array", "ups")
-
-    def __init__(self, json_path: str):
-        """Initialize ServerMuteManager.
-
-        Args:
-            json_path: Path to JSON file for persistence.
-        """
-        self._json_path = Path(json_path)
-        self._mutes: dict[str, datetime] = {}
-        self._load()
 
     def is_server_muted(self) -> bool:
         """Check if server (system) alerts are muted."""
@@ -44,17 +36,13 @@ class ServerMuteManager:
 
     def mute_array(self, duration: timedelta) -> datetime:
         """Mute just array/disk alerts."""
-        expiry = datetime.now() + duration
-        self._mutes["array"] = expiry
-        self._save()
+        expiry = self._add_mute("array", duration)
         logger.info(f"Muted array alerts until {expiry}")
         return expiry
 
     def mute_ups(self, duration: timedelta) -> datetime:
         """Mute just UPS alerts."""
-        expiry = datetime.now() + duration
-        self._mutes["ups"] = expiry
-        self._save()
+        expiry = self._add_mute("ups", duration)
         logger.info(f"Muted UPS alerts until {expiry}")
         return expiry
 
@@ -72,80 +60,18 @@ class ServerMuteManager:
 
     def unmute_array(self) -> bool:
         """Unmute array alerts."""
-        return self._unmute("array")
+        removed = self._remove_mute("array")
+        if removed:
+            logger.info("Unmuted array alerts")
+        return removed
 
     def unmute_ups(self) -> bool:
         """Unmute UPS alerts."""
-        return self._unmute("ups")
+        removed = self._remove_mute("ups")
+        if removed:
+            logger.info("Unmuted UPS alerts")
+        return removed
 
     def get_active_mutes(self) -> list[tuple[str, datetime]]:
-        """Get list of active mutes.
-
-        Returns:
-            List of (category, expiry) tuples.
-        """
-        self._clean_expired()
-        return [(cat, exp) for cat, exp in self._mutes.items()]
-
-    def _is_muted(self, category: str) -> bool:
-        """Check if a category is currently muted."""
-        if category not in self._mutes:
-            return False
-
-        expiry = self._mutes[category]
-        if datetime.now() >= expiry:
-            del self._mutes[category]
-            self._save()
-            return False
-
-        return True
-
-    def _unmute(self, category: str) -> bool:
-        """Unmute a specific category."""
-        if category not in self._mutes:
-            return False
-
-        del self._mutes[category]
-        self._save()
-        logger.info(f"Unmuted {category} alerts")
-        return True
-
-    def _clean_expired(self) -> None:
-        """Remove expired mutes."""
-        now = datetime.now()
-        expired = [cat for cat, exp in self._mutes.items() if now >= exp]
-        for cat in expired:
-            del self._mutes[cat]
-        if expired:
-            self._save()
-
-    def _load(self) -> None:
-        """Load mutes from JSON file."""
-        if not self._json_path.exists():
-            self._mutes = {}
-            return
-
-        try:
-            with open(self._json_path, encoding="utf-8") as f:
-                data = json.load(f)
-                self._mutes = {
-                    cat: datetime.fromisoformat(exp)
-                    for cat, exp in data.items()
-                }
-        except (json.JSONDecodeError, IOError, ValueError) as e:
-            logger.warning(f"Failed to load server mutes: {e}")
-            self._mutes = {}
-
-    def _save(self) -> None:
-        """Save mutes to JSON file."""
-        self._json_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            data = {
-                cat: exp.isoformat()
-                for cat, exp in self._mutes.items()
-            }
-            with open(self._json_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except IOError as e:
-            logger.error(f"Failed to save server mutes: {e}")
+        """Get list of active mutes."""
+        return self._get_active_mutes()
