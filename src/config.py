@@ -95,6 +95,7 @@ class UnraidConfig:
     enabled: bool = False
     host: str = ""
     port: int = 443
+    verify_ssl: bool = True
     poll_system_seconds: int = 30
     poll_array_seconds: int = 300
     poll_ups_seconds: int = 60
@@ -114,6 +115,7 @@ class UnraidConfig:
             enabled=data.get("enabled", False),
             host=data.get("host", ""),
             port=data.get("port", 443),
+            verify_ssl=data.get("verify_ssl", True),
             poll_system_seconds=polling.get("system", 30),
             poll_array_seconds=polling.get("array", 300),
             poll_ups_seconds=polling.get("ups", 60),
