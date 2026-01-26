@@ -161,23 +161,24 @@ def ignores_command(
         all_containers.update(ignore_manager._runtime_ignores.keys())
 
         if not all_containers:
-            await message.answer("🔇 No ignored errors configured.\n\n_Use /ignore to add some._", parse_mode="Markdown")
+            await message.answer("🔇 No ignored errors configured.\n\nUse /ignore to add some.")
             return
 
-        lines = ["🔇 *Ignored Errors*\n"]
+        lines = ["🔇 Ignored Errors\n"]
 
         for container in sorted(all_containers):
             ignores = ignore_manager.get_all_ignores(container)
             if ignores:
-                lines.append(f"*{container}* ({len(ignores)}):")
+                lines.append(f"{container} ({len(ignores)}):")
                 for pattern, source in ignores:
                     display = pattern[:50] + "..." if len(pattern) > 50 else pattern
                     source_tag = " (config)" if source == "config" else ""
                     lines.append(f"  • {display}{source_tag}")
                 lines.append("")
 
-        lines.append("_Use /ignore to add more_")
+        lines.append("Use /ignore to add more")
 
-        await message.answer("\n".join(lines), parse_mode="Markdown")
+        # Don't use Markdown - patterns may contain special characters
+        await message.answer("\n".join(lines))
 
     return handler
