@@ -161,3 +161,34 @@ def test_log_watching_container_ignores_default_when_no_config(tmp_path):
         # container_ignores must be in default config
         assert "container_ignores" in log_watching
         assert log_watching["container_ignores"] == {}
+
+
+def test_unraid_array_thresholds(tmp_path):
+    """Test array threshold config loading."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+unraid:
+  enabled: true
+  host: "192.168.0.190"
+  polling:
+    array: 300
+  thresholds:
+    disk_temp: 50
+    array_usage: 85
+""")
+
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {
+        "TELEGRAM_BOT_TOKEN": "test",
+        "TELEGRAM_ALLOWED_USERS": "123",
+    }):
+        from src.config import Settings, AppConfig
+
+        settings = Settings(config_path=str(config_file))
+        config = AppConfig(settings)
+
+        assert config.unraid.disk_temp_threshold == 50
+        assert config.unraid.array_usage_threshold == 85
+        assert config.unraid.poll_array_seconds == 300

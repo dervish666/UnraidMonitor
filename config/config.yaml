@@ -55,6 +55,14 @@ unraid:
   port: 80              # HTTP port (default)
   use_ssl: false        # Use HTTP instead of HTTPS
   verify_ssl: false     # Only applies if use_ssl: true
+  polling:
+    system: 30          # System metrics (CPU, memory) poll interval in seconds
+    array: 300          # Array/disk metrics poll interval in seconds
+    ups: 60             # UPS status poll interval in seconds
   thresholds:
-    cpu_temp: 80
-    memory_usage: 90 
+    cpu_temp: 80        # CPU temperature threshold in degrees C
+    cpu_usage: 95       # CPU usage threshold in percent
+    memory_usage: 90    # Memory usage threshold in percent
+    disk_temp: 50       # Disk temperature threshold in degrees C
+    array_usage: 85     # Array usage threshold in percent
+    ups_battery: 30     # UPS battery threshold in percent 
