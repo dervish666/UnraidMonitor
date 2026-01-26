@@ -15,9 +15,11 @@ from src.alerts.ignore_manager import IgnoreManager
 from src.alerts.recent_errors import RecentErrorsBuffer
 from src.alerts.mute_manager import MuteManager
 from src.alerts.server_mute_manager import ServerMuteManager
+from src.alerts.array_mute_manager import ArrayMuteManager
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_commands
 from src.unraid.client import UnraidClientWrapper
 from src.unraid.monitors.system_monitor import UnraidSystemMonitor
+from src.unraid.monitors.array_monitor import ArrayMonitor
 
 
 logging.basicConfig(
@@ -110,13 +112,16 @@ async def main() -> None:
     # Initialize Unraid components if configured
     unraid_client = None
     unraid_system_monitor = None
+    unraid_array_monitor = None
     server_mute_manager = None
+    array_mute_manager = None
 
     unraid_config = config.unraid
     if unraid_config.enabled and settings.unraid_api_key:
         logger.info("Initializing Unraid monitoring...")
 
         server_mute_manager = ServerMuteManager(json_path="data/server_mutes.json")
+        array_mute_manager = ArrayMuteManager(json_path="data/array_mutes.json")
 
         unraid_client = UnraidClientWrapper(
             host=unraid_config.host,
@@ -140,6 +145,13 @@ async def main() -> None:
             config=unraid_config,
             on_alert=on_server_alert,
             mute_manager=server_mute_manager,
+        )
+
+        unraid_array_monitor = ArrayMonitor(
+            client=unraid_client,
+            config=unraid_config,
+            on_alert=on_server_alert,
+            mute_manager=array_mute_manager,
         )
     else:
         if not unraid_config.enabled:
@@ -225,6 +237,7 @@ async def main() -> None:
         mute_manager=mute_manager,
         unraid_system_monitor=unraid_system_monitor,
         server_mute_manager=server_mute_manager,
+        array_mute_manager=array_mute_manager,
     )
 
     # Start Docker event monitor as background task
@@ -240,12 +253,16 @@ async def main() -> None:
 
     # Connect to Unraid and start monitoring
     unraid_monitor_task = None
+    unraid_array_monitor_task = None
     if unraid_client:
         try:
             await unraid_client.connect()
             if unraid_system_monitor:
                 unraid_monitor_task = asyncio.create_task(unraid_system_monitor.start())
                 logger.info("Unraid system monitoring started")
+            if unraid_array_monitor:
+                unraid_array_monitor_task = asyncio.create_task(unraid_array_monitor.start())
+                logger.info("Unraid array monitoring started")
         except Exception as e:
             logger.error(f"Failed to connect to Unraid: {e}")
 
@@ -279,10 +296,18 @@ async def main() -> None:
                 pass
         if unraid_system_monitor:
             await unraid_system_monitor.stop()
+        if unraid_array_monitor:
+            await unraid_array_monitor.stop()
         if unraid_monitor_task:
             unraid_monitor_task.cancel()
             try:
                 await unraid_monitor_task
+            except asyncio.CancelledError:
+                pass
+        if unraid_array_monitor_task:
+            unraid_array_monitor_task.cancel()
+            try:
+                await unraid_array_monitor_task
             except asyncio.CancelledError:
                 pass
         if unraid_client:

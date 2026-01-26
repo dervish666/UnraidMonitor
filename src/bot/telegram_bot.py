@@ -20,7 +20,15 @@ from src.bot.diagnose_command import diagnose_command
 from src.bot.ignore_command import ignore_command, ignores_command, ignore_selection_handler, IgnoreSelectionState
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
 from src.bot.resources_command import resources_command
-from src.bot.unraid_commands import server_command, mute_server_command, unmute_server_command, array_command, disks_command
+from src.bot.unraid_commands import (
+    server_command,
+    mute_server_command,
+    unmute_server_command,
+    array_command,
+    disks_command,
+    mute_array_command,
+    unmute_array_command,
+)
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 
@@ -138,6 +146,7 @@ def register_commands(
     mute_manager: Any | None = None,
     unraid_system_monitor: Any | None = None,
     server_mute_manager: Any | None = None,
+    array_mute_manager: Any | None = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -243,6 +252,16 @@ def register_commands(
             dp.message.register(
                 unmute_server_command(server_mute_manager),
                 Command("unmute-server"),
+            )
+
+        if array_mute_manager is not None:
+            dp.message.register(
+                mute_array_command(array_mute_manager),
+                Command("mute-array"),
+            )
+            dp.message.register(
+                unmute_array_command(array_mute_manager),
+                Command("unmute-array"),
             )
 
         return confirmation, diagnostic_service
