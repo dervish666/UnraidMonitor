@@ -219,3 +219,70 @@ def test_unraid_commands_in_help():
     assert "/server" in HELP_TEXT
     assert "/mute-server" in HELP_TEXT
     assert "/unmute-server" in HELP_TEXT
+    assert "/array" in HELP_TEXT
+
+
+@pytest.mark.asyncio
+async def test_array_command():
+    """Test /array shows array status."""
+    from src.bot.unraid_commands import array_command
+
+    mock_monitor = MagicMock()
+    mock_monitor.get_array_status = AsyncMock(return_value={
+        "state": "STARTED",
+        "capacity": {"kilobytes": {"used": "34729066496", "total": "46205820928", "free": "11476754432"}},
+        "disks": [
+            {"name": "disk1", "temp": 35, "status": "DISK_OK"},
+            {"name": "disk2", "temp": 37, "status": "DISK_OK"},
+        ],
+        "parities": [{"name": "parity", "temp": 33, "status": "DISK_OK"}],
+        "caches": [{"name": "cache", "temp": 38, "status": "DISK_OK"}],
+    })
+
+    handler = array_command(mock_monitor)
+
+    message = MagicMock()
+    message.text = "/array"
+    message.answer = AsyncMock()
+
+    await handler(message)
+
+    message.answer.assert_called_once()
+    response = message.answer.call_args[0][0]
+
+    assert "STARTED" in response
+    assert "Data disks: 2" in response
+
+
+@pytest.mark.asyncio
+async def test_array_command_with_issues():
+    """Test /array shows disk issues."""
+    from src.bot.unraid_commands import array_command
+
+    mock_monitor = MagicMock()
+    mock_monitor.get_array_status = AsyncMock(return_value={
+        "state": "STARTED",
+        "capacity": {"kilobytes": {"used": "34729066496", "total": "46205820928", "free": "11476754432"}},
+        "disks": [
+            {"name": "disk1", "temp": 35, "status": "DISK_OK"},
+            {"name": "disk2", "temp": 37, "status": "DISK_OK"},
+            {"name": "disk3", "temp": 0, "status": "DISK_DSBL"},
+        ],
+        "parities": [{"name": "parity", "temp": 33, "status": "DISK_OK"}],
+        "caches": [{"name": "cache", "temp": 38, "status": "DISK_OK"}],
+    })
+
+    handler = array_command(mock_monitor)
+
+    message = MagicMock()
+    message.text = "/array"
+    message.answer = AsyncMock()
+
+    await handler(message)
+
+    message.answer.assert_called_once()
+    response = message.answer.call_args[0][0]
+
+    assert "Issues" in response or "issues" in response
+    assert "disk3" in response
+    assert "DSBL" in response

@@ -200,3 +200,74 @@ def unmute_server_command(
             await message.answer("Server alerts are not currently muted.")
 
     return handler
+
+
+def array_command(
+    system_monitor: "UnraidSystemMonitor",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /array command handler."""
+
+    async def handler(message: Message) -> None:
+        array = await system_monitor.get_array_status()
+
+        if not array:
+            await message.answer("💾 Array status unavailable.")
+            return
+
+        state = array.get("state", "Unknown")
+        capacity_kb = array.get("capacity", {}).get("kilobytes", {})
+
+        # Convert kilobytes to TB
+        kb_to_tb = 1024 * 1024 * 1024
+        used_tb = float(capacity_kb.get("used", 0)) / kb_to_tb
+        total_tb = float(capacity_kb.get("total", 0)) / kb_to_tb
+        free_tb = float(capacity_kb.get("free", 0)) / kb_to_tb
+
+        # Calculate percentage
+        percent_used = (used_tb / total_tb * 100) if total_tb > 0 else 0
+
+        # Count devices
+        disks = array.get("disks", [])
+        parities = array.get("parities", [])
+        caches = array.get("caches", [])
+
+        data_disk_count = len(disks)
+        parity_count = len(parities)
+        cache_count = len(caches)
+
+        # Check for issues
+        issues = []
+        for disk in disks:
+            if disk.get("status") != "DISK_OK":
+                issues.append(f"  ⚠️ {disk.get('name', 'unknown')}: {disk.get('status', 'UNKNOWN').replace('DISK_', '')}")
+
+        for parity in parities:
+            if parity.get("status") != "DISK_OK":
+                issues.append(f"  ⚠️ {parity.get('name', 'unknown')}: {parity.get('status', 'UNKNOWN').replace('DISK_', '')}")
+
+        for cache in caches:
+            if cache.get("status") != "DISK_OK":
+                issues.append(f"  ⚠️ {cache.get('name', 'unknown')}: {cache.get('status', 'UNKNOWN').replace('DISK_', '')}")
+
+        # Build response
+        lines = [
+            "💾 *Array Status*\n",
+            f"*State:* {state}",
+        ]
+
+        if total_tb > 0:
+            lines.append(f"*Storage:* {used_tb:.1f} / {total_tb:.1f} TB ({percent_used:.0f}% used)")
+            lines.append(f"*Free:* {free_tb:.1f} TB")
+
+        lines.append(f"\n*Devices:*")
+        lines.append(f"  Data disks: {data_disk_count}")
+        lines.append(f"  Parity: {parity_count}")
+        lines.append(f"  Cache: {cache_count}")
+
+        if issues:
+            lines.append(f"\n*Issues:*")
+            lines.extend(issues)
+
+        await message.answer("\n".join(lines), parse_mode="Markdown")
+
+    return handler
