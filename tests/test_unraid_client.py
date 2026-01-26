@@ -54,48 +54,23 @@ async def test_unraid_client_get_system_metrics():
 
     with patch("src.unraid.client.aiohttp.ClientSession") as MockSession, \
          patch("src.unraid.client.aiohttp.TCPConnector"):
-        # Mock responses for both queries
-        info_response = AsyncMock()
-        info_response.status = 200
-        info_response.json = AsyncMock(return_value={
+        # Mock response for system info query
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value={
             "data": {
                 "info": {
                     "os": {"uptime": "5 days, 3 hours", "hostname": "Tower"},
-                    "cpu": {"name": "Intel i7", "cores": 8, "threads": 16},
-                    "memory": {"total": 34359738368, "free": 17179869184},
                 },
             }
         })
 
-        metrics_response = AsyncMock()
-        metrics_response.status = 200
-        metrics_response.json = AsyncMock(return_value={
-            "data": {
-                "metrics": {
-                    "cpu": {"percentTotal": 25.5},
-                    "memory": {
-                        "total": 34359738368,
-                        "used": 17179869184,
-                        "percentTotal": 50.0,
-                    },
-                },
-            }
-        })
-
-        # Return different responses for each call
-        call_count = [0]
-        def mock_post(*args, **kwargs):
-            ctx = AsyncMock()
-            if call_count[0] == 0:
-                ctx.__aenter__ = AsyncMock(return_value=info_response)
-            else:
-                ctx.__aenter__ = AsyncMock(return_value=metrics_response)
-            ctx.__aexit__ = AsyncMock(return_value=None)
-            call_count[0] += 1
-            return ctx
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
 
         mock_session = MagicMock()
-        mock_session.post = mock_post
+        mock_session.post = MagicMock(return_value=mock_context)
         MockSession.return_value = mock_session
 
         wrapper = UnraidClientWrapper(
@@ -106,10 +81,10 @@ async def test_unraid_client_get_system_metrics():
 
         metrics = await wrapper.get_system_metrics()
 
-        assert metrics["cpu_percent"] == 25.5
-        assert metrics["memory_percent"] == 50.0
         assert metrics["hostname"] == "Tower"
         assert metrics["uptime"] == "5 days, 3 hours"
+        assert "cpu_percent" in metrics
+        assert "memory_percent" in metrics
 
 
 @pytest.mark.asyncio

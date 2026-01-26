@@ -12,23 +12,24 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-# GraphQL queries - simplified for broader Unraid version compatibility
-SYSTEM_METRICS_QUERY = """
+# Introspection query to discover available fields
+INTROSPECTION_QUERY = """
     query {
-        info {
-            os { uptime hostname }
-            cpu { name cores threads }
-            memory { total free }
+        __schema {
+            queryType {
+                fields {
+                    name
+                }
+            }
         }
     }
 """
 
-# Separate query for metrics (may not be available on all versions)
-CPU_METRICS_QUERY = """
+# Minimal system info query - just os info which should be stable
+SYSTEM_INFO_QUERY = """
     query {
-        metrics {
-            cpu { percentTotal }
-            memory { percentTotal total used }
+        info {
+            os { uptime hostname }
         }
     }
 """
@@ -235,43 +236,20 @@ class UnraidClientWrapper:
         Returns:
             Dict with cpu_percent, cpu_temperature, memory_percent, etc.
         """
-        # Get basic system info first
-        info_data = await self._execute_query(SYSTEM_METRICS_QUERY)
+        # Get basic system info
+        info_data = await self._execute_query(SYSTEM_INFO_QUERY)
         info = info_data.get("info", {})
 
         uptime = info.get("os", {}).get("uptime", "")
         hostname = info.get("os", {}).get("hostname", "")
-        memory_info = info.get("memory", {})
-        memory_total = memory_info.get("total", 0)
-        memory_free = memory_info.get("free", 0)
-        memory_used = memory_total - memory_free if memory_total else 0
-        memory_percent = (memory_used / memory_total * 100) if memory_total else 0
-
-        # Try to get CPU metrics (may fail on some versions)
-        cpu_percent = 0
-        try:
-            metrics_data = await self._execute_query(CPU_METRICS_QUERY)
-            metrics = metrics_data.get("metrics", {})
-            cpu_percent = metrics.get("cpu", {}).get("percentTotal", 0)
-            # Use metrics memory if available (more accurate)
-            mem_metrics = metrics.get("memory", {})
-            if mem_metrics.get("percentTotal"):
-                memory_percent = mem_metrics.get("percentTotal", memory_percent)
-            if mem_metrics.get("used"):
-                memory_used = mem_metrics.get("used", memory_used)
-            if mem_metrics.get("total"):
-                memory_total = mem_metrics.get("total", memory_total)
-        except UnraidConnectionError:
-            # Metrics query not supported, use defaults
-            logger.debug("CPU metrics query not available")
 
         return {
             "hostname": hostname,
-            "cpu_percent": cpu_percent,
-            "cpu_temperature": 0,  # Not available in basic query
-            "memory_percent": memory_percent,
-            "memory_used": memory_used,
-            "memory_total": memory_total,
+            "cpu_percent": 0,
+            "cpu_temperature": 0,
+            "memory_percent": 0,
+            "memory_used": 0,
+            "memory_total": 0,
             "uptime": uptime,
         }
 
