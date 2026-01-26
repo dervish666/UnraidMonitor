@@ -30,34 +30,16 @@ ARRAY_STATUS_QUERY = """
         array {
             state
             capacity {
-                kilobytes { free used total }
                 disks { free used total }
             }
-            parityCheckStatus {
-                status
-                progress
-                running
-                paused
-                errors
-                speed
-            }
-            boot {
-                id name device size temp type
-                fsSize fsUsed fsFree fsType
-            }
-            parities {
-                id idx name device size status type temp
-                isSpinning
+            caches {
+                name size temp status fsSize fsFree fsUsed
             }
             disks {
-                id idx name device size status type temp
-                fsSize fsFree fsUsed fsType
-                isSpinning
+                name size temp status fsSize fsFree fsUsed
             }
-            caches {
-                id idx name device size status type temp
-                fsSize fsFree fsUsed fsType
-                isSpinning
+            parities {
+                name size temp status
             }
         }
     }

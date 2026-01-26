@@ -128,3 +128,15 @@ class UnraidSystemMonitor:
         except Exception as e:
             logger.error(f"Failed to get system metrics: {e}")
             return None
+
+    async def get_array_status(self) -> dict | None:
+        """Get array status (for commands).
+
+        Returns:
+            Array status dict or None on error.
+        """
+        try:
+            return await self._client.get_array_status()
+        except Exception as e:
+            logger.error(f"Failed to get array status: {e}")
+            return None

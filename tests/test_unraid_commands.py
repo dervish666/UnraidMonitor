@@ -92,6 +92,11 @@ async def test_server_command_detailed():
         "swap_percent": 5.0,
         "uptime": "5 days, 3 hours",
     })
+    mock_monitor.get_array_status = AsyncMock(return_value={
+        "state": "STARTED",
+        "capacity": {"disks": {"free": "22", "used": "8", "total": "30"}},
+        "caches": [{"name": "cache", "size": 976761560, "temp": 37, "status": "DISK_OK"}],
+    })
 
     handler = server_command(mock_monitor)
 
@@ -105,6 +110,8 @@ async def test_server_command_detailed():
     response = message.answer.call_args[0][0]
 
     assert "Swap" in response or "swap" in response
+    assert "Array" in response
+    assert "STARTED" in response
 
 
 @pytest.mark.asyncio

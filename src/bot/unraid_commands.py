@@ -94,6 +94,35 @@ def server_command(
                 f"\n*Uptime:* {uptime}",
             ])
 
+            # Get array status
+            array = await system_monitor.get_array_status()
+            if array:
+                state = array.get("state", "Unknown")
+                capacity = array.get("capacity", {}).get("disks", {})
+                used_tb = int(capacity.get("used", 0))
+                total_tb = int(capacity.get("total", 0))
+                free_tb = int(capacity.get("free", 0))
+
+                lines.append(f"\n*Array:* {state}")
+                if total_tb:
+                    lines.append(f"*Storage:* {used_tb} / {total_tb} TB ({free_tb} TB free)")
+
+                # Cache info
+                caches = array.get("caches", [])
+                for cache in caches:
+                    name = cache.get("name", "cache")
+                    cache_temp = cache.get("temp", 0)
+                    status = cache.get("status", "").replace("DISK_", "")
+                    fs_used = cache.get("fsUsed", 0) or 0
+                    fs_size = cache.get("fsSize", 0) or 0
+                    if fs_size:
+                        used_gb = fs_used / (1024**3)
+                        size_gb = fs_size / (1024**3)
+                        pct = (fs_used / fs_size * 100) if fs_size else 0
+                        lines.append(f"*{name.title()}:* {pct:.0f}% ({used_gb:.0f}/{size_gb:.0f} GB) • {cache_temp}°C • {status}")
+                    else:
+                        lines.append(f"*{name.title()}:* {cache_temp}°C • {status}")
+
             await message.answer("\n".join(lines), parse_mode="Markdown")
         else:
             # Compact summary
