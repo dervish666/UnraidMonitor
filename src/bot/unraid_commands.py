@@ -11,6 +11,7 @@ from src.alerts.mute_manager import parse_duration
 if TYPE_CHECKING:
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
     from src.alerts.server_mute_manager import ServerMuteManager
+    from src.alerts.array_mute_manager import ArrayMuteManager
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,66 @@ def unmute_server_command(
             )
         else:
             await message.answer("Server alerts are not currently muted.")
+
+    return handler
+
+
+def mute_array_command(
+    mute_manager: "ArrayMuteManager",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /mute-array command handler."""
+
+    async def handler(message: Message) -> None:
+        text = (message.text or "").strip()
+        parts = text.split()
+
+        if len(parts) < 2:
+            await message.answer(
+                "Usage: `/mute-array <duration>`\n\n"
+                "Examples: `2h`, `30m`, `24h`\n\n"
+                "This mutes array alerts (disk/parity warnings).",
+                parse_mode="Markdown",
+            )
+            return
+
+        duration_str = parts[1]
+        duration = parse_duration(duration_str)
+
+        if not duration:
+            await message.answer(
+                f"Invalid duration: `{duration_str}`\n"
+                "Use format like `15m`, `2h`, `24h`",
+                parse_mode="Markdown",
+            )
+            return
+
+        expiry = mute_manager.mute_array(duration)
+        time_str = expiry.strftime("%H:%M")
+
+        await message.answer(
+            f"🔇 *Muted array alerts* until {time_str}\n\n"
+            f"Disk and parity alerts suppressed.\n"
+            f"Use `/unmute-array` to unmute early.",
+            parse_mode="Markdown",
+        )
+
+    return handler
+
+
+def unmute_array_command(
+    mute_manager: "ArrayMuteManager",
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /unmute-array command handler."""
+
+    async def handler(message: Message) -> None:
+        if mute_manager.unmute_array():
+            await message.answer(
+                "🔔 *Unmuted array alerts*\n\n"
+                "Disk and parity alerts are now enabled.",
+                parse_mode="Markdown",
+            )
+        else:
+            await message.answer("Array alerts are not currently muted.")
 
     return handler
 

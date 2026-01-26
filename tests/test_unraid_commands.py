@@ -219,6 +219,8 @@ def test_unraid_commands_in_help():
     assert "/server" in HELP_TEXT
     assert "/mute-server" in HELP_TEXT
     assert "/unmute-server" in HELP_TEXT
+    assert "/mute-array" in HELP_TEXT
+    assert "/unmute-array" in HELP_TEXT
     assert "/array" in HELP_TEXT
 
 
@@ -319,3 +321,49 @@ async def test_disks_command():
     assert "parity" in response
     assert "cache" in response
     assert "35" in response  # temp
+
+
+@pytest.mark.asyncio
+async def test_mute_array_command(tmp_path):
+    """Test /mute-array mutes array alerts."""
+    from src.bot.unraid_commands import mute_array_command
+    from src.alerts.array_mute_manager import ArrayMuteManager
+
+    json_file = tmp_path / "array_mutes.json"
+    mute_manager = ArrayMuteManager(json_path=str(json_file))
+
+    handler = mute_array_command(mute_manager)
+
+    message = MagicMock()
+    message.text = "/mute-array 2h"
+    message.answer = AsyncMock()
+
+    await handler(message)
+
+    response = message.answer.call_args[0][0]
+    assert "Muted" in response
+    assert mute_manager.is_array_muted()
+
+
+@pytest.mark.asyncio
+async def test_unmute_array_command(tmp_path):
+    """Test /unmute-array unmutes array alerts."""
+    from src.bot.unraid_commands import unmute_array_command
+    from src.alerts.array_mute_manager import ArrayMuteManager
+    from datetime import timedelta
+
+    json_file = tmp_path / "array_mutes.json"
+    mute_manager = ArrayMuteManager(json_path=str(json_file))
+    mute_manager.mute_array(timedelta(hours=2))
+
+    handler = unmute_array_command(mute_manager)
+
+    message = MagicMock()
+    message.text = "/unmute-array"
+    message.answer = AsyncMock()
+
+    await handler(message)
+
+    response = message.answer.call_args[0][0]
+    assert "Unmuted" in response
+    assert not mute_manager.is_array_muted()

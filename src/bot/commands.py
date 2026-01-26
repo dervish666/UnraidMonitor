@@ -32,6 +32,8 @@ HELP_TEXT = """📋 *Available Commands*
 /disks - List all disks with details
 /mute-server <duration> - Mute all server alerts
 /unmute-server - Unmute server alerts
+/mute-array <duration> - Mute array alerts only
+/unmute-array - Unmute array alerts
 
 /help - Show this help message
 
