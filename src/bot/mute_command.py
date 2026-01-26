@@ -9,6 +9,8 @@ from src.alerts.mute_manager import parse_duration
 
 if TYPE_CHECKING:
     from src.alerts.mute_manager import MuteManager
+    from src.alerts.server_mute_manager import ServerMuteManager
+    from src.alerts.array_mute_manager import ArrayMuteManager
     from src.state import ContainerStateManager
 
 logger = logging.getLogger(__name__)
@@ -153,25 +155,54 @@ def format_duration(delta: timedelta) -> str:
 
 def mutes_command(
     mute_manager: "MuteManager",
+    server_mute_manager: "ServerMuteManager | None" = None,
+    array_mute_manager: "ArrayMuteManager | None" = None,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /mutes command handler."""
 
     async def handler(message: Message) -> None:
-        mutes = mute_manager.get_active_mutes()
+        # Collect container mutes
+        container_mutes = mute_manager.get_active_mutes()
 
-        if not mutes:
+        # Check server mutes - look for "server" category in active mutes
+        server_expiry = None
+        if server_mute_manager:
+            server_mutes = server_mute_manager.get_active_mutes()
+            for category, expiry in server_mutes:
+                if category == "server":
+                    server_expiry = expiry
+                    break
+
+        # Check array mutes
+        array_expiry = None
+        if array_mute_manager:
+            array_expiry = array_mute_manager.get_mute_expiry()
+
+        # Check if anything is muted
+        if not container_mutes and not server_expiry and not array_expiry:
             await message.answer(
-                "🔇 No active mutes.\n\n_Use `/mute <container> <duration>` to mute._",
+                "No active mutes.",
                 parse_mode="Markdown",
             )
             return
 
-        lines = ["🔇 *Active Mutes*\n"]
-        for container, expiry in sorted(mutes, key=lambda x: x[1]):
-            time_str = expiry.strftime("%H:%M")
-            lines.append(f"• *{container}* until {time_str}")
+        lines = ["🔇 *Active Mutes*"]
 
-        lines.append("\n_Use `/unmute <container>` to unmute early._")
+        # Container mutes section
+        if container_mutes:
+            lines.append("\nContainer mutes:")
+            for container, expiry in sorted(container_mutes, key=lambda x: x[1]):
+                time_str = expiry.strftime("%H:%M")
+                lines.append(f"  {container}: until {time_str}")
+
+        # Server mutes section
+        if server_expiry:
+            lines.append(f"\n🔇 *Server alerts muted* until {server_expiry.strftime('%H:%M')}")
+
+        # Array mutes section
+        if array_expiry:
+            lines.append(f"🔇 *Array alerts muted* until {array_expiry.strftime('%H:%M')}")
+
         await message.answer("\n".join(lines), parse_mode="Markdown")
 
     return handler

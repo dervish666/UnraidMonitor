@@ -221,7 +221,7 @@ def register_commands(
                 Command("mute"),
             )
             dp.message.register(
-                mutes_command(mute_manager),
+                mutes_command(mute_manager, server_mute_manager, array_mute_manager),
                 Command("mutes"),
             )
             dp.message.register(
