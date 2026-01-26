@@ -88,6 +88,44 @@ class ResourceConfig:
         return cpu, memory
 
 
+@dataclass
+class UnraidConfig:
+    """Configuration for Unraid server monitoring."""
+
+    enabled: bool = False
+    host: str = ""
+    port: int = 443
+    poll_system_seconds: int = 30
+    poll_array_seconds: int = 300
+    poll_ups_seconds: int = 60
+    cpu_temp_threshold: int = 80
+    cpu_usage_threshold: int = 95
+    memory_usage_threshold: int = 90
+    disk_temp_threshold: int = 50
+    array_usage_threshold: int = 85
+    ups_battery_threshold: int = 30
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "UnraidConfig":
+        """Create UnraidConfig from YAML dict."""
+        polling = data.get("polling", {})
+        thresholds = data.get("thresholds", {})
+        return cls(
+            enabled=data.get("enabled", False),
+            host=data.get("host", ""),
+            port=data.get("port", 443),
+            poll_system_seconds=polling.get("system", 30),
+            poll_array_seconds=polling.get("array", 300),
+            poll_ups_seconds=polling.get("ups", 60),
+            cpu_temp_threshold=thresholds.get("cpu_temp", 80),
+            cpu_usage_threshold=thresholds.get("cpu_usage", 95),
+            memory_usage_threshold=thresholds.get("memory_usage", 90),
+            disk_temp_threshold=thresholds.get("disk_temp", 50),
+            array_usage_threshold=thresholds.get("array_usage", 85),
+            ups_battery_threshold=thresholds.get("ups_battery", 30),
+        )
+
+
 def load_yaml_config(path: str) -> dict[str, Any]:
     """Load YAML configuration file.
 
