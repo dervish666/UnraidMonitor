@@ -3,6 +3,7 @@
 import logging
 from typing import Any
 
+import aiohttp
 from unraid_api import UnraidClient
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class UnraidClientWrapper:
         self._port = port
         self._verify_ssl = verify_ssl
         self._client: UnraidClient | None = None
+        self._session: aiohttp.ClientSession | None = None
         self._connected = False
 
     @property
@@ -46,11 +48,25 @@ class UnraidClientWrapper:
 
     async def connect(self) -> None:
         """Establish connection to Unraid server."""
+        # Create session with required headers for Unraid's CSRF protection
+        # The unraid-api library doesn't set these, causing 400 Bad Request
+        ssl_context: bool = self._verify_ssl
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        self._session = aiohttp.ClientSession(
+            connector=connector,
+            headers={
+                "x-api-key": self._api_key,
+                "Content-Type": "application/json",
+                "apollo-require-preflight": "true",
+            },
+        )
+
         self._client = UnraidClient(
             self._host,
             self._api_key,
             https_port=self._port,
             verify_ssl=self._verify_ssl,
+            session=self._session,
         )
         await self._client.__aenter__()
         self._connected = True
@@ -61,7 +77,10 @@ class UnraidClientWrapper:
         if self._client and self._connected:
             await self._client.__aexit__(None, None, None)
             self._connected = False
-            logger.info("Disconnected from Unraid server")
+        if self._session:
+            await self._session.close()
+            self._session = None
+        logger.info("Disconnected from Unraid server")
 
     def _ensure_connected(self) -> None:
         """Raise error if not connected."""

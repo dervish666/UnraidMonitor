@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
 @pytest.mark.asyncio
@@ -7,9 +7,13 @@ async def test_unraid_client_connect():
     """Test UnraidClient connects successfully."""
     from src.unraid.client import UnraidClientWrapper
 
-    with patch("src.unraid.client.UnraidClient") as MockClient:
+    with patch("src.unraid.client.UnraidClient") as MockClient, \
+         patch("src.unraid.client.aiohttp.ClientSession") as MockSession, \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
         mock_instance = AsyncMock()
         MockClient.return_value = mock_instance
+        mock_session = MagicMock()
+        MockSession.return_value = mock_session
 
         wrapper = UnraidClientWrapper(
             host="192.168.1.100",
@@ -20,7 +24,7 @@ async def test_unraid_client_connect():
         await wrapper.connect()
 
         MockClient.assert_called_once_with(
-            "192.168.1.100", "test-key", https_port=443, verify_ssl=True
+            "192.168.1.100", "test-key", https_port=443, verify_ssl=True, session=mock_session
         )
         mock_instance.__aenter__.assert_called_once()
 
@@ -30,9 +34,13 @@ async def test_unraid_client_disconnect():
     """Test UnraidClient disconnects properly."""
     from src.unraid.client import UnraidClientWrapper
 
-    with patch("src.unraid.client.UnraidClient") as MockClient:
+    with patch("src.unraid.client.UnraidClient") as MockClient, \
+         patch("src.unraid.client.aiohttp.ClientSession") as MockSession, \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
         mock_instance = AsyncMock()
         MockClient.return_value = mock_instance
+        mock_session = AsyncMock()
+        MockSession.return_value = mock_session
 
         wrapper = UnraidClientWrapper(
             host="192.168.1.100",
@@ -43,6 +51,7 @@ async def test_unraid_client_disconnect():
         await wrapper.disconnect()
 
         mock_instance.__aexit__.assert_called_once()
+        mock_session.close.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -50,7 +59,9 @@ async def test_unraid_client_get_system_metrics():
     """Test getting system metrics."""
     from src.unraid.client import UnraidClientWrapper
 
-    with patch("src.unraid.client.UnraidClient") as MockClient:
+    with patch("src.unraid.client.UnraidClient") as MockClient, \
+         patch("src.unraid.client.aiohttp.ClientSession"), \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
         mock_instance = AsyncMock()
         mock_instance.get_system_metrics = AsyncMock(return_value={
             "cpu_percent": 25.5,
@@ -93,9 +104,13 @@ async def test_unraid_client_is_connected_property():
     """Test is_connected property."""
     from src.unraid.client import UnraidClientWrapper
 
-    with patch("src.unraid.client.UnraidClient") as MockClient:
+    with patch("src.unraid.client.UnraidClient") as MockClient, \
+         patch("src.unraid.client.aiohttp.ClientSession") as MockSession, \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
         mock_instance = AsyncMock()
         MockClient.return_value = mock_instance
+        mock_session = AsyncMock()
+        MockSession.return_value = mock_session
 
         wrapper = UnraidClientWrapper(
             host="192.168.1.100",
@@ -116,7 +131,9 @@ async def test_unraid_client_get_array_status():
     """Test getting array status."""
     from src.unraid.client import UnraidClientWrapper
 
-    with patch("src.unraid.client.UnraidClient") as MockClient:
+    with patch("src.unraid.client.UnraidClient") as MockClient, \
+         patch("src.unraid.client.aiohttp.ClientSession"), \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
         mock_instance = AsyncMock()
         mock_instance.get_array_status = AsyncMock(return_value={
             "state": "Started",
@@ -142,7 +159,9 @@ async def test_unraid_client_get_vms():
     """Test getting VM list."""
     from src.unraid.client import UnraidClientWrapper
 
-    with patch("src.unraid.client.UnraidClient") as MockClient:
+    with patch("src.unraid.client.UnraidClient") as MockClient, \
+         patch("src.unraid.client.aiohttp.ClientSession"), \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
         mock_instance = AsyncMock()
         mock_instance.get_vms = AsyncMock(return_value=[
             {"name": "Windows10", "id": "vm1", "state": "running"},
@@ -168,7 +187,9 @@ async def test_unraid_client_get_ups_status():
     """Test getting UPS status."""
     from src.unraid.client import UnraidClientWrapper
 
-    with patch("src.unraid.client.UnraidClient") as MockClient:
+    with patch("src.unraid.client.UnraidClient") as MockClient, \
+         patch("src.unraid.client.aiohttp.ClientSession"), \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
         mock_instance = AsyncMock()
         mock_instance.get_ups_status = AsyncMock(return_value=[
             {"name": "APC UPS", "status": "online", "charge": 100},
@@ -193,9 +214,13 @@ async def test_unraid_client_verify_ssl_false():
     """Test client can be created with verify_ssl=False."""
     from src.unraid.client import UnraidClientWrapper
 
-    with patch("src.unraid.client.UnraidClient") as MockClient:
+    with patch("src.unraid.client.UnraidClient") as MockClient, \
+         patch("src.unraid.client.aiohttp.ClientSession") as MockSession, \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
         mock_instance = AsyncMock()
         MockClient.return_value = mock_instance
+        mock_session = MagicMock()
+        MockSession.return_value = mock_session
 
         wrapper = UnraidClientWrapper(
             host="192.168.1.100",
@@ -207,5 +232,5 @@ async def test_unraid_client_verify_ssl_false():
         await wrapper.connect()
 
         MockClient.assert_called_once_with(
-            "192.168.1.100", "test-key", https_port=443, verify_ssl=False
+            "192.168.1.100", "test-key", https_port=443, verify_ssl=False, session=mock_session
         )
