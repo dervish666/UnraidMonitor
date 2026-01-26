@@ -16,6 +16,13 @@ class ContainerStateManager:
 
     def find_by_name(self, partial: str) -> list[ContainerInfo]:
         partial_lower = partial.lower()
+
+        # Check for exact match first
+        for c in self._containers.values():
+            if c.name.lower() == partial_lower:
+                return [c]
+
+        # Fall back to substring match
         return [
             c for c in self._containers.values()
             if partial_lower in c.name.lower()

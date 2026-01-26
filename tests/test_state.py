@@ -48,6 +48,27 @@ def test_state_manager_find_by_partial_name():
     assert "radar-test" in names
 
 
+def test_state_manager_find_by_name_exact_match_priority():
+    """Test that exact match returns single result even when substring matches exist."""
+    from src.state import ContainerStateManager
+    from src.models import ContainerInfo
+
+    manager = ContainerStateManager()
+    manager.update(ContainerInfo("plex", "running", None, "img", None))
+    manager.update(ContainerInfo("Plex-Rewind", "running", None, "img", None))
+    manager.update(ContainerInfo("plex-meta-manager", "running", None, "img", None))
+
+    # Exact match should return only the exact container
+    matches = manager.find_by_name("plex")
+    assert len(matches) == 1
+    assert matches[0].name == "plex"
+
+    # Partial match still works when no exact match
+    matches = manager.find_by_name("Rewind")
+    assert len(matches) == 1
+    assert matches[0].name == "Plex-Rewind"
+
+
 def test_state_manager_summary():
     from src.state import ContainerStateManager
     from src.models import ContainerInfo
