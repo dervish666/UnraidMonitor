@@ -9,6 +9,14 @@ from src.services.container_control import ContainerController
 
 logger = logging.getLogger(__name__)
 
+# Emoji mapping for control actions
+ACTION_EMOJI = {
+    "restart": "🔄",
+    "stop": "🛑",
+    "start": "▶️",
+    "pull": "⬇️",
+}
+
 
 def _find_container(state: ContainerStateManager, query: str) -> tuple[str | None, str | None]:
     """Find container by name, return (container_name, error_message)."""
@@ -26,13 +34,7 @@ def _find_container(state: ContainerStateManager, query: str) -> tuple[str | Non
 
 def _format_confirmation_message(action: str, container_name: str, status: str) -> str:
     """Format the confirmation request message."""
-    action_emoji = {
-        "restart": "🔄",
-        "stop": "🛑",
-        "start": "▶️",
-        "pull": "⬇️",
-    }
-    emoji = action_emoji.get(action, "⚠️")
+    emoji = ACTION_EMOJI.get(action, "⚠️")
 
     return f"""{emoji} *{action.capitalize()} {container_name}?*
 
@@ -41,18 +43,19 @@ Current status: {status}
 Reply 'yes' to confirm (expires in 60s)"""
 
 
-def restart_command(
+def _control_command(
+    action: str,
     state: ContainerStateManager,
     controller: ContainerController,
     confirmation: ConfirmationManager,
 ) -> Callable[[Message], Awaitable[None]]:
-    """Factory for /restart command handler."""
+    """Generic factory for container control command handlers."""
     async def handler(message: Message) -> None:
         text = message.text or ""
         parts = text.strip().split()
 
         if len(parts) < 2:
-            await message.answer("Usage: /restart <container>\n\nExample: /restart radarr")
+            await message.answer(f"Usage: /{action} <container>\n\nExample: /{action} radarr")
             return
 
         query = parts[1]
@@ -70,14 +73,23 @@ def restart_command(
         status = container_info.status if container_info else "unknown"
 
         user_id = message.from_user.id
-        confirmation.request(user_id, action="restart", container_name=container_name)
+        confirmation.request(user_id, action=action, container_name=container_name)
 
         await message.answer(
-            _format_confirmation_message("restart", container_name, status),
+            _format_confirmation_message(action, container_name, status),
             parse_mode="Markdown",
         )
 
     return handler
+
+
+def restart_command(
+    state: ContainerStateManager,
+    controller: ContainerController,
+    confirmation: ConfirmationManager,
+) -> Callable[[Message], Awaitable[None]]:
+    """Factory for /restart command handler."""
+    return _control_command("restart", state, controller, confirmation)
 
 
 def stop_command(
@@ -86,37 +98,7 @@ def stop_command(
     confirmation: ConfirmationManager,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /stop command handler."""
-    async def handler(message: Message) -> None:
-        text = message.text or ""
-        parts = text.strip().split()
-
-        if len(parts) < 2:
-            await message.answer("Usage: /stop <container>\n\nExample: /stop radarr")
-            return
-
-        query = parts[1]
-        container_name, error = _find_container(state, query)
-
-        if error:
-            await message.answer(error, parse_mode="Markdown")
-            return
-
-        if controller.is_protected(container_name):
-            await message.answer(f"🔒 {container_name} is protected and cannot be controlled via Telegram")
-            return
-
-        container_info = state.get(container_name)
-        status = container_info.status if container_info else "unknown"
-
-        user_id = message.from_user.id
-        confirmation.request(user_id, action="stop", container_name=container_name)
-
-        await message.answer(
-            _format_confirmation_message("stop", container_name, status),
-            parse_mode="Markdown",
-        )
-
-    return handler
+    return _control_command("stop", state, controller, confirmation)
 
 
 def start_command(
@@ -125,37 +107,7 @@ def start_command(
     confirmation: ConfirmationManager,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /start command handler."""
-    async def handler(message: Message) -> None:
-        text = message.text or ""
-        parts = text.strip().split()
-
-        if len(parts) < 2:
-            await message.answer("Usage: /start <container>\n\nExample: /start radarr")
-            return
-
-        query = parts[1]
-        container_name, error = _find_container(state, query)
-
-        if error:
-            await message.answer(error, parse_mode="Markdown")
-            return
-
-        if controller.is_protected(container_name):
-            await message.answer(f"🔒 {container_name} is protected and cannot be controlled via Telegram")
-            return
-
-        container_info = state.get(container_name)
-        status = container_info.status if container_info else "unknown"
-
-        user_id = message.from_user.id
-        confirmation.request(user_id, action="start", container_name=container_name)
-
-        await message.answer(
-            _format_confirmation_message("start", container_name, status),
-            parse_mode="Markdown",
-        )
-
-    return handler
+    return _control_command("start", state, controller, confirmation)
 
 
 def pull_command(
@@ -164,37 +116,7 @@ def pull_command(
     confirmation: ConfirmationManager,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /pull command handler."""
-    async def handler(message: Message) -> None:
-        text = message.text or ""
-        parts = text.strip().split()
-
-        if len(parts) < 2:
-            await message.answer("Usage: /pull <container>\n\nExample: /pull radarr")
-            return
-
-        query = parts[1]
-        container_name, error = _find_container(state, query)
-
-        if error:
-            await message.answer(error, parse_mode="Markdown")
-            return
-
-        if controller.is_protected(container_name):
-            await message.answer(f"🔒 {container_name} is protected and cannot be controlled via Telegram")
-            return
-
-        container_info = state.get(container_name)
-        status = container_info.status if container_info else "unknown"
-
-        user_id = message.from_user.id
-        confirmation.request(user_id, action="pull", container_name=container_name)
-
-        await message.answer(
-            _format_confirmation_message("pull", container_name, status),
-            parse_mode="Markdown",
-        )
-
-    return handler
+    return _control_command("pull", state, controller, confirmation)
 
 
 def create_confirm_handler(

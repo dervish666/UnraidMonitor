@@ -36,29 +36,23 @@ class AlertManagerProxy:
         self.bot = bot
         self.chat_id_store = chat_id_store
 
-    async def send_crash_alert(self, **kwargs):
+    async def _send_alert(self, method_name: str, **kwargs):
+        """Generic alert sender that delegates to AlertManager."""
         chat_id = self.chat_id_store.get_chat_id()
         if chat_id:
             manager = AlertManager(self.bot, chat_id)
-            await manager.send_crash_alert(**kwargs)
+            await getattr(manager, method_name)(**kwargs)
         else:
-            logger.warning("No chat ID yet, cannot send crash alert")
+            logger.warning(f"No chat ID yet, cannot send {method_name.replace('_', ' ')}")
+
+    async def send_crash_alert(self, **kwargs):
+        await self._send_alert("send_crash_alert", **kwargs)
 
     async def send_log_error_alert(self, **kwargs):
-        chat_id = self.chat_id_store.get_chat_id()
-        if chat_id:
-            manager = AlertManager(self.bot, chat_id)
-            await manager.send_log_error_alert(**kwargs)
-        else:
-            logger.warning("No chat ID yet, cannot send log error alert")
+        await self._send_alert("send_log_error_alert", **kwargs)
 
     async def send_resource_alert(self, **kwargs):
-        chat_id = self.chat_id_store.get_chat_id()
-        if chat_id:
-            manager = AlertManager(self.bot, chat_id)
-            await manager.send_resource_alert(**kwargs)
-        else:
-            logger.warning("No chat ID yet, cannot send resource alert")
+        await self._send_alert("send_resource_alert", **kwargs)
 
 
 async def main() -> None:
