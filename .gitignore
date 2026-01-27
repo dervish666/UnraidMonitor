@@ -10,3 +10,4 @@ build/
 venv/
 .serena/
 data/
+.worktrees/
