@@ -19,6 +19,7 @@ from src.alerts.mute_manager import MuteManager
 from src.alerts.server_mute_manager import ServerMuteManager
 from src.alerts.array_mute_manager import ArrayMuteManager
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_commands
+from src.analysis.pattern_analyzer import PatternAnalyzer
 from src.unraid.client import UnraidClientWrapper
 from src.unraid.monitors.system_monitor import UnraidSystemMonitor
 from src.unraid.monitors.array_monitor import ArrayMonitor
@@ -77,11 +78,13 @@ async def main() -> None:
 
     # Initialize Anthropic client if API key is configured
     anthropic_client = None
+    pattern_analyzer = None
     if config.anthropic_api_key:
         anthropic_client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-        logger.info("Anthropic client initialized for AI diagnostics")
+        pattern_analyzer = PatternAnalyzer(anthropic_client)
+        logger.info("Anthropic client initialized for AI diagnostics and pattern analysis")
     else:
-        logger.warning("ANTHROPIC_API_KEY not set - /diagnose command will be disabled")
+        logger.warning("ANTHROPIC_API_KEY not set - /diagnose and smart ignore patterns will be disabled")
 
     # Initialize state manager
     state = ContainerStateManager()
@@ -266,6 +269,7 @@ async def main() -> None:
         server_mute_manager=server_mute_manager,
         array_mute_manager=array_mute_manager,
         memory_monitor=memory_monitor,
+        pattern_analyzer=pattern_analyzer,
     )
 
     # Start Docker event monitor as background task

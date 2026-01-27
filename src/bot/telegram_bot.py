@@ -167,6 +167,7 @@ def register_commands(
     server_mute_manager: Any | None = None,
     array_mute_manager: Any | None = None,
     memory_monitor: "MemoryMonitor | None" = None,
+    pattern_analyzer: Any | None = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -230,13 +231,13 @@ def register_commands(
             )
             # Register handler for selection follow-up (numbers like "1,3" or "all")
             dp.message.register(
-                ignore_selection_handler(ignore_manager, selection_state),
+                ignore_selection_handler(ignore_manager, selection_state, pattern_analyzer),
                 IgnoreSelectionFilter(selection_state),
             )
 
             # Register callback handler for ignore similar button
             dp.callback_query.register(
-                ignore_similar_callback(ignore_manager, None, recent_errors_buffer),
+                ignore_similar_callback(ignore_manager, pattern_analyzer, recent_errors_buffer),
                 F.data.startswith("ignore_similar:"),
             )
 
