@@ -1,5 +1,6 @@
 """Tests for memory pressure monitor."""
 
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.monitors.memory_monitor import MemoryMonitor, MemoryState
@@ -397,3 +398,51 @@ class TestRestartHandling:
         result = monitor.get_killed_containers()
 
         assert result == ["bitmagnet", "obsidian"]
+
+
+class TestPollingLoop:
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    @patch("src.monitors.memory_monitor.asyncio.sleep", new_callable=AsyncMock)
+    async def test_start_polls_memory(
+        self, mock_sleep, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=50.0)
+
+        # Make sleep raise after first call to stop loop
+        call_count = 0
+
+        async def sleep_side_effect(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await monitor.start()
+
+        assert mock_psutil.virtual_memory.called
+
+    def test_stop_sets_running_false(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._running = True
+
+        monitor.stop()
+
+        assert monitor._running is False

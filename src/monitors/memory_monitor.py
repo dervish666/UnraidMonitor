@@ -215,3 +215,40 @@ class MemoryMonitor:
     def get_killed_containers(self) -> list[str]:
         """Get list of containers killed in this pressure event."""
         return self._killed_containers.copy()
+
+    async def start(self) -> None:
+        """Start the memory monitoring loop."""
+        if not self.is_enabled():
+            logger.info("Memory monitoring disabled")
+            return
+
+        self._running = True
+        logger.info("Memory monitor started")
+
+        while self._running:
+            try:
+                await self._check_memory()
+
+                # Handle kill countdown if in critical state with pending kill
+                if self._state == MemoryState.CRITICAL and self._pending_kill:
+                    await self._execute_kill_countdown()
+
+                    # After kill, wait for stabilization
+                    if self._killed_containers:
+                        self._state = MemoryState.RECOVERING
+                        await asyncio.sleep(self._config.stabilization_wait)
+                        continue
+
+                await asyncio.sleep(10)  # Check every 10 seconds
+
+            except asyncio.CancelledError:
+                logger.info("Memory monitor cancelled")
+                raise
+            except Exception as e:
+                logger.error(f"Error in memory monitor: {e}")
+                await asyncio.sleep(30)
+
+    def stop(self) -> None:
+        """Stop the memory monitoring loop."""
+        self._running = False
+        logger.info("Memory monitor stopped")
