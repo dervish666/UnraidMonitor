@@ -1,6 +1,17 @@
 """Tool definitions for Claude API tool use in natural language chat."""
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+import docker
+
+from src.state import ContainerStateManager
+from src.models import ContainerInfo
+
+if TYPE_CHECKING:
+    from src.services.container_control import ContainerController
+    from src.monitors.resource_monitor import ResourceMonitor
+    from src.alerts.recent_errors import RecentErrorsBuffer
+    from src.unraid.monitors.system_monitor import UnraidSystemMonitor
 
 
 def get_tool_definitions() -> list[dict[str, Any]]:
@@ -202,3 +213,154 @@ def is_read_only_tool(tool_name: str) -> bool:
         True if the tool only reads data.
     """
     return tool_name in READ_ONLY_TOOLS
+
+
+class NLToolExecutor:
+    """Executes NL tools using existing service code."""
+
+    def __init__(
+        self,
+        state: ContainerStateManager,
+        docker_client: docker.DockerClient,
+        protected_containers: list[str] | None = None,
+        controller: "ContainerController | None" = None,
+        resource_monitor: "ResourceMonitor | None" = None,
+        recent_errors_buffer: "RecentErrorsBuffer | None" = None,
+        unraid_system_monitor: "UnraidSystemMonitor | None" = None,
+    ):
+        """Initialize the tool executor.
+
+        Args:
+            state: Container state manager for querying container info.
+            docker_client: Docker client for container operations.
+            protected_containers: List of container names that cannot be modified.
+            controller: Container controller for actions (restart, stop, etc.).
+            resource_monitor: Resource monitor for CPU/memory stats.
+            recent_errors_buffer: Buffer of recent errors from containers.
+            unraid_system_monitor: Unraid system monitor for server stats.
+        """
+        self._state = state
+        self._docker = docker_client
+        self._protected = set(protected_containers or [])
+        self._controller = controller
+        self._resource_monitor = resource_monitor
+        self._recent_errors = recent_errors_buffer
+        self._unraid = unraid_system_monitor
+
+    async def execute(self, tool_name: str, args: dict[str, Any]) -> str:
+        """Execute a tool and return the result as a string.
+
+        Args:
+            tool_name: Name of the tool to execute.
+            args: Arguments to pass to the tool.
+
+        Returns:
+            Result of the tool execution as a string.
+        """
+        handler = getattr(self, f"_tool_{tool_name}", None)
+        if handler is None:
+            return f"Unknown tool: {tool_name}"
+        return await handler(args)
+
+    def _resolve_container(self, name: str) -> ContainerInfo | str:
+        """Resolve partial container name. Returns ContainerInfo or error string.
+
+        Args:
+            name: Full or partial container name.
+
+        Returns:
+            ContainerInfo if exactly one match, error string otherwise.
+        """
+        matches = self._state.find_by_name(name)
+        if not matches:
+            return f"No container found matching '{name}'"
+        if len(matches) > 1:
+            names = ", ".join(c.name for c in matches)
+            return f"Multiple containers match '{name}': {names}. Please be more specific."
+        return matches[0]
+
+    async def _tool_get_container_list(self, args: dict[str, Any]) -> str:
+        """Get list of all containers with status."""
+        containers = self._state.get_all()
+        if not containers:
+            return "No containers found."
+        lines = []
+        running = [c for c in containers if c.status == "running"]
+        stopped = [c for c in containers if c.status != "running"]
+        if running:
+            lines.append(f"Running ({len(running)}):")
+            for c in sorted(running, key=lambda x: x.name):
+                health = f" [{c.health}]" if c.health else ""
+                lines.append(f"  - {c.name}{health}")
+        if stopped:
+            lines.append(f"\nStopped ({len(stopped)}):")
+            for c in sorted(stopped, key=lambda x: x.name):
+                lines.append(f"  - {c.name}")
+        return "\n".join(lines)
+
+    async def _tool_get_container_status(self, args: dict[str, Any]) -> str:
+        """Get detailed status for a specific container."""
+        name = args.get("name", "")
+        resolved = self._resolve_container(name)
+        if isinstance(resolved, str):
+            return resolved
+        c = resolved
+        lines = [f"Container: {c.name}"]
+        lines.append(f"Status: {c.status}")
+        if c.health:
+            lines.append(f"Health: {c.health}")
+        lines.append(f"Image: {c.image}")
+        if c.uptime_seconds is not None:
+            hours = c.uptime_seconds // 3600
+            minutes = (c.uptime_seconds % 3600) // 60
+            if hours > 0:
+                lines.append(f"Uptime: {hours}h {minutes}m")
+            else:
+                lines.append(f"Uptime: {minutes}m")
+        return "\n".join(lines)
+
+    async def _tool_get_container_logs(self, args: dict[str, Any]) -> str:
+        """Get recent logs from a container."""
+        name = args.get("name", "")
+        lines = min(args.get("lines", 50), 200)
+        resolved = self._resolve_container(name)
+        if isinstance(resolved, str):
+            return resolved
+        try:
+            container = self._docker.containers.get(resolved.name)
+            log_bytes = container.logs(tail=lines, timestamps=False)
+            logs = log_bytes.decode("utf-8", errors="replace")
+            if not logs.strip():
+                return f"No recent logs for {resolved.name}"
+            if len(logs) > 3000:
+                logs = logs[-3000:]
+                return f"... (truncated)\n{logs}"
+            return f"Logs for {resolved.name}:\n{logs}"
+        except docker.errors.NotFound:
+            return f"Container '{resolved.name}' not found"
+        except Exception as e:
+            return f"Error getting logs: {e}"
+
+    async def _tool_get_resource_usage(self, args: dict[str, Any]) -> str:
+        """Get CPU and memory usage for containers."""
+        if self._resource_monitor is None:
+            return "Resource monitoring not available."
+        return "Resource usage data not yet implemented."
+
+    async def _tool_get_server_stats(self, args: dict[str, Any]) -> str:
+        """Get overall server statistics."""
+        if self._unraid is None:
+            return "Unraid monitoring not configured."
+        return "Server stats not yet implemented."
+
+    async def _tool_get_array_status(self, args: dict[str, Any]) -> str:
+        """Get Unraid array status."""
+        if self._unraid is None:
+            return "Unraid monitoring not configured."
+        return "Array status not yet implemented."
+
+    async def _tool_get_recent_errors(self, args: dict[str, Any]) -> str:
+        """Get recent errors from container logs."""
+        if self._recent_errors is None:
+            return "Error tracking not available."
+        return "Recent errors not yet implemented."

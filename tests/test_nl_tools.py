@@ -1,12 +1,17 @@
 # tests/test_nl_tools.py
 import pytest
+from unittest.mock import Mock, MagicMock
+from datetime import datetime, timezone
+
 from src.services.nl_tools import (
     get_tool_definitions,
     is_action_tool,
     is_read_only_tool,
     READ_ONLY_TOOLS,
     ACTION_TOOLS,
+    NLToolExecutor,
 )
+from src.models import ContainerInfo
 
 
 class TestToolDefinitions:
@@ -165,3 +170,194 @@ class TestToolCategories:
 
         # No overlap between categories
         assert READ_ONLY_TOOLS & ACTION_TOOLS == set(), "Categories should not overlap"
+
+
+# Fixtures for NLToolExecutor tests
+@pytest.fixture
+def mock_state():
+    state = Mock()
+    state.get_all.return_value = [
+        ContainerInfo(
+            name="plex",
+            status="running",
+            health="healthy",
+            image="plexinc/pms-docker",
+            started_at=datetime.now(timezone.utc),
+        ),
+        ContainerInfo(
+            name="radarr",
+            status="running",
+            health=None,
+            image="linuxserver/radarr",
+            started_at=datetime.now(timezone.utc),
+        ),
+        ContainerInfo(
+            name="sonarr",
+            status="exited",
+            health=None,
+            image="linuxserver/sonarr",
+            started_at=None,
+        ),
+    ]
+    state.find_by_name.return_value = [
+        ContainerInfo(
+            name="plex",
+            status="running",
+            health="healthy",
+            image="plexinc/pms-docker",
+            started_at=datetime.now(timezone.utc),
+        ),
+    ]
+    return state
+
+
+@pytest.fixture
+def mock_docker():
+    docker = Mock()
+    container = Mock()
+    container.logs.return_value = b"[INFO] Server started\n[ERROR] Connection failed\n"
+    docker.containers.get.return_value = container
+    return docker
+
+
+@pytest.fixture
+def executor(mock_state, mock_docker):
+    return NLToolExecutor(
+        state=mock_state,
+        docker_client=mock_docker,
+        protected_containers=["mariadb"],
+    )
+
+
+class TestNLToolExecutor:
+    @pytest.mark.asyncio
+    async def test_get_container_list(self, executor):
+        result = await executor.execute("get_container_list", {})
+        assert "plex" in result
+        assert "running" in result.lower()
+        assert "radarr" in result
+        assert "sonarr" in result
+
+    @pytest.mark.asyncio
+    async def test_get_container_status_found(self, executor):
+        result = await executor.execute("get_container_status", {"name": "plex"})
+        assert "plex" in result
+        assert "running" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_container_status_not_found(self, executor, mock_state):
+        mock_state.find_by_name.return_value = []
+        result = await executor.execute("get_container_status", {"name": "notexist"})
+        assert "not found" in result.lower() or "no container" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_container_status_ambiguous(self, executor, mock_state):
+        mock_state.find_by_name.return_value = [
+            ContainerInfo(
+                name="radarr",
+                status="running",
+                health=None,
+                image="img",
+                started_at=None,
+            ),
+            ContainerInfo(
+                name="radarr-sync",
+                status="running",
+                health=None,
+                image="img",
+                started_at=None,
+            ),
+        ]
+        result = await executor.execute("get_container_status", {"name": "rad"})
+        assert "multiple" in result.lower() or (
+            "radarr" in result and "radarr-sync" in result
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_container_logs(self, executor):
+        result = await executor.execute(
+            "get_container_logs", {"name": "plex", "lines": 10}
+        )
+        assert "Server started" in result or "Connection failed" in result
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_returns_error(self, executor):
+        result = await executor.execute("unknown_tool", {})
+        assert "unknown" in result.lower() or "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_container_logs_truncates_long_output(self, executor, mock_docker):
+        """Test that long logs are truncated."""
+        # Create a log that exceeds 3000 characters
+        long_log = b"A" * 4000
+        mock_docker.containers.get.return_value.logs.return_value = long_log
+        result = await executor.execute(
+            "get_container_logs", {"name": "plex", "lines": 100}
+        )
+        assert "truncated" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_container_logs_empty(self, executor, mock_docker):
+        """Test handling of empty logs."""
+        mock_docker.containers.get.return_value.logs.return_value = b""
+        result = await executor.execute(
+            "get_container_logs", {"name": "plex", "lines": 10}
+        )
+        assert "no recent logs" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_container_logs_limits_lines(self, executor, mock_docker):
+        """Test that lines parameter is capped at 200."""
+        await executor.execute("get_container_logs", {"name": "plex", "lines": 500})
+        # Should cap at 200
+        mock_docker.containers.get.return_value.logs.assert_called_with(
+            tail=200, timestamps=False
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_resource_usage_not_available(self, executor):
+        """Test resource usage when monitor not configured."""
+        result = await executor.execute("get_resource_usage", {})
+        assert "not available" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_server_stats_not_configured(self, executor):
+        """Test server stats when unraid not configured."""
+        result = await executor.execute("get_server_stats", {})
+        assert "not configured" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_array_status_not_configured(self, executor):
+        """Test array status when unraid not configured."""
+        result = await executor.execute("get_array_status", {})
+        assert "not configured" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_recent_errors_not_available(self, executor):
+        """Test recent errors when buffer not configured."""
+        result = await executor.execute("get_recent_errors", {})
+        assert "not available" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_container_status_with_health(self, executor, mock_state):
+        """Test that health status is included in output."""
+        mock_state.find_by_name.return_value = [
+            ContainerInfo(
+                name="plex",
+                status="running",
+                health="healthy",
+                image="plexinc/pms-docker",
+                started_at=datetime.now(timezone.utc),
+            ),
+        ]
+        result = await executor.execute("get_container_status", {"name": "plex"})
+        assert "healthy" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_container_list_grouped_by_status(self, executor):
+        """Test that containers are grouped by running/stopped status."""
+        result = await executor.execute("get_container_list", {})
+        # Should have Running section with plex and radarr
+        assert "Running" in result
+        # Should have Stopped section with sonarr
+        assert "Stopped" in result
