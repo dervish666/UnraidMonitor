@@ -89,6 +89,33 @@ class ResourceConfig:
 
 
 @dataclass
+class MemoryConfig:
+    """Configuration for system memory pressure management."""
+
+    enabled: bool
+    warning_threshold: int  # Notify at this % (default 90)
+    critical_threshold: int  # Start kill sequence at this % (default 95)
+    safe_threshold: int  # Offer restart when below this % (default 80)
+    kill_delay_seconds: int  # Warning before killing (default 60)
+    stabilization_wait: int  # Wait between kills in seconds (default 180)
+    priority_containers: list[str]  # Never kill these
+    killable_containers: list[str]  # Kill in this order
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MemoryConfig":
+        return cls(
+            enabled=data.get("enabled", False),
+            warning_threshold=data.get("warning_threshold", 90),
+            critical_threshold=data.get("critical_threshold", 95),
+            safe_threshold=data.get("safe_threshold", 80),
+            kill_delay_seconds=data.get("kill_delay_seconds", 60),
+            stabilization_wait=data.get("stabilization_wait", 180),
+            priority_containers=data.get("priority_containers", []),
+            killable_containers=data.get("killable_containers", []),
+        )
+
+
+@dataclass
 class UnraidConfig:
     """Configuration for Unraid server monitoring."""
 
@@ -249,3 +276,8 @@ class AppConfig:
     def unraid(self) -> UnraidConfig:
         """Get Unraid configuration."""
         return UnraidConfig.from_dict(self._yaml_config.get("unraid", {}))
+
+    @property
+    def memory_management(self) -> MemoryConfig:
+        """Get memory management configuration."""
+        return MemoryConfig.from_dict(self._yaml_config.get("memory_management", {}))
