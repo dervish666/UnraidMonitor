@@ -58,3 +58,31 @@ class MemoryMonitor:
     def get_memory_percent(self) -> float:
         """Get current system memory usage percentage."""
         return psutil.virtual_memory().percent
+
+    def _get_next_killable(self) -> str | None:
+        """Get the next container to kill from the killable list.
+
+        Returns the first running container from killable_containers
+        that hasn't already been killed in this pressure event.
+        """
+        running_names = {c.name for c in self._docker.containers.list()}
+
+        for name in self._config.killable_containers:
+            if name in self._killed_containers:
+                continue
+            if name in running_names:
+                return name
+
+        return None
+
+    async def _stop_container(self, name: str) -> None:
+        """Stop a container and record it as killed."""
+        try:
+            container = self._docker.containers.get(name)
+            container.stop()
+            self._killed_containers.append(name)
+            logger.info(f"Stopped container {name} due to memory pressure")
+        except docker.errors.NotFound:
+            logger.warning(f"Container {name} not found when trying to stop")
+        except Exception as e:
+            logger.error(f"Failed to stop container {name}: {e}")

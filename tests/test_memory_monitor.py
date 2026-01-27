@@ -86,3 +86,91 @@ class TestMemoryReading:
         percent = monitor.get_memory_percent()
         assert percent == 85.5
         mock_psutil.virtual_memory.assert_called_once()
+
+
+class TestContainerControl:
+    def test_get_next_killable_returns_first_running(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        # Mock running containers
+        container1 = MagicMock()
+        container1.name = "bitmagnet"
+        container1.status = "running"
+
+        container2 = MagicMock()
+        container2.name = "obsidian"
+        container2.status = "running"
+
+        mock_docker_client.containers.list.return_value = [container1, container2]
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        # bitmagnet is first in killable list
+        result = monitor._get_next_killable()
+        assert result == "bitmagnet"
+
+    def test_get_next_killable_skips_already_killed(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        container1 = MagicMock()
+        container1.name = "bitmagnet"
+        container1.status = "exited"  # Already killed
+
+        container2 = MagicMock()
+        container2.name = "obsidian"
+        container2.status = "running"
+
+        mock_docker_client.containers.list.return_value = [container2]
+        mock_docker_client.containers.get.return_value = container1
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._killed_containers = ["bitmagnet"]
+
+        result = monitor._get_next_killable()
+        assert result == "obsidian"
+
+    def test_get_next_killable_returns_none_when_exhausted(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_docker_client.containers.list.return_value = []
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._killed_containers = ["bitmagnet", "obsidian"]
+
+        result = monitor._get_next_killable()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_stop_container(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        container = MagicMock()
+        container.name = "bitmagnet"
+        mock_docker_client.containers.get.return_value = container
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        await monitor._stop_container("bitmagnet")
+
+        container.stop.assert_called_once()
+        assert "bitmagnet" in monitor._killed_containers
