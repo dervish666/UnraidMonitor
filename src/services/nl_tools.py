@@ -364,3 +364,56 @@ class NLToolExecutor:
         if self._recent_errors is None:
             return "Error tracking not available."
         return "Recent errors not yet implemented."
+
+    async def _tool_restart_container(self, args: dict[str, Any]) -> str:
+        """Request container restart (requires confirmation)."""
+        name = args.get("name", "")
+        resolved = self._resolve_container(name)
+        if isinstance(resolved, str):
+            return resolved
+
+        if resolved.name in self._protected:
+            return f"Cannot restart {resolved.name} - it's a protected container."
+
+        # Return confirmation request (actual restart happens after user confirms)
+        return f"CONFIRMATION_NEEDED:restart:{resolved.name}"
+
+    async def _tool_stop_container(self, args: dict[str, Any]) -> str:
+        """Request container stop (requires confirmation)."""
+        name = args.get("name", "")
+        resolved = self._resolve_container(name)
+        if isinstance(resolved, str):
+            return resolved
+
+        if resolved.name in self._protected:
+            return f"Cannot stop {resolved.name} - it's a protected container."
+
+        return f"CONFIRMATION_NEEDED:stop:{resolved.name}"
+
+    async def _tool_start_container(self, args: dict[str, Any]) -> str:
+        """Start a container (executes immediately - safe operation)."""
+        name = args.get("name", "")
+        resolved = self._resolve_container(name)
+        if isinstance(resolved, str):
+            return resolved
+
+        if resolved.name in self._protected:
+            return f"Cannot start {resolved.name} - it's a protected container."
+
+        if self._controller is None:
+            return "Container control not available."
+
+        result = await self._controller.start(resolved.name)
+        return result
+
+    async def _tool_pull_container(self, args: dict[str, Any]) -> str:
+        """Request container pull/update (requires confirmation)."""
+        name = args.get("name", "")
+        resolved = self._resolve_container(name)
+        if isinstance(resolved, str):
+            return resolved
+
+        if resolved.name in self._protected:
+            return f"Cannot update {resolved.name} - it's a protected container."
+
+        return f"CONFIRMATION_NEEDED:pull:{resolved.name}"

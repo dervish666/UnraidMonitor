@@ -1,6 +1,6 @@
 # tests/test_nl_tools.py
 import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 from datetime import datetime, timezone
 
 from src.services.nl_tools import (
@@ -361,3 +361,159 @@ class TestNLToolExecutor:
         assert "Running" in result
         # Should have Stopped section with sonarr
         assert "Stopped" in result
+
+
+class TestNLToolExecutorActions:
+    """Tests for action tools (restart, stop, start, pull)."""
+
+    @pytest.fixture
+    def mock_controller(self):
+        from unittest.mock import AsyncMock
+
+        controller = Mock()
+        controller.is_protected = Mock(return_value=False)
+        controller.start = AsyncMock(return_value="Started plex")
+        controller.stop = AsyncMock(return_value="Stopped plex")
+        controller.restart = AsyncMock(return_value="Restarted plex")
+        return controller
+
+    @pytest.fixture
+    def executor_with_controller(self, mock_state, mock_docker, mock_controller):
+        return NLToolExecutor(
+            state=mock_state,
+            docker_client=mock_docker,
+            protected_containers=["mariadb"],
+            controller=mock_controller,
+        )
+
+    @pytest.mark.asyncio
+    async def test_restart_returns_confirmation_needed(self, executor_with_controller):
+        """Test that restart_container returns a confirmation request."""
+        result = await executor_with_controller.execute(
+            "restart_container", {"name": "plex"}
+        )
+        assert "confirm" in result.lower() or "confirmation" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_restart_protected_returns_error(
+        self, executor_with_controller, mock_state
+    ):
+        """Test that protected containers cannot be restarted."""
+        mock_state.find_by_name.return_value = [
+            ContainerInfo(
+                name="mariadb",
+                status="running",
+                health=None,
+                image="img",
+                started_at=None,
+            ),
+        ]
+        result = await executor_with_controller.execute(
+            "restart_container", {"name": "mariadb"}
+        )
+        assert "protected" in result.lower() or "cannot" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_start_executes_immediately(
+        self, executor_with_controller, mock_controller
+    ):
+        """Test that start_container executes immediately (safe operation)."""
+        result = await executor_with_controller.execute(
+            "start_container", {"name": "plex"}
+        )
+        # start_container should execute immediately, not require confirmation
+        assert (
+            "started" in result.lower()
+            or "already running" in result.lower()
+            or "confirm" not in result.lower()
+        )
+
+    @pytest.mark.asyncio
+    async def test_stop_returns_confirmation_needed(self, executor_with_controller):
+        """Test that stop_container returns a confirmation request."""
+        result = await executor_with_controller.execute(
+            "stop_container", {"name": "plex"}
+        )
+        assert "confirm" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_pull_returns_confirmation_needed(self, executor_with_controller):
+        """Test that pull_container returns a confirmation request."""
+        result = await executor_with_controller.execute(
+            "pull_container", {"name": "plex"}
+        )
+        assert "confirm" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_start_protected_returns_error(
+        self, executor_with_controller, mock_state
+    ):
+        """Test that protected containers cannot be started."""
+        mock_state.find_by_name.return_value = [
+            ContainerInfo(
+                name="mariadb",
+                status="exited",
+                health=None,
+                image="img",
+                started_at=None,
+            ),
+        ]
+        result = await executor_with_controller.execute(
+            "start_container", {"name": "mariadb"}
+        )
+        assert "protected" in result.lower() or "cannot" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_stop_protected_returns_error(
+        self, executor_with_controller, mock_state
+    ):
+        """Test that protected containers cannot be stopped."""
+        mock_state.find_by_name.return_value = [
+            ContainerInfo(
+                name="mariadb",
+                status="running",
+                health=None,
+                image="img",
+                started_at=None,
+            ),
+        ]
+        result = await executor_with_controller.execute(
+            "stop_container", {"name": "mariadb"}
+        )
+        assert "protected" in result.lower() or "cannot" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_pull_protected_returns_error(
+        self, executor_with_controller, mock_state
+    ):
+        """Test that protected containers cannot be pulled/updated."""
+        mock_state.find_by_name.return_value = [
+            ContainerInfo(
+                name="mariadb",
+                status="running",
+                health=None,
+                image="img",
+                started_at=None,
+            ),
+        ]
+        result = await executor_with_controller.execute(
+            "pull_container", {"name": "mariadb"}
+        )
+        assert "protected" in result.lower() or "cannot" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_restart_not_found_returns_error(
+        self, executor_with_controller, mock_state
+    ):
+        """Test that restart returns error for non-existent container."""
+        mock_state.find_by_name.return_value = []
+        result = await executor_with_controller.execute(
+            "restart_container", {"name": "notexist"}
+        )
+        assert "not found" in result.lower() or "no container" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_start_without_controller_returns_error(self, executor):
+        """Test that start returns error when controller is not configured."""
+        result = await executor.execute("start_container", {"name": "plex"})
+        assert "not available" in result.lower()
