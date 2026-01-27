@@ -146,6 +146,40 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
+## Storage
+
+All persistent data is stored in bind-mounted volumes:
+
+```
+/mnt/user/appdata/unraid-monitor/
+├── config/
+│   └── config.yaml          # Main configuration
+└── data/
+    ├── monitor.db           # Event history database
+    ├── ignored_errors.json  # Ignore patterns
+    ├── mutes.json           # Container mutes
+    ├── server_mutes.json    # Server mutes
+    └── array_mutes.json     # Array mutes
+```
+
+On first run, a default `config.yaml` is created automatically.
+
+### First Run Setup
+
+1. Create the appdata directory:
+   ```bash
+   mkdir -p /mnt/user/appdata/unraid-monitor/{config,data}
+   ```
+
+2. Start the container - it will create a default config
+
+3. Edit `/mnt/user/appdata/unraid-monitor/config/config.yaml` to:
+   - Add containers to watch
+   - Configure memory management
+   - Enable Unraid monitoring
+
+4. Restart the container to apply changes
+
 ## Alert Examples
 
 ### Crash Alert

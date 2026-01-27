@@ -17,4 +17,15 @@ services:
       - TZ=Europe/London
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./config:/app/config:ro
+      # For development, use local directories:
+      # - ./config:/app/config:ro
+      # - ./data:/app/data
+      # For production on Unraid, use bind mounts:
+      - /mnt/user/appdata/unraid-monitor/config:/app/config
+      - /mnt/user/appdata/unraid-monitor/data:/app/data
+    networks:
+      - docknet
+
+networks:
+  docknet:
+    external: true

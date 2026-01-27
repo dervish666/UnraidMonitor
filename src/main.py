@@ -1,13 +1,15 @@
 import asyncio
 import logging
+import os
 import sys
 
 import anthropic
 
-from src.config import Settings, AppConfig
+from src.config import Settings, AppConfig, generate_default_config
 from src.state import ContainerStateManager
 from src.monitors.docker_events import DockerEventMonitor
 from src.monitors.log_watcher import LogWatcher
+from src.monitors.memory_monitor import MemoryMonitor
 from src.monitors.resource_monitor import ResourceMonitor
 from src.alerts.manager import AlertManager, ChatIdStore
 from src.alerts.rate_limiter import RateLimiter
@@ -56,6 +58,12 @@ class AlertManagerProxy:
 
 
 async def main() -> None:
+    # Check for first run and generate default config if needed
+    config_path = os.environ.get("CONFIG_PATH", "config/config.yaml")
+    first_run = generate_default_config(config_path)
+    if first_run:
+        logger.info(f"Created default config at {config_path}")
+
     # Load configuration
     try:
         settings = Settings()
@@ -218,6 +226,31 @@ async def main() -> None:
     else:
         logger.info("Resource monitoring disabled")
 
+    # Initialize memory monitor if enabled
+    memory_monitor = None
+    memory_config = config.memory_management
+    if memory_config.enabled:
+        async def on_memory_alert(title: str, message: str) -> None:
+            chat_id = chat_id_store.get_chat_id()
+            if chat_id:
+                alert_text = f"{'🔴' if 'Critical' in title else '⚠️'} *{title}*\n\n{message}"
+                await bot.send_message(chat_id, alert_text, parse_mode="Markdown")
+
+        async def on_ask_restart(container: str) -> None:
+            chat_id = chat_id_store.get_chat_id()
+            if chat_id:
+                text = f"💾 Memory now at safe levels. Restart {container}?"
+                # TODO: Add inline keyboard with Yes/No buttons
+                await bot.send_message(chat_id, text)
+
+        memory_monitor = MemoryMonitor(
+            docker_client=monitor._client,
+            config=memory_config,
+            on_alert=on_memory_alert,
+            on_ask_restart=on_ask_restart,
+        )
+        logger.info("Memory monitoring enabled")
+
     # Register commands with docker client for /logs
     confirmation, diagnostic_service = register_commands(
         dp,
@@ -232,6 +265,7 @@ async def main() -> None:
         unraid_system_monitor=unraid_system_monitor,
         server_mute_manager=server_mute_manager,
         array_mute_manager=array_mute_manager,
+        memory_monitor=memory_monitor,
     )
 
     # Start Docker event monitor as background task
@@ -244,6 +278,11 @@ async def main() -> None:
     resource_monitor_task = None
     if resource_monitor is not None:
         resource_monitor_task = asyncio.create_task(resource_monitor.start())
+
+    # Start memory monitor as background task (if enabled)
+    memory_monitor_task = None
+    if memory_monitor is not None:
+        memory_monitor_task = asyncio.create_task(memory_monitor.start())
 
     # Connect to Unraid and start monitoring
     unraid_monitor_task = None
@@ -261,6 +300,22 @@ async def main() -> None:
             logger.error(f"Failed to connect to Unraid: {e}")
 
     logger.info("Starting Telegram bot...")
+
+    # Send first-run welcome message if needed
+    if first_run:
+        async def send_welcome():
+            await asyncio.sleep(5)  # Wait for chat_id to be available
+            chat_id = chat_id_store.get_chat_id()
+            if chat_id:
+                await bot.send_message(
+                    chat_id,
+                    "👋 *First run!* Default config created.\n\n"
+                    "Edit `/app/config/config.yaml` to customize settings.\n"
+                    "Use /help to get started.",
+                    parse_mode="Markdown",
+                )
+
+        asyncio.create_task(send_welcome())
 
     try:
         # Run bot until shutdown (aiogram handles SIGINT/SIGTERM)
@@ -286,6 +341,14 @@ async def main() -> None:
         if resource_monitor_task is not None:
             try:
                 await resource_monitor_task
+            except asyncio.CancelledError:
+                pass
+        if memory_monitor is not None:
+            memory_monitor.stop()
+        if memory_monitor_task is not None:
+            memory_monitor_task.cancel()
+            try:
+                await memory_monitor_task
             except asyncio.CancelledError:
                 pass
         if unraid_system_monitor:

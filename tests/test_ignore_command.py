@@ -193,3 +193,41 @@ def test_ignore_commands_in_help():
 
     assert "/ignore" in HELP_TEXT
     assert "/ignores" in HELP_TEXT
+
+
+class TestIgnoreWithAnalysis:
+    @pytest.mark.asyncio
+    async def test_ignore_selection_uses_analyzer(self, tmp_path):
+        from src.bot.ignore_command import ignore_selection_handler, IgnoreSelectionState
+        from src.alerts.ignore_manager import IgnoreManager
+        from unittest.mock import AsyncMock, MagicMock
+
+        # Setup
+        ignore_manager = IgnoreManager({}, str(tmp_path / "ignores.json"))
+        selection_state = IgnoreSelectionState()
+        selection_state.set_pending(123, "sonarr", ["Connection refused to api.example.com on port 443"])
+
+        mock_analyzer = MagicMock()
+        mock_analyzer.analyze_error = AsyncMock(return_value={
+            "pattern": "Connection refused to .* on port \\d+",
+            "match_type": "regex",
+            "explanation": "Connection refused errors",
+        })
+
+        message = MagicMock()
+        message.from_user = MagicMock()
+        message.from_user.id = 123
+        message.text = "1"
+        message.answer = AsyncMock()
+
+        handler = ignore_selection_handler(ignore_manager, selection_state, mock_analyzer)
+        await handler(message)
+
+        # Verify analyzer was called
+        mock_analyzer.analyze_error.assert_called_once()
+
+        # Verify pattern was added with analysis result
+        ignores = ignore_manager.get_all_ignores("sonarr")
+        assert len(ignores) == 1
+        assert ignores[0][0] == "Connection refused to .* on port \\d+"
+        assert ignores[0][2] == "Connection refused errors"
