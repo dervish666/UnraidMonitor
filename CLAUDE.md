@@ -62,6 +62,13 @@ Docker Socket → Event/Health/Log Monitors → Event Queue → Claude Analysis 
 - `telegram_bot.py` - aiogram 3.x handlers with conversation context
 - `commands.py` - Command implementations (/status, /logs, /restart, etc.)
 - `formatters.py` - Alert message formatting with emoji and quick actions
+- `nl_handler.py` - Routes non-command messages to NL processor
+
+**Services** (`src/services/`):
+- `nl_processor.py` - Natural language processing with Claude API and conversation memory
+- `nl_tools.py` - Tool definitions and executor for NL queries (container status, logs, restart)
+- `container_control.py` - Container operations with safety features
+- `diagnostic.py` - AI-powered log analysis
 
 **Actions** (`src/actions/`):
 - `docker_actions.py` - Container control with safety features (confirmations, cooldowns, whitelists)

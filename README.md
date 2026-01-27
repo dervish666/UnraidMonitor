@@ -64,6 +64,19 @@ A Telegram bot for monitoring Docker containers on Unraid servers. Get real-time
 
 Partial container names work: `/status rad` matches `radarr`
 
+## Natural Language Chat
+
+Instead of using commands, you can ask questions naturally:
+
+- "What's wrong with plex?"
+- "Why is my server slow?"
+- "Is anything crashing?"
+- "Restart radarr" (will ask for confirmation)
+
+The bot uses AI to understand your question, gather relevant data, and respond conversationally. Follow-up questions work too - say "restart it" after discussing a container.
+
+**Note:** Requires `ANTHROPIC_API_KEY` to be configured.
+
 ## Quick Start
 
 ### 1. Create a Telegram Bot
