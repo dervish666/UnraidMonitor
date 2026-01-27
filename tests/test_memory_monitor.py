@@ -67,3 +67,22 @@ class TestMemoryMonitor:
             on_ask_restart=mock_on_ask_restart,
         )
         assert monitor.is_enabled() is False
+
+
+class TestMemoryReading:
+    @patch("src.monitors.memory_monitor.psutil")
+    def test_get_memory_percent(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=85.5)
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        percent = monitor.get_memory_percent()
+        assert percent == 85.5
+        mock_psutil.virtual_memory.assert_called_once()

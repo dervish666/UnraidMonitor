@@ -6,6 +6,7 @@ from enum import Enum, auto
 from typing import Callable, Awaitable
 
 import docker
+import psutil
 
 from src.config import MemoryConfig
 
@@ -53,3 +54,7 @@ class MemoryMonitor:
     def is_enabled(self) -> bool:
         """Check if memory monitoring is enabled."""
         return self._config.enabled
+
+    def get_memory_percent(self) -> float:
+        """Get current system memory usage percentage."""
+        return psutil.virtual_memory().percent
