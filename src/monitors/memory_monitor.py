@@ -139,3 +139,44 @@ class MemoryMonitor:
         else:
             message = f"Memory critical ({percent:.0f}%) but no killable containers available!"
             await self._on_alert("Memory Critical - No Action Available", message)
+
+    async def _execute_kill_countdown(self) -> None:
+        """Execute the kill countdown for pending container."""
+        if not self._pending_kill:
+            return
+
+        container_name = self._pending_kill
+
+        # Wait for kill delay
+        await asyncio.sleep(self._config.kill_delay_seconds)
+
+        # Check if cancelled
+        if self._kill_cancelled:
+            logger.info(f"Kill of {container_name} was cancelled")
+            self._kill_cancelled = False
+            self._pending_kill = None
+            return
+
+        # Check if memory is still critical
+        if self.get_memory_percent() >= self._config.critical_threshold:
+            await self._stop_container(container_name)
+            percent = self.get_memory_percent()
+            await self._on_alert(
+                "Container Stopped",
+                f"Stopped {container_name} to free memory. Memory now at {percent:.0f}%"
+            )
+        else:
+            logger.info(f"Memory recovered, not killing {container_name}")
+
+        self._pending_kill = None
+
+    def cancel_pending_kill(self) -> bool:
+        """Cancel a pending kill. Returns True if there was one to cancel."""
+        if self._pending_kill:
+            self._kill_cancelled = True
+            return True
+        return False
+
+    def get_pending_kill(self) -> str | None:
+        """Get the name of the container pending kill, if any."""
+        return self._pending_kill

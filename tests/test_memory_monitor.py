@@ -256,3 +256,87 @@ class TestStateMachine:
         await monitor._check_memory()
 
         mock_on_ask_restart.assert_called_once_with("bitmagnet")
+
+
+class TestKillCountdown:
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    @patch("src.monitors.memory_monitor.asyncio.sleep", new_callable=AsyncMock)
+    async def test_kill_after_countdown(
+        self, mock_sleep, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        # Memory stays critical
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=96.0)
+
+        container = MagicMock()
+        container.name = "bitmagnet"
+        mock_docker_client.containers.get.return_value = container
+        mock_docker_client.containers.list.return_value = [container]
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._state = MemoryState.CRITICAL
+        monitor._pending_kill = "bitmagnet"
+
+        await monitor._execute_kill_countdown()
+
+        mock_sleep.assert_called_with(60)  # kill_delay_seconds
+        container.stop.assert_called_once()
+        assert "bitmagnet" in monitor._killed_containers
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    @patch("src.monitors.memory_monitor.asyncio.sleep", new_callable=AsyncMock)
+    async def test_cancel_kill_aborts_countdown(
+        self, mock_sleep, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        container = MagicMock()
+        mock_docker_client.containers.get.return_value = container
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._pending_kill = "bitmagnet"
+        monitor._kill_cancelled = True
+
+        await monitor._execute_kill_countdown()
+
+        container.stop.assert_not_called()
+        assert monitor._kill_cancelled is False  # Reset after handling
+
+    def test_cancel_kill_command(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._pending_kill = "bitmagnet"
+
+        result = monitor.cancel_pending_kill()
+
+        assert result is True
+        assert monitor._kill_cancelled is True
+
+    def test_cancel_kill_no_pending(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        result = monitor.cancel_pending_kill()
+
+        assert result is False
