@@ -4,6 +4,7 @@ from typing import Any, Awaitable, Callable, TYPE_CHECKING
 from aiogram import Bot, Dispatcher, BaseMiddleware, F
 from aiogram.filters import Command, Filter
 from aiogram.types import Message
+from aiogram.exceptions import TelegramBadRequest
 import docker
 
 from src.state import ContainerStateManager
@@ -97,7 +98,15 @@ def create_details_handler(
         details = await diagnostic_service.get_details(user_id)
         if details:
             response = f"*Detailed Analysis*\n\n{details}"
-            await message.answer(response, parse_mode="Markdown")
+            # Try Markdown first, fall back to plain text if parsing fails
+            try:
+                await message.answer(response, parse_mode="Markdown")
+            except TelegramBadRequest as e:
+                if "can't parse entities" in str(e):
+                    plain_response = f"Detailed Analysis\n\n{details}"
+                    await message.answer(plain_response)
+                else:
+                    raise
 
     return handler
 

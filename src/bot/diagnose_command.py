@@ -5,6 +5,7 @@ import re
 from typing import Callable, Awaitable
 
 from aiogram.types import Message
+from aiogram.exceptions import TelegramBadRequest
 
 from src.state import ContainerStateManager
 from src.services.diagnostic import DiagnosticService
@@ -102,6 +103,15 @@ def diagnose_command(
 
 _Want more details?_"""
 
-        await message.answer(response, parse_mode="Markdown")
+        # Try Markdown first, fall back to plain text if parsing fails
+        try:
+            await message.answer(response, parse_mode="Markdown")
+        except TelegramBadRequest as e:
+            if "can't parse entities" in str(e):
+                # Claude's response contains characters that break Markdown
+                plain_response = f"Diagnosis: {actual_name}\n\n{analysis}\n\nWant more details?"
+                await message.answer(plain_response)
+            else:
+                raise
 
     return handler
