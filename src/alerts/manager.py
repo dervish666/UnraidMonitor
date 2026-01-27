@@ -1,5 +1,6 @@
 import logging
 from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from src.utils.formatting import format_bytes
 
@@ -82,12 +83,13 @@ Uptime: {uptime_str}
         error_line: str,
         suppressed_count: int = 0,
     ) -> None:
-        """Send a log error alert."""
+        """Send a log error alert with ignore button."""
         total_errors = suppressed_count + 1
 
-        # Truncate long error lines
+        # Truncate long error lines for display
+        display_error = error_line
         if len(error_line) > 200:
-            error_line = error_line[:200] + "..."
+            display_error = error_line[:200] + "..."
 
         if total_errors > 1:
             count_text = f"Found {total_errors} errors in the last 15 minutes"
@@ -98,15 +100,35 @@ Uptime: {uptime_str}
 
 {count_text}
 
-Latest: `{error_line}`
+Latest: `{display_error}`
 
 /logs {container_name} 50 - View last 50 lines"""
+
+        # Create inline keyboard with ignore button
+        # Truncate error in callback data (max 64 bytes for callback_data)
+        # Format: ignore_similar:container:error_preview
+        # Reserve space for prefix and container name
+        prefix = f"ignore_similar:{container_name}:"
+        max_error_len = 64 - len(prefix)
+        error_preview = error_line[:max_error_len] if len(error_line) > max_error_len else error_line
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔇 Ignore Similar",
+                        callback_data=f"{prefix}{error_preview}",
+                    )
+                ]
+            ]
+        )
 
         try:
             await self.bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
                 parse_mode="Markdown",
+                reply_markup=keyboard,
             )
             logger.info(f"Sent log error alert for {container_name}")
         except Exception as e:

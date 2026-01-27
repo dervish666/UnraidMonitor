@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
-from aiogram import Bot, Dispatcher, BaseMiddleware
+from aiogram import Bot, Dispatcher, BaseMiddleware, F
 from aiogram.filters import Command, Filter
 from aiogram.types import Message
 import docker
@@ -17,7 +17,13 @@ from src.bot.control_commands import (
 )
 from src.bot.confirmation import ConfirmationManager
 from src.bot.diagnose_command import diagnose_command
-from src.bot.ignore_command import ignore_command, ignores_command, ignore_selection_handler, IgnoreSelectionState
+from src.bot.ignore_command import (
+    ignore_command,
+    ignores_command,
+    ignore_selection_handler,
+    IgnoreSelectionState,
+    ignore_similar_callback,
+)
 from src.bot.memory_commands import cancel_kill_command
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
 from src.bot.resources_command import resources_command
@@ -217,6 +223,12 @@ def register_commands(
             dp.message.register(
                 ignore_selection_handler(ignore_manager, selection_state),
                 IgnoreSelectionFilter(selection_state),
+            )
+
+            # Register callback handler for ignore similar button
+            dp.callback_query.register(
+                ignore_similar_callback(ignore_manager, None, recent_errors_buffer),
+                F.data.startswith("ignore_similar:"),
             )
 
         # Register /mute, /mutes, /unmute commands

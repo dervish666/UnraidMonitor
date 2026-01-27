@@ -2,7 +2,7 @@ import re
 import logging
 from typing import Callable, Awaitable, TYPE_CHECKING
 
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 
 if TYPE_CHECKING:
     from src.alerts.recent_errors import RecentErrorsBuffer
@@ -206,5 +206,67 @@ def ignores_command(
 
         # Don't use Markdown - patterns may contain special characters
         await message.answer("\n".join(lines))
+
+    return handler
+
+
+def ignore_similar_callback(
+    ignore_manager: "IgnoreManager",
+    pattern_analyzer: "PatternAnalyzer | None",
+    recent_errors_buffer: "RecentErrorsBuffer",
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for ignore similar button callback handler."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        data = callback.data or ""
+        parts = data.split(":", 2)
+        if len(parts) < 3:
+            await callback.answer("Invalid callback data")
+            return
+
+        _, container, error_preview = parts
+
+        # Get full error from recent buffer
+        recent = recent_errors_buffer.get_recent(container)
+        full_error = None
+        for error in recent:
+            if error.startswith(error_preview):
+                full_error = error
+                break
+
+        if not full_error:
+            full_error = error_preview
+
+        # Analyze with Haiku if available
+        if pattern_analyzer:
+            result = await pattern_analyzer.analyze_error(
+                container=container,
+                error_message=full_error,
+                recent_logs=recent,
+            )
+
+            if result:
+                ignore_manager.add_ignore_pattern(
+                    container=container,
+                    pattern=result["pattern"],
+                    match_type=result["match_type"],
+                    explanation=result["explanation"],
+                )
+                await callback.message.answer(
+                    f"✅ Ignoring: {result['explanation']}\n"
+                    f"Pattern: `{result['pattern']}`",
+                    parse_mode="Markdown",
+                )
+                await callback.answer("Pattern added")
+                return
+
+        # Fallback to substring
+        ignore_manager.add_ignore(container, full_error)
+        display = full_error[:60] + "..." if len(full_error) > 60 else full_error
+        await callback.message.answer(
+            f"✅ Ignoring: `{display}`",
+            parse_mode="Markdown",
+        )
+        await callback.answer("Added to ignore list")
 
     return handler
