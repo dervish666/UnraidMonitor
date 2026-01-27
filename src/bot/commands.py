@@ -17,13 +17,17 @@ HELP_TEXT = """📋 *Commands*
 *Unraid Server*
 /server [detailed] • /array • /disks
 
-*Alerts*
+*Memory Management*
+/cancel-kill • Cancel pending container kill
+
+*Alerts & Ignores*
 /mute <name> <dur> • /unmute <name>
 /mute-server • /mute-array + unmute
 /mutes • /ignore • /ignores
 
 _Partial names work: /status rad → radarr_
-_Reply /diagnose to crash alerts for AI analysis_"""
+_Reply /diagnose to crash alerts for AI analysis_
+_Click "Ignore Similar" on alerts for smart patterns_"""
 
 
 def help_command(state: ContainerStateManager) -> Callable[[Message], Awaitable[None]]:
