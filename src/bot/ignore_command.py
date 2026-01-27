@@ -170,10 +170,12 @@ def ignores_command(
             ignores = ignore_manager.get_all_ignores(container)
             if ignores:
                 lines.append(f"{container} ({len(ignores)}):")
-                for pattern, source in ignores:
+                for pattern, source, explanation in ignores:
                     display = pattern[:50] + "..." if len(pattern) > 50 else pattern
                     source_tag = " (config)" if source == "config" else ""
-                    lines.append(f"  • {display}{source_tag}")
+                    lines.append(f"  * {display}{source_tag}")
+                    if explanation:
+                        lines.append(f"    ({explanation})")
                 lines.append("")
 
         lines.append("Use /ignore to add more")
