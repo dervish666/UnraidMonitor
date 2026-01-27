@@ -7,6 +7,7 @@ from aiogram.types import Message
 if TYPE_CHECKING:
     from src.alerts.recent_errors import RecentErrorsBuffer
     from src.alerts.ignore_manager import IgnoreManager
+    from src.analysis.pattern_analyzer import PatternAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ def ignore_command(
 def ignore_selection_handler(
     ignore_manager: "IgnoreManager",
     selection_state: "IgnoreSelectionState",
+    pattern_analyzer: "PatternAnalyzer | None" = None,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for ignore selection follow-up handler."""
 
@@ -126,18 +128,40 @@ def ignore_selection_handler(
         # Only clear pending selection after successful parse
         selection_state.clear_pending(user_id)
 
-        # Add ignores
+        # Process each selected error
         added = []
         for i in indices:
             error = errors[i]
+
+            # Try to analyze with Haiku
+            if pattern_analyzer is not None:
+                result = await pattern_analyzer.analyze_error(
+                    container=container,
+                    error_message=error,
+                    recent_logs=[],  # Could pass more context here
+                )
+
+                if result:
+                    if ignore_manager.add_ignore_pattern(
+                        container=container,
+                        pattern=result["pattern"],
+                        match_type=result["match_type"],
+                        explanation=result["explanation"],
+                    ):
+                        added.append((result["pattern"], result["explanation"]))
+                    continue
+
+            # Fallback to simple substring
             if ignore_manager.add_ignore(container, error):
-                added.append(error)
+                added.append((error, ""))
 
         if added:
             lines = [f"✅ *Ignored for {container}:*\n"]
-            for error in added:
-                display = error[:60] + "..." if len(error) > 60 else error
-                lines.append(f"  • {display}")
+            for pattern, explanation in added:
+                display = pattern[:60] + "..." if len(pattern) > 60 else pattern
+                lines.append(f"  • `{display}`")
+                if explanation:
+                    lines.append(f"    _{explanation}_")
             await message.answer("\n".join(lines), parse_mode="Markdown")
         else:
             await message.answer("Those errors are already ignored.")
