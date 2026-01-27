@@ -25,6 +25,12 @@ from src.bot.ignore_command import (
     IgnoreSelectionState,
     ignore_similar_callback,
 )
+from src.bot.alert_callbacks import (
+    restart_callback,
+    logs_callback,
+    diagnose_callback,
+    mute_callback,
+)
 from src.bot.memory_commands import cancel_kill_command
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
 from src.bot.resources_command import resources_command
@@ -239,6 +245,25 @@ def register_commands(
             dp.callback_query.register(
                 ignore_similar_callback(ignore_manager, pattern_analyzer, recent_errors_buffer),
                 F.data.startswith("ignore_similar:"),
+            )
+
+        # Register alert action button callbacks
+        dp.callback_query.register(
+            restart_callback(state, controller),
+            F.data.startswith("restart:"),
+        )
+        dp.callback_query.register(
+            logs_callback(state, docker_client),
+            F.data.startswith("logs:"),
+        )
+        dp.callback_query.register(
+            diagnose_callback(state, diagnostic_service),
+            F.data.startswith("diagnose:"),
+        )
+        if mute_manager is not None:
+            dp.callback_query.register(
+                mute_callback(state, mute_manager),
+                F.data.startswith("mute:"),
             )
 
         # Register /mute, /mutes, /unmute commands

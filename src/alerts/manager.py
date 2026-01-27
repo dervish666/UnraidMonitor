@@ -46,7 +46,7 @@ class AlertManager:
         image: str,
         uptime_seconds: int | None = None,
     ) -> None:
-        """Send a container crash alert."""
+        """Send a container crash alert with quick action buttons."""
         uptime_str = format_uptime(uptime_seconds) if uptime_seconds else "unknown"
 
         # Interpret common exit codes
@@ -62,16 +62,29 @@ class AlertManager:
 
 Exit code: {exit_code}{exit_reason}
 Image: `{image}`
-Uptime: {uptime_str}
+Uptime: {uptime_str}"""
 
-/status {container_name} - View details
-/logs {container_name} - View recent logs"""
+        # Quick action buttons
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🔄 Restart", callback_data=f"restart:{container_name}"),
+                    InlineKeyboardButton(text="📋 Logs", callback_data=f"logs:{container_name}:50"),
+                    InlineKeyboardButton(text="🔍 Diagnose", callback_data=f"diagnose:{container_name}"),
+                ],
+                [
+                    InlineKeyboardButton(text="🔕 Mute 1h", callback_data=f"mute:{container_name}:60"),
+                    InlineKeyboardButton(text="🔕 Mute 24h", callback_data=f"mute:{container_name}:1440"),
+                ],
+            ]
+        )
 
         try:
             await self.bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
                 parse_mode="Markdown",
+                reply_markup=keyboard,
             )
             logger.info(f"Sent crash alert for {container_name}")
         except Exception as e:
@@ -104,10 +117,8 @@ Latest: `{display_error}`
 
 /logs {container_name} 50 - View last 50 lines"""
 
-        # Create inline keyboard with ignore button
+        # Create inline keyboard with quick action buttons
         # Truncate error in callback data (max 64 bytes for callback_data)
-        # Format: ignore_similar:container:error_preview
-        # Reserve space for prefix and container name
         prefix = f"ignore_similar:{container_name}:"
         max_error_len = 64 - len(prefix)
         error_preview = error_line[:max_error_len] if len(error_line) > max_error_len else error_line
@@ -115,11 +126,13 @@ Latest: `{display_error}`
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(
-                        text="🔇 Ignore Similar",
-                        callback_data=f"{prefix}{error_preview}",
-                    )
-                ]
+                    InlineKeyboardButton(text="🔇 Ignore Similar", callback_data=f"{prefix}{error_preview}"),
+                    InlineKeyboardButton(text="🔕 Mute 1h", callback_data=f"mute:{container_name}:60"),
+                ],
+                [
+                    InlineKeyboardButton(text="📋 Logs", callback_data=f"logs:{container_name}:50"),
+                    InlineKeyboardButton(text="🔍 Diagnose", callback_data=f"diagnose:{container_name}"),
+                ],
             ]
         )
 
@@ -178,15 +191,28 @@ Latest: `{display_error}`
 {primary}
 Exceeded for: {duration_str}
 
-{secondary}
+{secondary}"""
 
-_Use /resources {container_name} or /diagnose {container_name} for details_"""
+        # Quick action buttons
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="📋 Logs", callback_data=f"logs:{container_name}:50"),
+                    InlineKeyboardButton(text="🔍 Diagnose", callback_data=f"diagnose:{container_name}"),
+                ],
+                [
+                    InlineKeyboardButton(text="🔕 Mute 1h", callback_data=f"mute:{container_name}:60"),
+                    InlineKeyboardButton(text="🔕 Mute 24h", callback_data=f"mute:{container_name}:1440"),
+                ],
+            ]
+        )
 
         try:
             await self.bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
                 parse_mode="Markdown",
+                reply_markup=keyboard,
             )
             logger.info(f"Sent resource alert for {container_name} ({metric})")
         except Exception as e:
