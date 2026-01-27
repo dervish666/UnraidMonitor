@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -281,3 +282,77 @@ class AppConfig:
     def memory_management(self) -> MemoryConfig:
         """Get memory management configuration."""
         return MemoryConfig.from_dict(self._yaml_config.get("memory_management", {}))
+
+
+DEFAULT_CONFIG_TEMPLATE = '''# Unraid Monitor Bot Configuration
+# Generated automatically on first run
+
+monitoring:
+  health_check_interval: 60  # seconds
+
+# Containers to ignore (won't be monitored or shown)
+ignored_containers: []
+
+# Containers that cannot be controlled via Telegram
+protected_containers:
+  - unraid-monitor-bot
+
+# Log watching configuration
+log_watching:
+  containers: []  # Add container names to watch
+  error_patterns:
+    - "error"
+    - "exception"
+    - "fatal"
+    - "failed"
+    - "critical"
+  ignore_patterns:
+    - "DeprecationWarning"
+    - "DEBUG"
+  cooldown_seconds: 900
+
+# Memory pressure management
+memory_management:
+  enabled: false
+  warning_threshold: 90
+  critical_threshold: 95
+  safe_threshold: 80
+  kill_delay_seconds: 60
+  stabilization_wait: 180
+  priority_containers: []
+  killable_containers: []
+
+# Unraid server monitoring
+unraid:
+  enabled: false
+  host: "192.168.0.190"
+  port: 443
+  use_ssl: true
+  verify_ssl: false
+  polling:
+    system: 30
+    array: 300
+    ups: 60
+  thresholds:
+    cpu_temp: 80
+    cpu_usage: 95
+    memory_usage: 90
+    disk_temp: 50
+    array_usage: 85
+    ups_battery: 30
+'''
+
+
+def generate_default_config(config_path: str) -> bool:
+    """Generate default config file if it doesn't exist.
+
+    Returns True if config was created, False if it already existed.
+    """
+    path = Path(config_path)
+
+    if path.exists():
+        return False
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(DEFAULT_CONFIG_TEMPLATE)
+    return True
