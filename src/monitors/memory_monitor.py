@@ -86,3 +86,56 @@ class MemoryMonitor:
             logger.warning(f"Container {name} not found when trying to stop")
         except Exception as e:
             logger.error(f"Failed to stop container {name}: {e}")
+
+    async def _check_memory(self) -> None:
+        """Check memory and handle state transitions."""
+        percent = self.get_memory_percent()
+
+        if self._state == MemoryState.NORMAL:
+            if percent >= self._config.critical_threshold:
+                self._state = MemoryState.CRITICAL
+                await self._handle_critical(percent)
+            elif percent >= self._config.warning_threshold:
+                self._state = MemoryState.WARNING
+                await self._handle_warning(percent)
+
+        elif self._state == MemoryState.WARNING:
+            if percent >= self._config.critical_threshold:
+                self._state = MemoryState.CRITICAL
+                await self._handle_critical(percent)
+            elif percent < self._config.warning_threshold:
+                self._state = MemoryState.NORMAL
+                logger.info("Memory returned to normal levels")
+
+        elif self._state == MemoryState.CRITICAL:
+            if percent < self._config.warning_threshold:
+                if self._killed_containers:
+                    self._state = MemoryState.RECOVERING
+                else:
+                    self._state = MemoryState.NORMAL
+
+        elif self._state == MemoryState.RECOVERING:
+            if percent <= self._config.safe_threshold and self._killed_containers:
+                container = self._killed_containers[0]
+                await self._on_ask_restart(container)
+
+    async def _handle_warning(self, percent: float) -> None:
+        """Handle warning state - notify user."""
+        killable = ", ".join(self._config.killable_containers) or "none configured"
+        message = f"Memory at {percent:.0f}%. Killable containers: {killable}"
+        await self._on_alert("Memory Warning", message)
+
+    async def _handle_critical(self, percent: float) -> None:
+        """Handle critical state - prepare to kill."""
+        next_kill = self._get_next_killable()
+        if next_kill:
+            self._pending_kill = next_kill
+            message = (
+                f"Memory critical ({percent:.0f}%). "
+                f"Will stop {next_kill} in {self._config.kill_delay_seconds} seconds "
+                f"to protect priority services. Reply /cancel-kill to abort"
+            )
+            await self._on_alert("Memory Critical", message)
+        else:
+            message = f"Memory critical ({percent:.0f}%) but no killable containers available!"
+            await self._on_alert("Memory Critical - No Action Available", message)

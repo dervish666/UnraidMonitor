@@ -174,3 +174,85 @@ class TestContainerControl:
 
         container.stop.assert_called_once()
         assert "bitmagnet" in monitor._killed_containers
+
+
+class TestStateMachine:
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_normal_to_warning(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=91.0)
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        await monitor._check_memory()
+
+        assert monitor._state == MemoryState.WARNING
+        mock_on_alert.assert_called_once()
+        assert "91" in mock_on_alert.call_args[0][1]
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_warning_to_critical(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=96.0)
+        mock_docker_client.containers.list.return_value = []
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._state = MemoryState.WARNING
+
+        await monitor._check_memory()
+
+        assert monitor._state == MemoryState.CRITICAL
+        mock_on_alert.assert_called()
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_returns_to_normal_below_warning(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=85.0)
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._state = MemoryState.WARNING
+
+        await monitor._check_memory()
+
+        assert monitor._state == MemoryState.NORMAL
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_recovering_asks_restart_when_safe(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=75.0)
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._state = MemoryState.RECOVERING
+        monitor._killed_containers = ["bitmagnet"]
+
+        await monitor._check_memory()
+
+        mock_on_ask_restart.assert_called_once_with("bitmagnet")
