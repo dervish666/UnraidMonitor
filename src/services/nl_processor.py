@@ -33,3 +33,28 @@ class ConversationMemory:
         """Clear all messages and pending action."""
         self.messages = []
         self.pending_action = None
+
+
+class MemoryStore:
+    """Stores conversation memories for all users."""
+
+    def __init__(self, max_exchanges: int = 5):
+        self._memories: dict[int, ConversationMemory] = {}
+        self._max_exchanges = max_exchanges
+
+    def get_or_create(self, user_id: int) -> ConversationMemory:
+        """Get existing memory or create new one for user."""
+        if user_id not in self._memories:
+            self._memories[user_id] = ConversationMemory(
+                user_id=user_id,
+                max_exchanges=self._max_exchanges,
+            )
+        return self._memories[user_id]
+
+    def get(self, user_id: int) -> ConversationMemory | None:
+        """Get memory for user if it exists."""
+        return self._memories.get(user_id)
+
+    def clear_user(self, user_id: int) -> None:
+        """Remove memory for a user."""
+        self._memories.pop(user_id, None)

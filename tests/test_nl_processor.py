@@ -1,7 +1,7 @@
 # tests/test_nl_processor.py
 import pytest
 from datetime import datetime
-from src.services.nl_processor import ConversationMemory
+from src.services.nl_processor import ConversationMemory, MemoryStore
 
 
 class TestConversationMemory:
@@ -57,3 +57,33 @@ class TestConversationMemory:
         memory.clear()
 
         assert memory.pending_action is None
+
+
+class TestMemoryStore:
+    def test_get_or_create_creates_new_memory(self):
+        store = MemoryStore()
+        memory = store.get_or_create(123)
+
+        assert memory.user_id == 123
+        assert len(memory.messages) == 0
+
+    def test_get_or_create_returns_existing_memory(self):
+        store = MemoryStore()
+        memory1 = store.get_or_create(123)
+        memory1.add_exchange("q", "a")
+
+        memory2 = store.get_or_create(123)
+
+        assert memory2 is memory1
+        assert len(memory2.messages) == 2
+
+    def test_get_returns_none_for_unknown_user(self):
+        store = MemoryStore()
+        assert store.get(999) is None
+
+    def test_clear_user_removes_memory(self):
+        store = MemoryStore()
+        store.get_or_create(123)
+        store.clear_user(123)
+
+        assert store.get(123) is None
