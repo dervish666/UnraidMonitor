@@ -46,11 +46,13 @@ class TestMemoryConfig:
 class TestAppConfigMemory:
     def test_app_config_has_memory_management(self):
         from unittest.mock import MagicMock
-        from src.config import AppConfig
+        from src.config import AppConfig, MemoryConfig as MC
 
         settings = MagicMock()
         settings.config_path = "config/config.yaml"
 
         config = AppConfig(settings)
         assert hasattr(config, "memory_management")
-        assert isinstance(config.memory_management, MemoryConfig)
+        # Use class name comparison to avoid pytest module isolation issues
+        assert type(config.memory_management).__name__ == "MemoryConfig"
+        assert isinstance(config.memory_management, MC)

@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.filters import Command, Filter
@@ -18,6 +18,7 @@ from src.bot.control_commands import (
 from src.bot.confirmation import ConfirmationManager
 from src.bot.diagnose_command import diagnose_command
 from src.bot.ignore_command import ignore_command, ignores_command, ignore_selection_handler, IgnoreSelectionState
+from src.bot.memory_commands import cancel_kill_command
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
 from src.bot.resources_command import resources_command
 from src.bot.unraid_commands import (
@@ -31,6 +32,9 @@ from src.bot.unraid_commands import (
 )
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
+
+if TYPE_CHECKING:
+    from src.monitors.memory_monitor import MemoryMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +151,7 @@ def register_commands(
     unraid_system_monitor: Any | None = None,
     server_mute_manager: Any | None = None,
     array_mute_manager: Any | None = None,
+    memory_monitor: "MemoryMonitor | None" = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -263,6 +268,12 @@ def register_commands(
                 unmute_array_command(array_mute_manager),
                 Command("unmute-array"),
             )
+
+        # Register memory commands
+        dp.message.register(
+            cancel_kill_command(memory_monitor),
+            Command("cancel-kill"),
+        )
 
         return confirmation, diagnostic_service
 
