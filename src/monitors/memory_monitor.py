@@ -180,3 +180,38 @@ class MemoryMonitor:
     def get_pending_kill(self) -> str | None:
         """Get the name of the container pending kill, if any."""
         return self._pending_kill
+
+    async def confirm_restart(self, name: str) -> bool:
+        """Confirm restart of a killed container.
+
+        Returns True if container was started successfully.
+        """
+        if name not in self._killed_containers:
+            return False
+
+        try:
+            container = self._docker.containers.get(name)
+            container.start()
+            self._killed_containers.remove(name)
+            logger.info(f"Restarted container {name}")
+
+            if not self._killed_containers:
+                self._state = MemoryState.NORMAL
+
+            return True
+        except Exception as e:
+            logger.error(f"Failed to restart container {name}: {e}")
+            return False
+
+    async def decline_restart(self, name: str) -> None:
+        """Decline restart of a killed container."""
+        if name in self._killed_containers:
+            self._killed_containers.remove(name)
+            logger.info(f"User declined restart of {name}")
+
+        if not self._killed_containers:
+            self._state = MemoryState.NORMAL
+
+    def get_killed_containers(self) -> list[str]:
+        """Get list of containers killed in this pressure event."""
+        return self._killed_containers.copy()

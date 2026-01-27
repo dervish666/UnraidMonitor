@@ -340,3 +340,60 @@ class TestKillCountdown:
         result = monitor.cancel_pending_kill()
 
         assert result is False
+
+
+class TestRestartHandling:
+    @pytest.mark.asyncio
+    async def test_confirm_restart_starts_container(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        container = MagicMock()
+        mock_docker_client.containers.get.return_value = container
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._killed_containers = ["bitmagnet", "obsidian"]
+        monitor._state = MemoryState.RECOVERING
+
+        await monitor.confirm_restart("bitmagnet")
+
+        container.start.assert_called_once()
+        assert "bitmagnet" not in monitor._killed_containers
+        assert "obsidian" in monitor._killed_containers
+
+    @pytest.mark.asyncio
+    async def test_decline_restart_removes_from_list(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._killed_containers = ["bitmagnet"]
+        monitor._state = MemoryState.RECOVERING
+
+        await monitor.decline_restart("bitmagnet")
+
+        assert "bitmagnet" not in monitor._killed_containers
+        assert monitor._state == MemoryState.NORMAL
+
+    def test_get_killed_containers(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._killed_containers = ["bitmagnet", "obsidian"]
+
+        result = monitor.get_killed_containers()
+
+        assert result == ["bitmagnet", "obsidian"]
