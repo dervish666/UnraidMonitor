@@ -7,11 +7,17 @@ A Telegram bot for monitoring Docker containers on Unraid servers. Get real-time
 - **Container Status** - Overview of all running/stopped containers
 - **Resource Monitoring** - CPU/memory usage with threshold alerts
 - **Log Watching** - Automatic alerts when errors appear in container logs
-- **Crash Alerts** - Instant notifications when containers crash
+- **Crash Alerts** - Instant notifications when containers crash with quick action buttons
 - **AI Diagnostics** - Claude-powered log analysis for troubleshooting
+- **Smart Ignore Patterns** - AI-generated patterns to filter known errors
 - **Container Control** - Start, stop, restart, and pull containers remotely
+- **Unraid Server Monitoring** - Temperature, memory, UPS status, and array health
+- **Memory Pressure Management** - Automatic container priority handling during memory pressure
+- **Mute System** - Temporarily silence alerts per container, server metrics, or array
 
 ## Commands
+
+### Container Commands
 
 | Command | Description |
 |---------|-------------|
@@ -25,6 +31,35 @@ A Telegram bot for monitoring Docker containers on Unraid servers. Get real-time
 | `/stop <name>` | Stop a container |
 | `/start <name>` | Start a container |
 | `/pull <name>` | Pull latest image and recreate |
+
+### Unraid Server Commands
+
+| Command | Description |
+|---------|-------------|
+| `/server` | Server overview (CPU, memory, temps) |
+| `/server detailed` | Full server metrics including per-core temps |
+| `/array` | Array status and disk health |
+| `/disks` | Detailed disk information |
+
+### Alert Management
+
+| Command | Description |
+|---------|-------------|
+| `/mute <name> <duration>` | Mute container alerts (e.g., `/mute plex 2h`) |
+| `/unmute <name>` | Unmute a container |
+| `/mute-server <duration>` | Mute server alerts |
+| `/unmute-server` | Unmute server alerts |
+| `/mute-array <duration>` | Mute array alerts |
+| `/unmute-array` | Unmute array alerts |
+| `/mutes` | Show all active mutes |
+| `/ignore` | Show recent errors to create ignore patterns |
+| `/ignores` | List all ignore patterns |
+| `/cancel-kill` | Cancel pending memory pressure container kill |
+
+### Other
+
+| Command | Description |
+|---------|-------------|
 | `/help` | Show help message |
 
 Partial container names work: `/status rad` matches `radarr`
@@ -50,8 +85,11 @@ Create a `.env` file:
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 TELEGRAM_ALLOWED_USERS=123456789
 
-# Optional: Enable AI diagnostics
+# Optional: Enable AI diagnostics and smart ignore patterns
 ANTHROPIC_API_KEY=your_api_key_here
+
+# Optional: Enable Unraid server monitoring
+UNRAID_API_KEY=your_unraid_api_key_here
 ```
 
 ### 4. Configure Settings (Optional)
@@ -99,6 +137,36 @@ resource_monitoring:
       memory_percent: 90
     qbit:
       cpu_percent: 95
+
+# Memory pressure management
+memory_management:
+  enabled: true
+  poll_interval_seconds: 30
+  warning_threshold_percent: 85
+  critical_threshold_percent: 95
+  recovery_threshold_percent: 80
+  kill_delay_seconds: 60  # Time to cancel before killing
+
+  # Containers to kill during memory pressure (lowest priority first)
+  killable_containers:
+    - handbrake
+    - tdarr
+
+# Unraid server monitoring
+unraid:
+  enabled: true
+  host: "192.168.1.100"
+  port: 443
+  use_ssl: true
+  verify_ssl: false
+  poll_interval_seconds: 60
+
+  # Alert thresholds
+  cpu_temp_warning: 70
+  cpu_temp_critical: 85
+  memory_warning_percent: 85
+  array_temp_warning: 45
+  array_temp_critical: 55
 ```
 
 ### 5. Run with Docker
@@ -182,6 +250,8 @@ On first run, a default `config.yaml` is created automatically.
 
 ## Alert Examples
 
+All alerts include quick action buttons for instant response.
+
 ### Crash Alert
 ```
 🔴 CONTAINER CRASHED: radarr
@@ -190,8 +260,8 @@ Exit code: 137 (OOM killed)
 Image: linuxserver/radarr:latest
 Uptime: 2h 34m
 
-/status radarr - View details
-/logs radarr - View recent logs
+[🔄 Restart] [📋 Logs] [🔍 Diagnose]
+[🔕 Mute 1h] [🔕 Mute 24h]
 ```
 
 ### Resource Alert
@@ -204,7 +274,8 @@ Exceeded for: 3 minutes
 
 CPU: 45% (normal)
 
-Use /resources plex or /diagnose plex for details
+[📋 Logs] [🔍 Diagnose]
+[🔕 Mute 1h] [🔕 Mute 24h]
 ```
 
 ### Log Error Alert
@@ -215,8 +286,11 @@ Found 3 errors in the last 15 minutes
 
 Latest: Database connection failed: timeout
 
-/logs sonarr 50 - View last 50 lines
+[🔇 Ignore Similar] [🔕 Mute 1h]
+[📋 Logs] [🔍 Diagnose]
 ```
+
+The "Ignore Similar" button uses AI to generate smart patterns that match similar errors without catching unrelated messages.
 
 ## Requirements
 
