@@ -124,7 +124,8 @@ async def test_ignore_selection_saves_ignore():
 
     message.answer.assert_called_once()
     response = message.answer.call_args[0][0]
-    assert "Ignored for plex" in response
+    assert "plex" in response
+    assert "ignored" in response.lower()
     assert "Error message 1" in response
 
     # Verify it was saved
@@ -193,3 +194,73 @@ def test_ignore_commands_in_help():
 
     assert "/ignore" in HELP_TEXT
     assert "/ignores" in HELP_TEXT
+
+
+class TestExtractPatternFromLog:
+    """Test timestamp stripping from log lines."""
+
+    def test_iso_timestamp(self):
+        """Test ISO format timestamps are stripped."""
+        from src.bot.ignore_command import extract_pattern_from_log
+
+        line = "2024-01-27T10:30:45.123456Z ERROR: Connection failed"
+        result = extract_pattern_from_log(line)
+        assert result == "ERROR: Connection failed"
+
+    def test_iso_timestamp_with_timezone(self):
+        """Test ISO format with timezone offset."""
+        from src.bot.ignore_command import extract_pattern_from_log
+
+        line = "2024-01-27T10:30:45+00:00 ERROR: Connection failed"
+        result = extract_pattern_from_log(line)
+        assert result == "ERROR: Connection failed"
+
+    def test_bracketed_datetime(self):
+        """Test bracketed datetime format."""
+        from src.bot.ignore_command import extract_pattern_from_log
+
+        line = "[2024-01-27 10:30:45] ERROR: Connection failed"
+        result = extract_pattern_from_log(line)
+        assert result == "ERROR: Connection failed"
+
+    def test_simple_datetime(self):
+        """Test simple datetime format."""
+        from src.bot.ignore_command import extract_pattern_from_log
+
+        line = "2024-01-27 10:30:45 ERROR: Connection failed"
+        result = extract_pattern_from_log(line)
+        assert result == "ERROR: Connection failed"
+
+    def test_time_only(self):
+        """Test time-only prefix."""
+        from src.bot.ignore_command import extract_pattern_from_log
+
+        line = "10:30:45 ERROR: Connection failed"
+        result = extract_pattern_from_log(line)
+        assert result == "ERROR: Connection failed"
+
+    def test_no_timestamp(self):
+        """Test line without timestamp is unchanged."""
+        from src.bot.ignore_command import extract_pattern_from_log
+
+        line = "ERROR: Connection failed to database"
+        result = extract_pattern_from_log(line)
+        assert result == "ERROR: Connection failed to database"
+
+    def test_preserves_meaningful_content_if_stripped_too_short(self):
+        """Test that we don't strip too much."""
+        from src.bot.ignore_command import extract_pattern_from_log
+
+        # If stripping leaves less than 10 chars, use original
+        line = "2024-01-27T10:30:45Z Error"
+        result = extract_pattern_from_log(line)
+        # "Error" is only 5 chars, so original should be used
+        assert result == "2024-01-27T10:30:45Z Error"
+
+    def test_whitespace_handling(self):
+        """Test whitespace is trimmed."""
+        from src.bot.ignore_command import extract_pattern_from_log
+
+        line = "  2024-01-27T10:30:45Z   ERROR: Connection failed  "
+        result = extract_pattern_from_log(line)
+        assert result == "ERROR: Connection failed"

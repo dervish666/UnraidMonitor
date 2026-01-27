@@ -13,6 +13,45 @@ logger = logging.getLogger(__name__)
 # Pattern to extract container name from error alert
 ALERT_PATTERN = re.compile(r"ERRORS IN[:\s]+(\w+)", re.IGNORECASE)
 
+# Common timestamp patterns to strip from log lines
+TIMESTAMP_PATTERNS = [
+    # ISO format: 2024-01-27T10:30:45.123456Z or with timezone
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s*",
+    # Bracketed datetime: [2024-01-27 10:30:45] or [2024/01/27 10:30:45]
+    r"^\[\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\]\s*",
+    # Date time: 2024-01-27 10:30:45 or 2024/01/27 10:30:45
+    r"^\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s*",
+    # Bracketed time only: [10:30:45]
+    r"^\[\d{2}:\d{2}:\d{2}(?:\.\d+)?\]\s*",
+    # Time only at start: 10:30:45
+    r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+",
+]
+
+# Compiled pattern combining all timestamp formats
+TIMESTAMP_RE = re.compile("|".join(f"({p})" for p in TIMESTAMP_PATTERNS))
+
+
+def extract_pattern_from_log(log_line: str) -> str:
+    """Extract meaningful pattern from log line by stripping timestamps.
+
+    Removes common timestamp prefixes so the ignore pattern matches
+    future log lines regardless of when they occur.
+    """
+    # Strip leading/trailing whitespace
+    result = log_line.strip()
+
+    # Remove timestamp prefix if present
+    result = TIMESTAMP_RE.sub("", result)
+
+    # Strip again in case timestamp removal left leading whitespace
+    result = result.strip()
+
+    # If we stripped everything or almost everything, use original
+    if len(result) < 10 and len(log_line.strip()) > 10:
+        return log_line.strip()
+
+    return result if result else log_line.strip()
+
 
 def extract_container_from_alert(text: str) -> str | None:
     """Extract container name from error alert message."""
@@ -70,18 +109,21 @@ def ignore_command(
             await message.answer(f"No recent errors found for {container}.")
             return
 
-        # Build numbered list
-        lines = [f"🔇 *Recent errors in {container}* (last 15 min):\n"]
-        for i, error in enumerate(recent_errors, 1):
-            # Truncate long errors
-            display = error[:80] + "..." if len(error) > 80 else error
-            lines.append(f"`{i}.` {display}")
+        # Extract patterns from raw log lines
+        extracted_patterns = [extract_pattern_from_log(e) for e in recent_errors]
+
+        # Build numbered list showing the patterns that will be matched
+        lines = [f"🔇 Recent errors in {container} (last 15 min):\n"]
+        for i, pattern in enumerate(extracted_patterns, 1):
+            # Truncate long patterns for display
+            display = pattern[:80] + "..." if len(pattern) > 80 else pattern
+            lines.append(f"{i}. {display}")
 
         lines.append("")
-        lines.append('_Reply with numbers to ignore (e.g., "1,3" or "all")_')
+        lines.append("Reply with numbers to ignore (e.g. \"1,3\" or \"all\")")
 
-        # Store pending selection
-        selection_state.set_pending(user_id, container, recent_errors)
+        # Store extracted patterns (not raw logs) for selection
+        selection_state.set_pending(user_id, container, extracted_patterns)
 
         await message.answer("\n".join(lines), parse_mode="Markdown")
 
@@ -134,11 +176,14 @@ def ignore_selection_handler(
                 added.append(error)
 
         if added:
-            lines = [f"✅ *Ignored for {container}:*\n"]
-            for error in added:
-                display = error[:60] + "..." if len(error) > 60 else error
-                lines.append(f"  • {display}")
-            await message.answer("\n".join(lines), parse_mode="Markdown")
+            lines = [f"✅ {container}: {len(added)} pattern(s) ignored\n"]
+            for pattern in added:
+                # Show the pattern that will be matched (truncate if very long)
+                display = pattern[:80] + "..." if len(pattern) > 80 else pattern
+                lines.append(f"  \"{display}\"")
+            lines.append("")
+            lines.append("Logs containing these strings will be hidden.")
+            await message.answer("\n".join(lines))
         else:
             await message.answer("Those errors are already ignored.")
 
