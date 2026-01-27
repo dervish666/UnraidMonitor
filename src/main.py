@@ -1,10 +1,11 @@
 import asyncio
 import logging
+import os
 import sys
 
 import anthropic
 
-from src.config import Settings, AppConfig
+from src.config import Settings, AppConfig, generate_default_config
 from src.state import ContainerStateManager
 from src.monitors.docker_events import DockerEventMonitor
 from src.monitors.log_watcher import LogWatcher
@@ -57,6 +58,12 @@ class AlertManagerProxy:
 
 
 async def main() -> None:
+    # Check for first run and generate default config if needed
+    config_path = os.environ.get("CONFIG_PATH", "config/config.yaml")
+    first_run = generate_default_config(config_path)
+    if first_run:
+        logger.info(f"Created default config at {config_path}")
+
     # Load configuration
     try:
         settings = Settings()
@@ -293,6 +300,22 @@ async def main() -> None:
             logger.error(f"Failed to connect to Unraid: {e}")
 
     logger.info("Starting Telegram bot...")
+
+    # Send first-run welcome message if needed
+    if first_run:
+        async def send_welcome():
+            await asyncio.sleep(5)  # Wait for chat_id to be available
+            chat_id = chat_id_store.get_chat_id()
+            if chat_id:
+                await bot.send_message(
+                    chat_id,
+                    "👋 *First run!* Default config created.\n\n"
+                    "Edit `/app/config/config.yaml` to customize settings.\n"
+                    "Use /help to get started.",
+                    parse_mode="Markdown",
+                )
+
+        asyncio.create_task(send_welcome())
 
     try:
         # Run bot until shutdown (aiogram handles SIGINT/SIGTERM)
