@@ -1,0 +1,69 @@
+"""Tests for memory pressure monitor."""
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from src.monitors.memory_monitor import MemoryMonitor, MemoryState
+from src.config import MemoryConfig
+
+
+@pytest.fixture
+def memory_config():
+    return MemoryConfig(
+        enabled=True,
+        warning_threshold=90,
+        critical_threshold=95,
+        safe_threshold=80,
+        kill_delay_seconds=60,
+        stabilization_wait=180,
+        priority_containers=["plex"],
+        killable_containers=["bitmagnet", "obsidian"],
+    )
+
+
+@pytest.fixture
+def mock_docker_client():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_on_alert():
+    return AsyncMock()
+
+
+@pytest.fixture
+def mock_on_ask_restart():
+    return AsyncMock()
+
+
+class TestMemoryMonitor:
+    def test_init(self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart):
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        assert monitor._config == memory_config
+        assert monitor._state == MemoryState.NORMAL
+        assert monitor._killed_containers == []
+        assert not monitor._running
+
+    def test_is_enabled(self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart):
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        assert monitor.is_enabled() is True
+
+    def test_is_disabled(self, mock_docker_client, mock_on_alert, mock_on_ask_restart):
+        config = MemoryConfig.from_dict({"enabled": False})
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        assert monitor.is_enabled() is False
