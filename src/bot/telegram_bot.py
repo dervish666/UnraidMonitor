@@ -174,6 +174,7 @@ def register_commands(
     array_mute_manager: Any | None = None,
     memory_monitor: "MemoryMonitor | None" = None,
     pattern_analyzer: Any | None = None,
+    nl_processor: Any | None = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -321,6 +322,26 @@ def register_commands(
             cancel_kill_command(memory_monitor),
             Command("cancel-kill"),
         )
+
+        # Register natural language handler (must be last - catches all non-commands)
+        if nl_processor is not None and controller is not None:
+            from src.bot.nl_handler import NLFilter, create_nl_handler, create_nl_confirm_callback, create_nl_cancel_callback
+
+            # Register NL confirmation callbacks
+            dp.callback_query.register(
+                create_nl_confirm_callback(nl_processor, controller),
+                F.data.startswith("nl_confirm:"),
+            )
+            dp.callback_query.register(
+                create_nl_cancel_callback(nl_processor),
+                F.data == "nl_cancel",
+            )
+
+            # Register NL message handler (catches all non-command text)
+            dp.message.register(
+                create_nl_handler(nl_processor),
+                NLFilter(),
+            )
 
         return confirmation, diagnostic_service
 

@@ -254,6 +254,26 @@ async def main() -> None:
         )
         logger.info("Memory monitoring enabled")
 
+    # Create NL processor if enabled
+    nl_processor = None
+    if anthropic_client and monitor._client:
+        from src.services.nl_processor import NLProcessor
+        from src.services.nl_tools import NLToolExecutor
+
+        nl_executor = NLToolExecutor(
+            state=state,
+            docker_client=monitor._client,
+            protected_containers=config.protected_containers,
+            controller=None,  # Will be set after register_commands
+            resource_monitor=resource_monitor,
+            recent_errors_buffer=recent_errors_buffer,
+            unraid_system_monitor=unraid_system_monitor,
+        )
+        nl_processor = NLProcessor(
+            anthropic_client=anthropic_client,
+            tool_executor=nl_executor,
+        )
+
     # Register commands with docker client for /logs
     confirmation, diagnostic_service = register_commands(
         dp,
@@ -270,7 +290,15 @@ async def main() -> None:
         array_mute_manager=array_mute_manager,
         memory_monitor=memory_monitor,
         pattern_analyzer=pattern_analyzer,
+        nl_processor=nl_processor,
     )
+
+    # Set controller on NL executor after register_commands creates it
+    if nl_processor and confirmation:
+        # Create controller for NL executor
+        from src.services.container_control import ContainerController
+        nl_controller = ContainerController(monitor._client, config.protected_containers)
+        nl_processor._executor._controller = nl_controller
 
     # Start Docker event monitor as background task
     monitor_task = asyncio.create_task(monitor.start())
