@@ -1,6 +1,7 @@
 """Callback handlers for alert action buttons."""
 
 import logging
+from datetime import timedelta
 from typing import Callable, Awaitable, Any
 
 from aiogram import Bot
@@ -226,7 +227,7 @@ def mute_callback(
         actual_name = matches[0].name
 
         # Mute the container
-        mute_manager.mute(actual_name, minutes)
+        mute_manager.add_mute(actual_name, timedelta(minutes=minutes))
 
         # Format duration for display
         if minutes >= 1440:
