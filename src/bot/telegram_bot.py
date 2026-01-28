@@ -37,6 +37,8 @@ from src.bot.manage_command import (
     manage_command,
     manage_status_callback,
     manage_resources_callback,
+    manage_server_callback,
+    manage_disks_callback,
     manage_ignores_callback,
     manage_ignores_container_callback,
     manage_mutes_callback,
@@ -355,7 +357,7 @@ def register_commands(
             manage_state = ManageSelectionState()
 
             dp.message.register(
-                manage_command(),
+                manage_command(unraid_system_monitor),
                 Command("manage"),
             )
 
@@ -367,6 +369,14 @@ def register_commands(
             dp.callback_query.register(
                 manage_resources_callback(resource_monitor),
                 F.data == "manage:resources",
+            )
+            dp.callback_query.register(
+                manage_server_callback(unraid_system_monitor),
+                F.data == "manage:server",
+            )
+            dp.callback_query.register(
+                manage_disks_callback(unraid_system_monitor),
+                F.data == "manage:disks",
             )
             dp.callback_query.register(
                 manage_ignores_callback(ignore_manager),

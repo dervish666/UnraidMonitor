@@ -8,6 +8,8 @@ from src.bot.manage_command import (
     manage_command,
     manage_status_callback,
     manage_resources_callback,
+    manage_server_callback,
+    manage_disks_callback,
     manage_ignores_callback,
     manage_ignores_container_callback,
     manage_mutes_callback,
@@ -39,7 +41,7 @@ def manage_state():
 
 @pytest.mark.asyncio
 async def test_manage_command_shows_buttons():
-    """Test /manage shows status, resources, ignores and mutes buttons."""
+    """Test /manage shows all 6 buttons in 3 rows."""
     handler = manage_command()
     message = AsyncMock()
 
@@ -51,9 +53,12 @@ async def test_manage_command_shows_buttons():
     # First row: Status and Resources
     assert keyboard.inline_keyboard[0][0].callback_data == "manage:status"
     assert keyboard.inline_keyboard[0][1].callback_data == "manage:resources"
-    # Second row: Ignores and Mutes
-    assert keyboard.inline_keyboard[1][0].callback_data == "manage:ignores"
-    assert keyboard.inline_keyboard[1][1].callback_data == "manage:mutes"
+    # Second row: Server and Disks
+    assert keyboard.inline_keyboard[1][0].callback_data == "manage:server"
+    assert keyboard.inline_keyboard[1][1].callback_data == "manage:disks"
+    # Third row: Ignores and Mutes
+    assert keyboard.inline_keyboard[2][0].callback_data == "manage:ignores"
+    assert keyboard.inline_keyboard[2][1].callback_data == "manage:mutes"
 
 
 @pytest.mark.asyncio
@@ -245,6 +250,34 @@ async def test_manage_resources_callback_no_monitor():
 
     callback.answer.assert_called_once()
     callback.message.answer.assert_called_with("Resource monitoring not enabled.")
+
+
+@pytest.mark.asyncio
+async def test_manage_server_callback_no_monitor():
+    """Test server button with no system monitor."""
+    handler = manage_server_callback(None)
+    callback = AsyncMock()
+    callback.data = "manage:server"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    callback.answer.assert_called_once()
+    callback.message.answer.assert_called_with("🖥️ Unraid monitoring not configured.")
+
+
+@pytest.mark.asyncio
+async def test_manage_disks_callback_no_monitor():
+    """Test disks button with no system monitor."""
+    handler = manage_disks_callback(None)
+    callback = AsyncMock()
+    callback.data = "manage:disks"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    callback.answer.assert_called_once()
+    callback.message.answer.assert_called_with("💾 Unraid monitoring not configured.")
 
 
 def test_manage_command_in_help():

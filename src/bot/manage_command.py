@@ -7,6 +7,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 
 from src.bot.commands import format_status_summary
 from src.bot.resources_command import format_resources_summary
+from src.bot.unraid_commands import format_server_brief, format_server_detailed, format_disks
 
 if TYPE_CHECKING:
     from src.alerts.ignore_manager import IgnoreManager
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from src.alerts.array_mute_manager import ArrayMuteManager
     from src.state import ContainerStateManager
     from src.monitors.resource_monitor import ResourceMonitor
+    from src.unraid.monitors.system_monitor import UnraidSystemMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -52,15 +54,28 @@ class ManageSelectionState:
         return user_id in self.pending_ignore_removal or user_id in self.pending_mute_removal
 
 
-def manage_command() -> Callable[[Message], Awaitable[None]]:
+def manage_command(
+    system_monitor: "UnraidSystemMonitor | None" = None,
+) -> Callable[[Message], Awaitable[None]]:
     """Factory for /manage command handler."""
 
     async def handler(message: Message) -> None:
+        # Get brief server status if available
+        server_info = ""
+        if system_monitor:
+            brief = await format_server_brief(system_monitor)
+            if brief:
+                server_info = brief + "\n\n"
+
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(text="📊 Status", callback_data="manage:status"),
                     InlineKeyboardButton(text="📈 Resources", callback_data="manage:resources"),
+                ],
+                [
+                    InlineKeyboardButton(text="🖥️ Server", callback_data="manage:server"),
+                    InlineKeyboardButton(text="💾 Disks", callback_data="manage:disks"),
                 ],
                 [
                     InlineKeyboardButton(text="📝 Manage Ignores", callback_data="manage:ignores"),
@@ -70,8 +85,9 @@ def manage_command() -> Callable[[Message], Awaitable[None]]:
         )
 
         await message.answer(
-            "What would you like to do?",
+            f"{server_info}What would you like to do?",
             reply_markup=keyboard,
+            parse_mode="Markdown",
         )
 
     return handler
@@ -112,6 +128,54 @@ def manage_resources_callback(
         else:
             if callback.message:
                 await callback.message.answer("📊 No running containers found")
+
+    return handler
+
+
+def manage_server_callback(
+    system_monitor: "UnraidSystemMonitor | None",
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for server button callback (shows detailed info)."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        await callback.answer()
+
+        if not system_monitor:
+            if callback.message:
+                await callback.message.answer("🖥️ Unraid monitoring not configured.")
+            return
+
+        response = await format_server_detailed(system_monitor)
+        if response:
+            if callback.message:
+                await callback.message.answer(response, parse_mode="Markdown")
+        else:
+            if callback.message:
+                await callback.message.answer("🖥️ Unraid server unavailable.")
+
+    return handler
+
+
+def manage_disks_callback(
+    system_monitor: "UnraidSystemMonitor | None",
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for disks button callback."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        await callback.answer()
+
+        if not system_monitor:
+            if callback.message:
+                await callback.message.answer("💾 Unraid monitoring not configured.")
+            return
+
+        response = await format_disks(system_monitor)
+        if response:
+            if callback.message:
+                await callback.message.answer(response, parse_mode="Markdown")
+        else:
+            if callback.message:
+                await callback.message.answer("💾 Disk status unavailable.")
 
     return handler
 

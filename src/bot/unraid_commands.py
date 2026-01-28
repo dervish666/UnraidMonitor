@@ -55,6 +55,133 @@ def format_uptime(uptime_str: str) -> str:
         return uptime_str
 
 
+async def format_server_brief(system_monitor: "UnraidSystemMonitor") -> str | None:
+    """Format brief server status.
+
+    Returns:
+        Formatted string or None if unavailable.
+    """
+    metrics = await system_monitor.get_current_metrics()
+
+    if not metrics:
+        return None
+
+    cpu = metrics.get("cpu_percent", 0)
+    temp = metrics.get("cpu_temperature", 0)
+    memory = metrics.get("memory_percent", 0)
+    uptime = format_uptime(metrics.get("uptime", ""))
+
+    return (
+        f"🖥️ *Unraid Server*\n"
+        f"CPU: {cpu:.1f}% ({temp:.1f}°C) • RAM: {memory:.1f}%\n"
+        f"Uptime: {uptime}"
+    )
+
+
+async def format_server_detailed(system_monitor: "UnraidSystemMonitor") -> str | None:
+    """Format detailed server status.
+
+    Returns:
+        Formatted string or None if unavailable.
+    """
+    metrics = await system_monitor.get_current_metrics()
+
+    if not metrics:
+        return None
+
+    cpu = metrics.get("cpu_percent", 0)
+    temp = metrics.get("cpu_temperature", 0)
+    memory = metrics.get("memory_percent", 0)
+    memory_gb = metrics.get("memory_used", 0) / (1024**3)
+    uptime = format_uptime(metrics.get("uptime", ""))
+    swap = metrics.get("swap_percent", 0)
+    power = metrics.get("cpu_power", 0)
+
+    lines = [
+        "🖥️ *Unraid Server Status*\n",
+        f"*CPU:* {cpu:.1f}%",
+        f"*CPU Temp:* {temp:.1f}°C",
+    ]
+
+    if power:
+        lines.append(f"*CPU Power:* {power:.1f}W")
+
+    lines.extend([
+        f"\n*Memory:* {memory:.1f}% ({memory_gb:.1f} GB)",
+        f"*Swap:* {swap:.1f}%",
+        f"\n*Uptime:* {uptime}",
+    ])
+
+    # Get array status
+    array = await system_monitor.get_array_status()
+    if array:
+        state = array.get("state", "Unknown")
+        capacity_kb = array.get("capacity", {}).get("kilobytes", {})
+        kb_to_tb = 1024 * 1024 * 1024
+        used_tb = float(capacity_kb.get("used", 0)) / kb_to_tb
+        total_tb = float(capacity_kb.get("total", 0)) / kb_to_tb
+        free_tb = float(capacity_kb.get("free", 0)) / kb_to_tb
+
+        lines.append(f"\n*Array:* {state}")
+        if total_tb > 0:
+            lines.append(f"*Storage:* {used_tb:.1f} / {total_tb:.1f} TB ({free_tb:.1f} TB free)")
+
+        # Cache info
+        caches = array.get("caches", [])
+        for cache in caches:
+            name = cache.get("name", "cache")
+            cache_temp = cache.get("temp", 0)
+            status = cache.get("status", "").replace("DISK_", "")
+            fs_used_kb = cache.get("fsUsed", 0) or 0
+            fs_size_kb = cache.get("fsSize", 0) or 0
+            if fs_size_kb:
+                used_gb = fs_used_kb / (1024 * 1024)
+                size_gb = fs_size_kb / (1024 * 1024)
+                pct = (fs_used_kb / fs_size_kb * 100) if fs_size_kb else 0
+                lines.append(f"*{name.title()}:* {pct:.0f}% ({used_gb:.0f}/{size_gb:.0f} GB) • {cache_temp}°C • {status}")
+            else:
+                lines.append(f"*{name.title()}:* {cache_temp}°C • {status}")
+
+    return "\n".join(lines)
+
+
+async def format_disks(system_monitor: "UnraidSystemMonitor") -> str | None:
+    """Format disk status.
+
+    Returns:
+        Formatted string or None if unavailable.
+    """
+    array = await system_monitor.get_array_status()
+
+    if not array:
+        return None
+
+    parities = array.get("parities", [])
+    disks = array.get("disks", [])
+    caches = array.get("caches", [])
+
+    lines = ["💾 *Disk Status*\n"]
+
+    if parities:
+        lines.append("*Parity:*")
+        for parity in parities:
+            lines.append(_format_disk_line(parity))
+        lines.append("")
+
+    if disks:
+        lines.append("*Data Disks:*")
+        for disk in disks:
+            lines.append(_format_disk_line(disk))
+        lines.append("")
+
+    if caches:
+        lines.append("*Cache:*")
+        for cache in caches:
+            lines.append(_format_disk_line(cache))
+
+    return "\n".join(lines).rstrip()
+
+
 def server_command(
     system_monitor: "UnraidSystemMonitor",
 ) -> Callable[[Message], Awaitable[None]]:
@@ -64,81 +191,15 @@ def server_command(
         text = (message.text or "").strip()
         detailed = "detailed" in text.lower()
 
-        metrics = await system_monitor.get_current_metrics()
-
-        if not metrics:
-            await message.answer("🖥️ Unraid server unavailable or not configured.")
-            return
-
-        cpu = metrics.get("cpu_percent", 0)
-        temp = metrics.get("cpu_temperature", 0)
-        memory = metrics.get("memory_percent", 0)
-        memory_gb = metrics.get("memory_used", 0) / (1024**3)
-        uptime = format_uptime(metrics.get("uptime", ""))
-
         if detailed:
-            swap = metrics.get("swap_percent", 0)
-            power = metrics.get("cpu_power", 0)
-
-            lines = [
-                "🖥️ *Unraid Server Status*\n",
-                f"*CPU:* {cpu:.1f}%",
-                f"*CPU Temp:* {temp:.1f}°C",
-            ]
-
-            if power:
-                lines.append(f"*CPU Power:* {power:.1f}W")
-
-            lines.extend([
-                f"\n*Memory:* {memory:.1f}% ({memory_gb:.1f} GB)",
-                f"*Swap:* {swap:.1f}%",
-                f"\n*Uptime:* {uptime}",
-            ])
-
-            # Get array status
-            array = await system_monitor.get_array_status()
-            if array:
-                state = array.get("state", "Unknown")
-                # Use kilobytes for actual storage values (not disk counts)
-                capacity_kb = array.get("capacity", {}).get("kilobytes", {})
-                # Convert kilobytes to TB (divide by 1024^3)
-                kb_to_tb = 1024 * 1024 * 1024
-                used_tb = float(capacity_kb.get("used", 0)) / kb_to_tb
-                total_tb = float(capacity_kb.get("total", 0)) / kb_to_tb
-                free_tb = float(capacity_kb.get("free", 0)) / kb_to_tb
-
-                lines.append(f"\n*Array:* {state}")
-                if total_tb > 0:
-                    lines.append(f"*Storage:* {used_tb:.1f} / {total_tb:.1f} TB ({free_tb:.1f} TB free)")
-
-                # Cache info
-                caches = array.get("caches", [])
-                for cache in caches:
-                    name = cache.get("name", "cache")
-                    cache_temp = cache.get("temp", 0)
-                    status = cache.get("status", "").replace("DISK_", "")
-                    # fsUsed and fsSize are in kilobytes
-                    fs_used_kb = cache.get("fsUsed", 0) or 0
-                    fs_size_kb = cache.get("fsSize", 0) or 0
-                    if fs_size_kb:
-                        # Convert KB to GB
-                        used_gb = fs_used_kb / (1024 * 1024)
-                        size_gb = fs_size_kb / (1024 * 1024)
-                        pct = (fs_used_kb / fs_size_kb * 100) if fs_size_kb else 0
-                        lines.append(f"*{name.title()}:* {pct:.0f}% ({used_gb:.0f}/{size_gb:.0f} GB) • {cache_temp}°C • {status}")
-                    else:
-                        lines.append(f"*{name.title()}:* {cache_temp}°C • {status}")
-
-            await message.answer("\n".join(lines), parse_mode="Markdown")
+            response = await format_server_detailed(system_monitor)
         else:
-            # Compact summary
-            response = (
-                f"🖥️ *Unraid Server*\n\n"
-                f"CPU: {cpu:.1f}% ({temp:.1f}°C) • "
-                f"RAM: {memory:.1f}%\n"
-                f"Uptime: {uptime}"
-            )
+            response = await format_server_brief(system_monitor)
+
+        if response:
             await message.answer(response, parse_mode="Markdown")
+        else:
+            await message.answer("🖥️ Unraid server unavailable or not configured.")
 
     return handler
 
@@ -286,40 +347,12 @@ def disks_command(
     """Factory for /disks command handler."""
 
     async def handler(message: Message) -> None:
-        array = await system_monitor.get_array_status()
+        response = await format_disks(system_monitor)
 
-        if not array:
+        if response:
+            await message.answer(response, parse_mode="Markdown")
+        else:
             await message.answer("💾 Disk status unavailable.")
-            return
-
-        # Get disk lists
-        parities = array.get("parities", [])
-        disks = array.get("disks", [])
-        caches = array.get("caches", [])
-
-        lines = ["💾 *Disk Status*\n"]
-
-        # Parity disks
-        if parities:
-            lines.append("*Parity:*")
-            for parity in parities:
-                lines.append(_format_disk_line(parity))
-            lines.append("")
-
-        # Data disks
-        if disks:
-            lines.append("*Data Disks:*")
-            for disk in disks:
-                lines.append(_format_disk_line(disk))
-            lines.append("")
-
-        # Cache disks
-        if caches:
-            lines.append("*Cache:*")
-            for cache in caches:
-                lines.append(_format_disk_line(cache))
-
-        await message.answer("\n".join(lines).rstrip(), parse_mode="Markdown")
 
     return handler
 
