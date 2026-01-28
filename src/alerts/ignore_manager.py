@@ -131,6 +131,59 @@ class IgnoreManager:
 
         return ignores
 
+    def get_runtime_ignores(self, container: str) -> list[tuple[int, str, str | None]]:
+        """Get runtime ignores for a container as (index, pattern, explanation) tuples.
+
+        Returns:
+            List of tuples containing (index, pattern, explanation).
+            Index is the position in the runtime ignores list.
+        """
+        ignores: list[tuple[int, str, str | None]] = []
+
+        for i, ignore_pattern in enumerate(self._runtime_ignores.get(container, [])):
+            ignores.append((i, ignore_pattern.pattern, ignore_pattern.explanation))
+
+        return ignores
+
+    def get_containers_with_runtime_ignores(self) -> list[str]:
+        """Get list of containers that have runtime ignores.
+
+        Returns:
+            List of container names with at least one runtime ignore.
+        """
+        return [
+            container
+            for container, patterns in self._runtime_ignores.items()
+            if patterns
+        ]
+
+    def remove_runtime_ignore(self, container: str, index: int) -> bool:
+        """Remove a runtime ignore by index.
+
+        Args:
+            container: Container name.
+            index: Index of the ignore to remove.
+
+        Returns:
+            True if removed, False if not found.
+        """
+        if container not in self._runtime_ignores:
+            return False
+
+        patterns = self._runtime_ignores[container]
+        if index < 0 or index >= len(patterns):
+            return False
+
+        removed = patterns.pop(index)
+        logger.info(f"Removed ignore for {container}: {removed.pattern}")
+
+        # Clean up empty container entries
+        if not patterns:
+            del self._runtime_ignores[container]
+
+        self._save_runtime_ignores()
+        return True
+
     def _load_runtime_ignores(self) -> None:
         """Load runtime ignores from JSON file.
 

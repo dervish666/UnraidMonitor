@@ -23,7 +23,7 @@ HELP_TEXT = """📋 *Commands*
 *Alerts & Ignores*
 /mute <name> <dur> • /unmute <name>
 /mute-server • /mute-array + unmute
-/mutes • /ignore • /ignores
+/mutes • /ignore • /ignores • /manage
 
 _Partial names work: /status rad → radarr_
 _Reply /diagnose to crash alerts for AI analysis_

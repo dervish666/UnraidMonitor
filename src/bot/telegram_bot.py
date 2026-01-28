@@ -33,6 +33,14 @@ from src.bot.alert_callbacks import (
 )
 from src.bot.memory_commands import cancel_kill_command
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
+from src.bot.manage_command import (
+    manage_command,
+    manage_ignores_callback,
+    manage_ignores_container_callback,
+    manage_mutes_callback,
+    manage_selection_handler,
+    ManageSelectionState,
+)
 from src.bot.resources_command import resources_command
 from src.bot.unraid_commands import (
     server_command,
@@ -76,6 +84,23 @@ class IgnoreSelectionFilter(Filter):
     """Filter for ignore selection responses (numbers like '1', '1,3', or 'all')."""
 
     def __init__(self, selection_state: IgnoreSelectionState):
+        self.selection_state = selection_state
+
+    async def __call__(self, message: Message) -> bool:
+        if not message.text:
+            return False
+        # Don't intercept commands - let them be processed normally
+        if message.text.startswith("/"):
+            return False
+        user_id = message.from_user.id if message.from_user else 0
+        # Only match if user has a pending selection
+        return self.selection_state.has_pending(user_id)
+
+
+class ManageSelectionFilter(Filter):
+    """Filter for manage selection responses (numbers or 'cancel')."""
+
+    def __init__(self, selection_state: ManageSelectionState):
         self.selection_state = selection_state
 
     async def __call__(self, message: Message) -> bool:
@@ -322,6 +347,37 @@ def register_commands(
             cancel_kill_command(memory_monitor),
             Command("cancel-kill"),
         )
+
+        # Register /manage command and callbacks
+        if ignore_manager is not None and mute_manager is not None:
+            manage_state = ManageSelectionState()
+
+            dp.message.register(
+                manage_command(),
+                Command("manage"),
+            )
+
+            # Manage callbacks
+            dp.callback_query.register(
+                manage_ignores_callback(ignore_manager),
+                F.data == "manage:ignores",
+            )
+            dp.callback_query.register(
+                manage_ignores_container_callback(ignore_manager, manage_state),
+                F.data.startswith("manage:ignores:"),
+            )
+            dp.callback_query.register(
+                manage_mutes_callback(mute_manager, server_mute_manager, array_mute_manager, manage_state),
+                F.data == "manage:mutes",
+            )
+
+            # Register manage selection handler (for numeric input)
+            dp.message.register(
+                manage_selection_handler(
+                    ignore_manager, mute_manager, server_mute_manager, array_mute_manager, manage_state
+                ),
+                ManageSelectionFilter(manage_state),
+            )
 
         # Register natural language handler (must be last - catches all non-commands)
         if nl_processor is not None and controller is not None:
