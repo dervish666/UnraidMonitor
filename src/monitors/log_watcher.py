@@ -73,6 +73,7 @@ class LogWatcher:
         on_error: Callable[[str, str], Awaitable[None]] | None = None,
         ignore_manager: "IgnoreManager | None" = None,
         recent_errors_buffer: "RecentErrorsBuffer | None" = None,
+        docker_socket_path: str = "unix:///var/run/docker.sock",
     ):
         self.containers = containers
         self.error_patterns = error_patterns
@@ -80,13 +81,14 @@ class LogWatcher:
         self.on_error = on_error
         self.ignore_manager = ignore_manager
         self.recent_errors_buffer = recent_errors_buffer
+        self._docker_socket_path = docker_socket_path
         self._client: docker.DockerClient | None = None
         self._running = False
         self._tasks: list[asyncio.Task] = []
 
     def connect(self) -> None:
         """Connect to Docker socket."""
-        self._client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
+        self._client = docker.DockerClient(base_url=self._docker_socket_path)
         logger.info("LogWatcher connected to Docker socket")
 
     async def start(self) -> None:

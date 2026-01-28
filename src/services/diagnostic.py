@@ -54,9 +54,21 @@ class DiagnosticContext:
 class DiagnosticService:
     """AI-powered container diagnostics."""
 
-    def __init__(self, docker_client: docker.DockerClient, anthropic_client):
+    def __init__(
+        self,
+        docker_client: docker.DockerClient,
+        anthropic_client,
+        model: str = "claude-haiku-4-5-20251001",
+        brief_max_tokens: int = 300,
+        detail_max_tokens: int = 800,
+        context_expiry_seconds: int = 600,
+    ):
         self._docker = docker_client
         self._anthropic = anthropic_client
+        self._model = model
+        self._brief_max_tokens = brief_max_tokens
+        self._detail_max_tokens = detail_max_tokens
+        self._context_expiry_seconds = context_expiry_seconds
         self._pending: dict[int, DiagnosticContext] = {}
 
     def gather_context(self, container_name: str, lines: int = 50) -> DiagnosticContext | None:
@@ -135,8 +147,8 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
 
         try:
             message = self._anthropic.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=300,
+                model=self._model,
+                max_tokens=self._brief_max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
             return message.content[0].text
@@ -174,10 +186,10 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
         if context is None:
             return False
 
-        # Check if context is stale (> 10 minutes)
+        # Check if context is stale
         if context.created_at:
             age = (datetime.now() - context.created_at).total_seconds()
-            if age > 600:  # 10 minutes
+            if age > self._context_expiry_seconds:
                 del self._pending[user_id]
                 return False
 
@@ -219,8 +231,8 @@ Be specific and actionable."""
 
         try:
             message = self._anthropic.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=800,
+                model=self._model,
+                max_tokens=self._detail_max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
             return message.content[0].text

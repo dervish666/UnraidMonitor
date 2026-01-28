@@ -8,9 +8,6 @@ from src.services.nl_tools import get_tool_definitions
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 10
-
-
 @dataclass
 class ConversationMemory:
     """Stores conversation history for a single user."""
@@ -103,7 +100,10 @@ class NLProcessor:
         self,
         anthropic_client: Any | None,
         tool_executor: Any,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-5-20250929",
+        max_tokens: int = 1024,
+        max_tool_iterations: int = 10,
+        max_conversation_exchanges: int = 5,
     ):
         """Initialize the NLProcessor.
 
@@ -111,11 +111,16 @@ class NLProcessor:
             anthropic_client: Anthropic client for Claude API calls, or None if not configured.
             tool_executor: Executor for tool calls (NLToolExecutor instance).
             model: Claude model to use for processing.
+            max_tokens: Maximum tokens for Claude API responses.
+            max_tool_iterations: Maximum tool use loop iterations.
+            max_conversation_exchanges: Maximum conversation exchanges to keep in memory.
         """
         self._anthropic = anthropic_client
         self._executor = tool_executor
         self._model = model
-        self.memory_store = MemoryStore()
+        self._max_tokens = max_tokens
+        self._max_tool_iterations = max_tool_iterations
+        self.memory_store = MemoryStore(max_exchanges=max_conversation_exchanges)
 
     async def process(self, user_id: int, message: str) -> ProcessResult:
         """Process a natural language message and return a response.
@@ -175,7 +180,7 @@ class NLProcessor:
         # Initial API call
         response = self._anthropic.messages.create(
             model=self._model,
-            max_tokens=1024,
+            max_tokens=self._max_tokens,
             system=SYSTEM_PROMPT,
             tools=tools,
             messages=messages,
@@ -183,7 +188,7 @@ class NLProcessor:
 
         # Handle tool use loop with max iterations guard
         iterations = 0
-        while response.stop_reason == "tool_use" and iterations < MAX_TOOL_ITERATIONS:
+        while response.stop_reason == "tool_use" and iterations < self._max_tool_iterations:
             iterations += 1
             # Extract tool calls
             tool_results = []
@@ -215,13 +220,13 @@ class NLProcessor:
 
             response = self._anthropic.messages.create(
                 model=self._model,
-                max_tokens=1024,
+                max_tokens=self._max_tokens,
                 system=SYSTEM_PROMPT,
                 tools=tools,
                 messages=messages,
             )
 
-        if iterations >= MAX_TOOL_ITERATIONS:
+        if iterations >= self._max_tool_iterations:
             logger.warning("Max tool iterations reached")
 
         # Extract final text response

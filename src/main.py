@@ -35,15 +35,16 @@ logger = logging.getLogger(__name__)
 class AlertManagerProxy:
     """Proxy that gets chat_id dynamically from ChatIdStore."""
 
-    def __init__(self, bot, chat_id_store: ChatIdStore):
+    def __init__(self, bot, chat_id_store: ChatIdStore, error_display_max_chars: int = 200):
         self.bot = bot
         self.chat_id_store = chat_id_store
+        self.error_display_max_chars = error_display_max_chars
 
     async def _send_alert(self, method_name: str, **kwargs):
         """Generic alert sender that delegates to AlertManager."""
         chat_id = self.chat_id_store.get_chat_id()
         if chat_id:
-            manager = AlertManager(self.bot, chat_id)
+            manager = AlertManager(self.bot, chat_id, error_display_max_chars=self.error_display_max_chars)
             await getattr(manager, method_name)(**kwargs)
         else:
             logger.warning(f"No chat ID yet, cannot send {method_name.replace('_', ' ')}")
@@ -76,12 +77,22 @@ async def main() -> None:
     logging.getLogger().setLevel(config.log_level)
     logger.info("Configuration loaded")
 
+    # Load sub-configs
+    ai_config = config.ai
+    bot_config = config.bot
+    docker_config = config.docker
+
     # Initialize Anthropic client if API key is configured
     anthropic_client = None
     pattern_analyzer = None
     if config.anthropic_api_key:
         anthropic_client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-        pattern_analyzer = PatternAnalyzer(anthropic_client)
+        pattern_analyzer = PatternAnalyzer(
+            anthropic_client,
+            model=ai_config.pattern_analyzer_model,
+            max_tokens=ai_config.pattern_analyzer_max_tokens,
+            context_lines=ai_config.pattern_analyzer_context_lines,
+        )
         logger.info("Anthropic client initialized for AI diagnostics and pattern analysis")
     else:
         logger.warning("ANTHROPIC_API_KEY not set - /diagnose and smart ignore patterns will be disabled")
@@ -101,7 +112,6 @@ async def main() -> None:
     )
     recent_errors_buffer = RecentErrorsBuffer(
         max_age_seconds=log_watching_config.get("cooldown_seconds", 900),
-        max_per_container=50,
     )
 
     # Initialize mute manager
@@ -112,7 +122,7 @@ async def main() -> None:
     dp = create_dispatcher(config.telegram_allowed_users, chat_id_store=chat_id_store)
 
     # Create alert manager proxy
-    alert_manager = AlertManagerProxy(bot, chat_id_store)
+    alert_manager = AlertManagerProxy(bot, chat_id_store, error_display_max_chars=bot_config.error_display_max_chars)
 
     # Initialize Unraid components if configured
     unraid_client = None
@@ -171,6 +181,7 @@ async def main() -> None:
         alert_manager=alert_manager,
         rate_limiter=rate_limiter,
         mute_manager=mute_manager,
+        docker_socket_path=docker_config.socket_path,
     )
 
     try:
@@ -206,6 +217,7 @@ async def main() -> None:
         on_error=on_log_error,
         ignore_manager=ignore_manager,
         recent_errors_buffer=recent_errors_buffer,
+        docker_socket_path=docker_config.socket_path,
     )
 
     try:
@@ -268,10 +280,15 @@ async def main() -> None:
             resource_monitor=resource_monitor,
             recent_errors_buffer=recent_errors_buffer,
             unraid_system_monitor=unraid_system_monitor,
+            log_max_chars=bot_config.nl_log_max_chars,
         )
         nl_processor = NLProcessor(
             anthropic_client=anthropic_client,
             tool_executor=nl_executor,
+            model=ai_config.nl_processor_model,
+            max_tokens=ai_config.nl_processor_max_tokens,
+            max_tool_iterations=ai_config.nl_max_tool_iterations,
+            max_conversation_exchanges=ai_config.nl_max_conversation_exchanges,
         )
 
     # Register commands with docker client for /logs
@@ -291,6 +308,8 @@ async def main() -> None:
         memory_monitor=memory_monitor,
         pattern_analyzer=pattern_analyzer,
         nl_processor=nl_processor,
+        ai_config=ai_config,
+        bot_config=bot_config,
     )
 
     # Set controller on NL executor after register_commands creates it

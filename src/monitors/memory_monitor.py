@@ -32,6 +32,8 @@ class MemoryMonitor:
         config: MemoryConfig,
         on_alert: Callable[[str, str], Awaitable[None]],
         on_ask_restart: Callable[[str], Awaitable[None]],
+        check_interval: int = 10,
+        error_sleep: int = 30,
     ):
         """Initialize memory monitor.
 
@@ -40,11 +42,15 @@ class MemoryMonitor:
             config: Memory management configuration.
             on_alert: Callback for sending alerts (title, message).
             on_ask_restart: Callback for asking to restart a container.
+            check_interval: Seconds between memory checks.
+            error_sleep: Seconds to sleep after an error.
         """
         self._docker = docker_client
         self._config = config
         self._on_alert = on_alert
         self._on_ask_restart = on_ask_restart
+        self._check_interval = check_interval
+        self._error_sleep = error_sleep
         self._state = MemoryState.NORMAL
         self._killed_containers: list[str] = []
         self._running = False
@@ -239,14 +245,14 @@ class MemoryMonitor:
                         await asyncio.sleep(self._config.stabilization_wait)
                         continue
 
-                await asyncio.sleep(10)  # Check every 10 seconds
+                await asyncio.sleep(self._check_interval)
 
             except asyncio.CancelledError:
                 logger.info("Memory monitor cancelled")
                 raise
             except Exception as e:
                 logger.error(f"Error in memory monitor: {e}")
-                await asyncio.sleep(30)
+                await asyncio.sleep(self._error_sleep)
 
     def stop(self) -> None:
         """Stop the memory monitoring loop."""

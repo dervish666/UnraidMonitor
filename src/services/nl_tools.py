@@ -227,6 +227,7 @@ class NLToolExecutor:
         resource_monitor: "ResourceMonitor | None" = None,
         recent_errors_buffer: "RecentErrorsBuffer | None" = None,
         unraid_system_monitor: "UnraidSystemMonitor | None" = None,
+        log_max_chars: int = 3000,
     ):
         """Initialize the tool executor.
 
@@ -246,6 +247,7 @@ class NLToolExecutor:
         self._resource_monitor = resource_monitor
         self._recent_errors = recent_errors_buffer
         self._unraid = unraid_system_monitor
+        self._log_max_chars = log_max_chars
 
     async def execute(self, tool_name: str, args: dict[str, Any]) -> str:
         """Execute a tool and return the result as a string.
@@ -332,8 +334,8 @@ class NLToolExecutor:
             logs = log_bytes.decode("utf-8", errors="replace")
             if not logs.strip():
                 return f"No recent logs for {resolved.name}"
-            if len(logs) > 3000:
-                logs = logs[-3000:]
+            if len(logs) > self._log_max_chars:
+                logs = logs[-self._log_max_chars:]
                 return f"... (truncated)\n{logs}"
             return f"Logs for {resolved.name}:\n{logs}"
         except docker.errors.NotFound:

@@ -3,6 +3,37 @@
 monitoring:
   health_check_interval: 60  # seconds (used in Phase 2)
 
+# AI / Claude API configuration
+ai:
+  models:
+    pattern_analyzer: "claude-haiku-4-5-20251001"
+    nl_processor: "claude-sonnet-4-5-20250929"
+    diagnostic: "claude-haiku-4-5-20251001"
+  max_tokens:
+    pattern_analyzer: 500
+    nl_processor: 1024
+    diagnostic_brief: 300
+    diagnostic_detail: 800
+  nl_processor:
+    max_tool_iterations: 10
+    max_conversation_exchanges: 5
+  pattern_analyzer_context_lines: 30
+  diagnostic_context_expiry_seconds: 600
+
+# Bot display and behaviour settings
+bot:
+  confirmation_timeout_seconds: 60
+  log_display:
+    max_lines: 100
+    max_chars: 4000
+    nl_max_chars: 3000
+    diagnose_max_lines: 500
+  error_display_max_chars: 200
+
+# Docker connection settings
+docker:
+  socket_path: "unix:///var/run/docker.sock"
+
 # Containers to ignore (won't be monitored or shown)
 ignored_containers:
   - Kometa

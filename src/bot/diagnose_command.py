@@ -30,6 +30,7 @@ def _extract_container_from_reply(reply_message: Message) -> str | None:
 def diagnose_command(
     state: ContainerStateManager,
     diagnostic_service: DiagnosticService,
+    max_lines: int = 500,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /diagnose command handler."""
 
@@ -49,7 +50,7 @@ def diagnose_command(
             if len(parts) >= 3:
                 try:
                     lines = int(parts[2])
-                    lines = min(lines, 500)  # Cap at 500
+                    lines = min(lines, max_lines)
                 except ValueError:
                     pass
 

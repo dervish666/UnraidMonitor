@@ -56,12 +56,14 @@ class DockerEventMonitor:
         alert_manager: "AlertManager | None" = None,
         rate_limiter: "RateLimiter | None" = None,
         mute_manager: "MuteManager | None" = None,
+        docker_socket_path: str = "unix:///var/run/docker.sock",
     ):
         self.state_manager = state_manager
         self.ignored_containers = set(ignored_containers or [])
         self.alert_manager = alert_manager
         self.rate_limiter = rate_limiter
         self.mute_manager = mute_manager
+        self._docker_socket_path = docker_socket_path
         self._client: docker.DockerClient | None = None
         self._running = False
         self._pending_alerts: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -69,7 +71,7 @@ class DockerEventMonitor:
 
     def connect(self) -> None:
         """Connect to Docker socket."""
-        self._client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
+        self._client = docker.DockerClient(base_url=self._docker_socket_path)
         logger.info("Connected to Docker socket")
 
     def load_initial_state(self) -> None:

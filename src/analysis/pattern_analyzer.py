@@ -35,8 +35,17 @@ Guidelines:
 class PatternAnalyzer:
     """Uses Claude Haiku to analyze errors and generate ignore patterns."""
 
-    def __init__(self, anthropic_client: "anthropic.Anthropic | None"):
+    def __init__(
+        self,
+        anthropic_client: "anthropic.Anthropic | None",
+        model: str = "claude-haiku-4-5-20251001",
+        max_tokens: int = 500,
+        context_lines: int = 30,
+    ):
         self._client = anthropic_client
+        self._model = model
+        self._max_tokens = max_tokens
+        self._context_lines = context_lines
 
     async def analyze_error(
         self,
@@ -53,7 +62,7 @@ class PatternAnalyzer:
             logger.warning("No Anthropic client available for pattern analysis")
             return None
 
-        logs_text = "\n".join(recent_logs[-30:]) if recent_logs else "(no recent logs)"
+        logs_text = "\n".join(recent_logs[-self._context_lines:]) if recent_logs else "(no recent logs)"
 
         prompt = ANALYSIS_PROMPT.format(
             container=container,
@@ -63,8 +72,8 @@ class PatternAnalyzer:
 
         try:
             response = self._client.messages.create(
-                model="claude-3-5-haiku-20241022",
-                max_tokens=500,
+                model=self._model,
+                max_tokens=self._max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
 

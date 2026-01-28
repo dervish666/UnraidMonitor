@@ -204,6 +204,8 @@ def register_commands(
     memory_monitor: "MemoryMonitor | None" = None,
     pattern_analyzer: Any | None = None,
     nl_processor: Any | None = None,
+    ai_config: Any | None = None,
+    bot_config: Any | None = None,
 ) -> tuple[ConfirmationManager | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -213,11 +215,19 @@ def register_commands(
     dp.message.register(status_command(state), Command("status"))
 
     if docker_client:
-        dp.message.register(logs_command(state, docker_client), Command("logs"))
+        _log_max_lines = bot_config.log_max_lines if bot_config else 100
+        _log_max_chars = bot_config.log_max_chars if bot_config else 4000
+        _diagnose_max_lines = bot_config.diagnose_max_lines if bot_config else 500
+        _confirm_timeout = bot_config.confirmation_timeout_seconds if bot_config else 60
+
+        dp.message.register(
+            logs_command(state, docker_client, max_lines=_log_max_lines, max_chars=_log_max_chars),
+            Command("logs"),
+        )
 
         # Create controller and confirmation manager for control commands
         controller = ContainerController(docker_client, protected_containers or [])
-        confirmation = ConfirmationManager()
+        confirmation = ConfirmationManager(timeout_seconds=_confirm_timeout)
 
         # Register control commands
         dp.message.register(restart_command(state, controller, confirmation), Command("restart"))
@@ -232,10 +242,22 @@ def register_commands(
         )
 
         # Set up diagnostic service
-        diagnostic_service = DiagnosticService(docker_client, anthropic_client)
+        _diag_model = ai_config.diagnostic_model if ai_config else "claude-haiku-4-5-20251001"
+        _diag_brief = ai_config.diagnostic_brief_max_tokens if ai_config else 300
+        _diag_detail = ai_config.diagnostic_detail_max_tokens if ai_config else 800
+        _diag_expiry = ai_config.diagnostic_context_expiry_seconds if ai_config else 600
+
+        diagnostic_service = DiagnosticService(
+            docker_client,
+            anthropic_client,
+            model=_diag_model,
+            brief_max_tokens=_diag_brief,
+            detail_max_tokens=_diag_detail,
+            context_expiry_seconds=_diag_expiry,
+        )
 
         dp.message.register(
-            diagnose_command(state, diagnostic_service),
+            diagnose_command(state, diagnostic_service, max_lines=_diagnose_max_lines),
             Command("diagnose"),
         )
 
@@ -283,7 +305,7 @@ def register_commands(
             F.data.startswith("restart:"),
         )
         dp.callback_query.register(
-            logs_callback(state, docker_client),
+            logs_callback(state, docker_client, max_lines=_log_max_lines, max_chars=_log_max_chars),
             F.data.startswith("logs:"),
         )
         dp.callback_query.register(

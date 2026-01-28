@@ -61,6 +61,8 @@ def restart_callback(
 def logs_callback(
     state: ContainerStateManager,
     docker_client: docker.DockerClient,
+    max_lines: int = 100,
+    max_chars: int = 4000,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for logs button callback handler."""
 
@@ -81,7 +83,7 @@ def logs_callback(
             lines = 50
 
         # Cap at reasonable limit
-        lines = min(lines, 100)
+        lines = min(lines, max_lines)
 
         # Find container
         matches = state.find_by_name(container_name)
@@ -100,8 +102,8 @@ def logs_callback(
             log_text = log_bytes.decode("utf-8", errors="replace")
 
             # Truncate if too long for Telegram
-            if len(log_text) > 4000:
-                log_text = log_text[-4000:]
+            if len(log_text) > max_chars:
+                log_text = log_text[-max_chars:]
                 log_text = "...(truncated)\n" + log_text
 
             response = f"*Logs: {actual_name}* (last {lines} lines)\n\n```\n{log_text}\n```"

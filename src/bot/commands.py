@@ -127,6 +127,8 @@ def status_command(state: ContainerStateManager) -> Callable[[Message], Awaitabl
 def logs_command(
     state: ContainerStateManager,
     docker_client: docker.DockerClient,
+    max_lines: int = 100,
+    max_chars: int = 4000,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /logs command handler."""
     async def handler(message: Message) -> None:
@@ -146,7 +148,7 @@ def logs_command(
             lines = 20
 
         # Cap at reasonable limit
-        lines = min(lines, 100)
+        lines = min(lines, max_lines)
 
         # Find container
         matches = state.find_by_name(container_name)
@@ -168,8 +170,8 @@ def logs_command(
             log_text = log_bytes.decode("utf-8", errors="replace")
 
             # Truncate if too long for Telegram
-            if len(log_text) > 4000:
-                log_text = log_text[-4000:]
+            if len(log_text) > max_chars:
+                log_text = log_text[-max_chars:]
                 log_text = "...(truncated)\n" + log_text
 
             response = f"📋 *Logs: {container.name}* (last {lines} lines)\n\n```\n{log_text}\n```"

@@ -32,7 +32,7 @@ def _find_container(state: ContainerStateManager, query: str) -> tuple[str | Non
     return matches[0].name, None
 
 
-def _format_confirmation_message(action: str, container_name: str, status: str) -> str:
+def _format_confirmation_message(action: str, container_name: str, status: str, timeout_seconds: int = 60) -> str:
     """Format the confirmation request message."""
     emoji = ACTION_EMOJI.get(action, "⚠️")
 
@@ -40,7 +40,7 @@ def _format_confirmation_message(action: str, container_name: str, status: str) 
 
 Current status: {status}
 
-Reply 'yes' to confirm (expires in 60s)"""
+Reply 'yes' to confirm (expires in {timeout_seconds}s)"""
 
 
 def _control_command(

@@ -54,6 +54,91 @@ DEFAULT_LOG_WATCHING: dict[str, Any] = {
 
 
 @dataclass
+class AIConfig:
+    """Configuration for AI/Claude API settings."""
+
+    # Model names
+    pattern_analyzer_model: str = "claude-haiku-4-5-20251001"
+    nl_processor_model: str = "claude-sonnet-4-5-20250929"
+    diagnostic_model: str = "claude-haiku-4-5-20251001"
+
+    # Token limits
+    pattern_analyzer_max_tokens: int = 500
+    nl_processor_max_tokens: int = 1024
+    diagnostic_brief_max_tokens: int = 300
+    diagnostic_detail_max_tokens: int = 800
+
+    # NL processor settings
+    nl_max_tool_iterations: int = 10
+    nl_max_conversation_exchanges: int = 5
+
+    # Pattern analyzer settings
+    pattern_analyzer_context_lines: int = 30
+
+    # Diagnostic settings
+    diagnostic_context_expiry_seconds: int = 600
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AIConfig":
+        """Create AIConfig from YAML dict."""
+        models = data.get("models", {})
+        max_tokens = data.get("max_tokens", {})
+        nl = data.get("nl_processor", {})
+        return cls(
+            pattern_analyzer_model=models.get("pattern_analyzer", "claude-haiku-4-5-20251001"),
+            nl_processor_model=models.get("nl_processor", "claude-sonnet-4-5-20250929"),
+            diagnostic_model=models.get("diagnostic", "claude-haiku-4-5-20251001"),
+            pattern_analyzer_max_tokens=max_tokens.get("pattern_analyzer", 500),
+            nl_processor_max_tokens=max_tokens.get("nl_processor", 1024),
+            diagnostic_brief_max_tokens=max_tokens.get("diagnostic_brief", 300),
+            diagnostic_detail_max_tokens=max_tokens.get("diagnostic_detail", 800),
+            nl_max_tool_iterations=nl.get("max_tool_iterations", 10),
+            nl_max_conversation_exchanges=nl.get("max_conversation_exchanges", 5),
+            pattern_analyzer_context_lines=data.get("pattern_analyzer_context_lines", 30),
+            diagnostic_context_expiry_seconds=data.get("diagnostic_context_expiry_seconds", 600),
+        )
+
+
+@dataclass
+class BotConfig:
+    """Configuration for Telegram bot display and behaviour."""
+
+    confirmation_timeout_seconds: int = 60
+    log_max_lines: int = 100
+    log_max_chars: int = 4000
+    nl_log_max_chars: int = 3000
+    diagnose_max_lines: int = 500
+    error_display_max_chars: int = 200
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BotConfig":
+        """Create BotConfig from YAML dict."""
+        log_display = data.get("log_display", {})
+        return cls(
+            confirmation_timeout_seconds=data.get("confirmation_timeout_seconds", 60),
+            log_max_lines=log_display.get("max_lines", 100),
+            log_max_chars=log_display.get("max_chars", 4000),
+            nl_log_max_chars=log_display.get("nl_max_chars", 3000),
+            diagnose_max_lines=log_display.get("diagnose_max_lines", 500),
+            error_display_max_chars=data.get("error_display_max_chars", 200),
+        )
+
+
+@dataclass
+class DockerConfig:
+    """Configuration for Docker connection."""
+
+    socket_path: str = "unix:///var/run/docker.sock"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DockerConfig":
+        """Create DockerConfig from YAML dict."""
+        return cls(
+            socket_path=data.get("socket_path", "unix:///var/run/docker.sock"),
+        )
+
+
+@dataclass
 class ResourceConfig:
     """Configuration for resource monitoring."""
 
@@ -268,6 +353,21 @@ class AppConfig:
         return self._settings.log_level
 
     @property
+    def ai(self) -> AIConfig:
+        """Get AI/Claude API configuration."""
+        return AIConfig.from_dict(self._yaml_config.get("ai", {}))
+
+    @property
+    def bot(self) -> BotConfig:
+        """Get bot display and behaviour configuration."""
+        return BotConfig.from_dict(self._yaml_config.get("bot", {}))
+
+    @property
+    def docker(self) -> DockerConfig:
+        """Get Docker connection configuration."""
+        return DockerConfig.from_dict(self._yaml_config.get("docker", {}))
+
+    @property
     def resource_monitoring(self) -> ResourceConfig:
         """Get resource monitoring configuration."""
         raw = self._yaml_config.get("resource_monitoring", {})
@@ -289,6 +389,37 @@ DEFAULT_CONFIG_TEMPLATE = '''# Unraid Monitor Bot Configuration
 
 monitoring:
   health_check_interval: 60  # seconds
+
+# AI / Claude API configuration
+ai:
+  models:
+    pattern_analyzer: "claude-haiku-4-5-20251001"
+    nl_processor: "claude-sonnet-4-5-20250929"
+    diagnostic: "claude-haiku-4-5-20251001"
+  max_tokens:
+    pattern_analyzer: 500
+    nl_processor: 1024
+    diagnostic_brief: 300
+    diagnostic_detail: 800
+  nl_processor:
+    max_tool_iterations: 10
+    max_conversation_exchanges: 5
+  pattern_analyzer_context_lines: 30
+  diagnostic_context_expiry_seconds: 600
+
+# Bot display and behaviour settings
+bot:
+  confirmation_timeout_seconds: 60
+  log_display:
+    max_lines: 100
+    max_chars: 4000
+    nl_max_chars: 3000
+    diagnose_max_lines: 500
+  error_display_max_chars: 200
+
+# Docker connection settings
+docker:
+  socket_path: "unix:///var/run/docker.sock"
 
 # Containers to ignore (won't be monitored or shown)
 ignored_containers: []

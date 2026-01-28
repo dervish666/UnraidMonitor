@@ -35,9 +35,10 @@ def format_uptime(seconds: int) -> str:
 class AlertManager:
     """Manages sending alerts to Telegram."""
 
-    def __init__(self, bot: Bot, chat_id: int):
+    def __init__(self, bot: Bot, chat_id: int, error_display_max_chars: int = 200):
         self.bot = bot
         self.chat_id = chat_id
+        self.error_display_max_chars = error_display_max_chars
 
     async def send_crash_alert(
         self,
@@ -101,8 +102,8 @@ Uptime: {uptime_str}"""
 
         # Truncate long error lines for display
         display_error = error_line
-        if len(error_line) > 200:
-            display_error = error_line[:200] + "..."
+        if len(error_line) > self.error_display_max_chars:
+            display_error = error_line[:self.error_display_max_chars] + "..."
 
         if total_errors > 1:
             count_text = f"Found {total_errors} errors in the last 15 minutes"
