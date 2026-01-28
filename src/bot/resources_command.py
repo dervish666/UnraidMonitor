@@ -34,7 +34,7 @@ async def format_resources_summary(resource_monitor: "ResourceMonitor") -> str |
 
     lines = ["📊 *Container Resources*", ""]
 
-    for stats in sorted(stats_list, key=lambda s: s.name):
+    for stats in sorted(stats_list, key=lambda s: s.memory_percent, reverse=True):
         line = format_summary_line(
             stats.name,
             stats.cpu_percent,
