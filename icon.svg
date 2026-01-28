@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF8C00;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#E65C00;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="screenGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#16213e;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="url(#bgGrad)"/>
+
+  <!-- Monitor/Server body -->
+  <rect x="100" y="120" width="312" height="200" rx="16" fill="#2d3748"/>
+  <rect x="116" y="136" width="280" height="168" rx="8" fill="url(#screenGrad)"/>
+
+  <!-- Stand -->
+  <rect x="216" y="320" width="80" height="24" fill="#2d3748"/>
+  <rect x="180" y="344" width="152" height="16" rx="4" fill="#2d3748"/>
+
+  <!-- Bot face on screen -->
+  <!-- Eyes -->
+  <circle cx="200" cy="200" r="20" fill="#4ade80"/>
+  <circle cx="312" cy="200" r="20" fill="#4ade80"/>
+
+  <!-- Smile/status indicator -->
+  <path d="M 180 250 Q 256 290 332 250" stroke="#4ade80" stroke-width="12" fill="none" stroke-linecap="round"/>
+
+  <!-- Antenna -->
+  <line x1="256" y1="120" x2="256" y2="80" stroke="#2d3748" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="256" cy="68" r="16" fill="#4ade80"/>
+
+  <!-- Signal waves -->
+  <path d="M 310 90 Q 330 70 310 50" stroke="#fff" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8"/>
+  <path d="M 330 100 Q 360 70 330 40" stroke="#fff" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.6"/>
+
+  <!-- Heartbeat/monitoring line -->
+  <polyline points="130,220 160,220 175,220 185,190 200,250 215,200 225,220 380,220"
+            stroke="#f472b6" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
+</svg>
