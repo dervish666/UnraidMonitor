@@ -35,6 +35,8 @@ from src.bot.memory_commands import cancel_kill_command
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
 from src.bot.manage_command import (
     manage_command,
+    manage_status_callback,
+    manage_resources_callback,
     manage_ignores_callback,
     manage_ignores_container_callback,
     manage_mutes_callback,
@@ -358,6 +360,14 @@ def register_commands(
             )
 
             # Manage callbacks
+            dp.callback_query.register(
+                manage_status_callback(state),
+                F.data == "manage:status",
+            )
+            dp.callback_query.register(
+                manage_resources_callback(resource_monitor),
+                F.data == "manage:resources",
+            )
             dp.callback_query.register(
                 manage_ignores_callback(ignore_manager),
                 F.data == "manage:ignores",

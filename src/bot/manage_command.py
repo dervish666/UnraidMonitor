@@ -5,11 +5,16 @@ from typing import Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
+from src.bot.commands import format_status_summary
+from src.bot.resources_command import format_resources_summary
+
 if TYPE_CHECKING:
     from src.alerts.ignore_manager import IgnoreManager
     from src.alerts.mute_manager import MuteManager
     from src.alerts.server_mute_manager import ServerMuteManager
     from src.alerts.array_mute_manager import ArrayMuteManager
+    from src.state import ContainerStateManager
+    from src.monitors.resource_monitor import ResourceMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,10 @@ def manage_command() -> Callable[[Message], Awaitable[None]]:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
+                    InlineKeyboardButton(text="📊 Status", callback_data="manage:status"),
+                    InlineKeyboardButton(text="📈 Resources", callback_data="manage:resources"),
+                ],
+                [
                     InlineKeyboardButton(text="📝 Manage Ignores", callback_data="manage:ignores"),
                     InlineKeyboardButton(text="🔕 Manage Mutes", callback_data="manage:mutes"),
                 ],
@@ -61,9 +70,48 @@ def manage_command() -> Callable[[Message], Awaitable[None]]:
         )
 
         await message.answer(
-            "What would you like to manage?",
+            "What would you like to do?",
             reply_markup=keyboard,
         )
+
+    return handler
+
+
+def manage_status_callback(
+    state: "ContainerStateManager",
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for status button callback."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        await callback.answer()
+
+        summary = format_status_summary(state)
+        if callback.message:
+            await callback.message.answer(summary, parse_mode="Markdown")
+
+    return handler
+
+
+def manage_resources_callback(
+    resource_monitor: "ResourceMonitor | None",
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for resources button callback."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        await callback.answer()
+
+        if not resource_monitor:
+            if callback.message:
+                await callback.message.answer("Resource monitoring not enabled.")
+            return
+
+        summary = await format_resources_summary(resource_monitor)
+        if summary:
+            if callback.message:
+                await callback.message.answer(summary, parse_mode="Markdown")
+        else:
+            if callback.message:
+                await callback.message.answer("📊 No running containers found")
 
     return handler
 

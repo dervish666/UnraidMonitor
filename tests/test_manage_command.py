@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.bot.manage_command import (
     manage_command,
+    manage_status_callback,
+    manage_resources_callback,
     manage_ignores_callback,
     manage_ignores_container_callback,
     manage_mutes_callback,
@@ -14,6 +16,7 @@ from src.bot.manage_command import (
 )
 from src.alerts.ignore_manager import IgnoreManager
 from src.alerts.mute_manager import MuteManager
+from src.state import ContainerStateManager
 
 
 @pytest.fixture
@@ -36,7 +39,7 @@ def manage_state():
 
 @pytest.mark.asyncio
 async def test_manage_command_shows_buttons():
-    """Test /manage shows ignores and mutes buttons."""
+    """Test /manage shows status, resources, ignores and mutes buttons."""
     handler = manage_command()
     message = AsyncMock()
 
@@ -44,7 +47,13 @@ async def test_manage_command_shows_buttons():
 
     message.answer.assert_called_once()
     call_args = message.answer.call_args
-    assert "manage" in call_args.kwargs.get("reply_markup", "").inline_keyboard[0][0].callback_data
+    keyboard = call_args.kwargs.get("reply_markup")
+    # First row: Status and Resources
+    assert keyboard.inline_keyboard[0][0].callback_data == "manage:status"
+    assert keyboard.inline_keyboard[0][1].callback_data == "manage:resources"
+    # Second row: Ignores and Mutes
+    assert keyboard.inline_keyboard[1][0].callback_data == "manage:ignores"
+    assert keyboard.inline_keyboard[1][1].callback_data == "manage:mutes"
 
 
 @pytest.mark.asyncio
@@ -203,6 +212,39 @@ async def test_manage_selection_cancel(ignore_manager, mute_manager, manage_stat
 
     message.answer.assert_called_with("Cancelled.")
     assert not manage_state.has_pending(123)
+
+
+@pytest.mark.asyncio
+async def test_manage_status_callback():
+    """Test status button shows container status."""
+    state = ContainerStateManager()
+
+    handler = manage_status_callback(state)
+    callback = AsyncMock()
+    callback.data = "manage:status"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    callback.answer.assert_called_once()
+    callback.message.answer.assert_called_once()
+    # Check status summary is shown
+    call_args = callback.message.answer.call_args
+    assert "Container Status" in call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_manage_resources_callback_no_monitor():
+    """Test resources button with no resource monitor."""
+    handler = manage_resources_callback(None)
+    callback = AsyncMock()
+    callback.data = "manage:resources"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    callback.answer.assert_called_once()
+    callback.message.answer.assert_called_with("Resource monitoring not enabled.")
 
 
 def test_manage_command_in_help():

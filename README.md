@@ -56,10 +56,11 @@ A Telegram bot for monitoring Docker containers on Unraid servers. Get real-time
 | `/ignores` | List all ignore patterns |
 | `/cancel-kill` | Cancel pending memory pressure container kill |
 
-### Other
+### Quick Access
 
 | Command | Description |
 |---------|-------------|
+| `/manage` | Dashboard with buttons for status, resources, ignores & mutes |
 | `/help` | Show help message |
 
 Partial container names work: `/status rad` matches `radarr`

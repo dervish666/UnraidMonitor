@@ -21,6 +21,34 @@ def format_summary_line(name: str, cpu: float, mem: float, mem_display: str) -> 
     return f"{name_padded} CPU: {cpu:4.0f}%  MEM: {mem:4.0f}% ({mem_display}){warning}"
 
 
+async def format_resources_summary(resource_monitor: "ResourceMonitor") -> str | None:
+    """Format resource summary for all containers.
+
+    Returns:
+        Formatted summary string, or None if no containers found.
+    """
+    stats_list = await resource_monitor.get_all_stats()
+
+    if not stats_list:
+        return None
+
+    lines = ["📊 *Container Resources*", ""]
+
+    for stats in sorted(stats_list, key=lambda s: s.name):
+        line = format_summary_line(
+            stats.name,
+            stats.cpu_percent,
+            stats.memory_percent,
+            stats.memory_display,
+        )
+        lines.append(f"`{line}`")
+
+    lines.append("")
+    lines.append("_⚠️ = approaching threshold_")
+
+    return "\n".join(lines)
+
+
 def resources_command(
     resource_monitor: "ResourceMonitor",
 ) -> Callable[[Message], Awaitable[None]]:
@@ -32,27 +60,13 @@ def resources_command(
 
         if len(parts) == 1:
             # Summary view
-            stats_list = await resource_monitor.get_all_stats()
+            summary = await format_resources_summary(resource_monitor)
 
-            if not stats_list:
+            if not summary:
                 await message.answer("📊 No running containers found")
                 return
 
-            lines = ["📊 *Container Resources*", ""]
-
-            for stats in sorted(stats_list, key=lambda s: s.name):
-                line = format_summary_line(
-                    stats.name,
-                    stats.cpu_percent,
-                    stats.memory_percent,
-                    stats.memory_display,
-                )
-                lines.append(f"`{line}`")
-
-            lines.append("")
-            lines.append("_⚠️ = approaching threshold_")
-
-            await message.answer("\n".join(lines), parse_mode="Markdown")
+            await message.answer(summary, parse_mode="Markdown")
         else:
             # Detailed view for specific container
             container_name = parts[1].strip()

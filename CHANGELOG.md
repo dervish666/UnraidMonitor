@@ -2,6 +2,15 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.7.0] - 2026-01-28
+
+### Added
+- `/manage` command - dashboard with quick access buttons for:
+  - Container status overview
+  - Resource usage summary
+  - Manage runtime ignores (view and remove)
+  - Manage active mutes (view and remove container, server, and array mutes)
+
 ## [0.6.0] - 2025-01-27
 
 ### Added
