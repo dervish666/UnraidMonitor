@@ -6,6 +6,7 @@ import docker
 
 from src.state import ContainerStateManager
 from src.models import ContainerInfo
+from src.utils.sanitize import sanitize_logs
 
 if TYPE_CHECKING:
     from src.services.container_control import ContainerController
@@ -336,8 +337,10 @@ class NLToolExecutor:
                 return f"No recent logs for {resolved.name}"
             if len(logs) > self._log_max_chars:
                 logs = logs[-self._log_max_chars:]
-                return f"... (truncated)\n{logs}"
-            return f"Logs for {resolved.name}:\n{logs}"
+                logs = f"... (truncated)\n{logs}"
+            # Sanitize logs to prevent prompt injection via tool results
+            safe_logs = sanitize_logs(logs, max_length=self._log_max_chars)
+            return f"Logs for {resolved.name}:\n{safe_logs}"
         except docker.errors.NotFound:
             return f"Container '{resolved.name}' not found"
         except Exception as e:
@@ -347,25 +350,171 @@ class NLToolExecutor:
         """Get CPU and memory usage for containers."""
         if self._resource_monitor is None:
             return "Resource monitoring not available."
-        return "Resource usage data not yet implemented."
+
+        name = args.get("name")
+        if name:
+            # Get stats for specific container
+            resolved = self._resolve_container(name)
+            if isinstance(resolved, str):
+                return resolved
+
+            stats = await self._resource_monitor.get_container_stats(resolved.name)
+            if stats is None:
+                return f"Container '{resolved.name}' is not running or stats unavailable."
+
+            return (
+                f"Resource usage for {stats.name}:\n"
+                f"  CPU: {stats.cpu_percent:.1f}%\n"
+                f"  Memory: {stats.memory_percent:.1f}% "
+                f"({stats.memory_display} / {stats.memory_limit_display})"
+            )
+
+        # Get stats for all running containers
+        all_stats = await self._resource_monitor.get_all_stats()
+        if not all_stats:
+            return "No running containers found."
+
+        # Sort by CPU usage descending
+        all_stats.sort(key=lambda s: s.cpu_percent, reverse=True)
+
+        lines = ["Resource usage (sorted by CPU):"]
+        for stats in all_stats:
+            lines.append(
+                f"  {stats.name}: CPU {stats.cpu_percent:.1f}%, "
+                f"Mem {stats.memory_percent:.1f}% ({stats.memory_display})"
+            )
+        return "\n".join(lines)
 
     async def _tool_get_server_stats(self, args: dict[str, Any]) -> str:
         """Get overall server statistics."""
         if self._unraid is None:
             return "Unraid monitoring not configured."
-        return "Server stats not yet implemented."
+
+        metrics = await self._unraid.get_current_metrics()
+        if metrics is None:
+            return "Failed to retrieve server metrics."
+
+        lines = ["Server Statistics:"]
+
+        # CPU info
+        cpu_percent = metrics.get("cpu_percent", 0)
+        cpu_temp = metrics.get("cpu_temperature", 0)
+        lines.append(f"  CPU: {cpu_percent:.1f}%")
+        if cpu_temp:
+            lines.append(f"  CPU Temperature: {cpu_temp:.1f}°C")
+
+        # Memory info
+        memory_percent = metrics.get("memory_percent", 0)
+        memory_used = metrics.get("memory_used", 0)
+        memory_total = metrics.get("memory_total", 0)
+        if memory_total > 0:
+            used_gb = memory_used / (1024**3)
+            total_gb = memory_total / (1024**3)
+            lines.append(f"  Memory: {memory_percent:.1f}% ({used_gb:.1f}GB / {total_gb:.1f}GB)")
+        else:
+            lines.append(f"  Memory: {memory_percent:.1f}%")
+
+        # Uptime if available
+        uptime = metrics.get("uptime")
+        if uptime:
+            lines.append(f"  Uptime: {uptime}")
+
+        return "\n".join(lines)
 
     async def _tool_get_array_status(self, args: dict[str, Any]) -> str:
         """Get Unraid array status."""
         if self._unraid is None:
             return "Unraid monitoring not configured."
-        return "Array status not yet implemented."
+
+        status = await self._unraid.get_array_status()
+        if status is None:
+            return "Failed to retrieve array status."
+
+        lines = ["Array Status:"]
+
+        # Array state
+        state = status.get("state", "unknown")
+        lines.append(f"  State: {state}")
+
+        # Parity info
+        parity_status = status.get("parity_status")
+        if parity_status:
+            lines.append(f"  Parity: {parity_status}")
+
+        parity_check = status.get("parity_check_progress")
+        if parity_check is not None:
+            lines.append(f"  Parity Check: {parity_check}% complete")
+
+        # Disk info
+        disks = status.get("disks", [])
+        if disks:
+            lines.append(f"  Disks: {len(disks)} total")
+            unhealthy = [d for d in disks if d.get("status") != "healthy"]
+            if unhealthy:
+                lines.append(f"  Warning: {len(unhealthy)} disk(s) have issues:")
+                for disk in unhealthy:
+                    lines.append(f"    - {disk.get('name', 'unknown')}: {disk.get('status', 'unknown')}")
+            else:
+                lines.append("  All disks healthy")
+
+        # Capacity info
+        used = status.get("used_bytes", 0)
+        total = status.get("total_bytes", 0)
+        if total > 0:
+            used_tb = used / (1024**4)
+            total_tb = total / (1024**4)
+            percent = (used / total) * 100
+            lines.append(f"  Capacity: {used_tb:.1f}TB / {total_tb:.1f}TB ({percent:.1f}% used)")
+
+        return "\n".join(lines)
 
     async def _tool_get_recent_errors(self, args: dict[str, Any]) -> str:
         """Get recent errors from container logs."""
         if self._recent_errors is None:
             return "Error tracking not available."
-        return "Recent errors not yet implemented."
+
+        name = args.get("name")
+        if name:
+            # Get errors for specific container
+            resolved = self._resolve_container(name)
+            if isinstance(resolved, str):
+                return resolved
+
+            errors = self._recent_errors.get_recent(resolved.name)
+            if not errors:
+                return f"No recent errors for {resolved.name}."
+
+            lines = [f"Recent errors for {resolved.name} ({len(errors)} unique):"]
+            for i, error in enumerate(errors[:10], 1):  # Limit to 10
+                # Truncate long error messages
+                error_display = error[:200] + "..." if len(error) > 200 else error
+                lines.append(f"  {i}. {error_display}")
+            if len(errors) > 10:
+                lines.append(f"  ... and {len(errors) - 10} more")
+            return "\n".join(lines)
+
+        # Get errors for all containers
+        all_containers = self._state.get_all()
+        containers_with_errors = []
+
+        for container in all_containers:
+            errors = self._recent_errors.get_recent(container.name)
+            if errors:
+                containers_with_errors.append((container.name, errors))
+
+        if not containers_with_errors:
+            return "No recent errors detected across any containers."
+
+        lines = ["Recent errors by container:"]
+        for container_name, errors in sorted(containers_with_errors, key=lambda x: -len(x[1])):
+            lines.append(f"\n{container_name} ({len(errors)} errors):")
+            for error in errors[:3]:  # Show first 3 per container
+                error_display = error[:100] + "..." if len(error) > 100 else error
+                lines.append(f"  - {error_display}")
+            if len(errors) > 3:
+                lines.append(f"  ... and {len(errors) - 3} more")
+
+        return "\n".join(lines)
 
     async def _tool_restart_container(self, args: dict[str, Any]) -> str:
         """Request container restart (requires confirmation)."""

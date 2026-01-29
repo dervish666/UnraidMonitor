@@ -262,9 +262,8 @@ class TestStateMachine:
 class TestKillCountdown:
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")
-    @patch("src.monitors.memory_monitor.asyncio.sleep", new_callable=AsyncMock)
     async def test_kill_after_countdown(
-        self, mock_sleep, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
     ):
         # Memory stays critical
         mock_psutil.virtual_memory.return_value = MagicMock(percent=96.0)
@@ -273,6 +272,9 @@ class TestKillCountdown:
         container.name = "bitmagnet"
         mock_docker_client.containers.get.return_value = container
         mock_docker_client.containers.list.return_value = [container]
+
+        # Use short kill delay for test
+        memory_config.kill_delay_seconds = 0.01
 
         monitor = MemoryMonitor(
             docker_client=mock_docker_client,
@@ -285,36 +287,22 @@ class TestKillCountdown:
 
         await monitor._execute_kill_countdown()
 
-        mock_sleep.assert_called_with(60)  # kill_delay_seconds
         container.stop.assert_called_once()
         assert "bitmagnet" in monitor._killed_containers
+        assert monitor._pending_kill is None
 
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")
-    @patch("src.monitors.memory_monitor.asyncio.sleep", new_callable=AsyncMock)
     async def test_cancel_kill_aborts_countdown(
-        self, mock_sleep, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
     ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=96.0)
         container = MagicMock()
         mock_docker_client.containers.get.return_value = container
 
-        monitor = MemoryMonitor(
-            docker_client=mock_docker_client,
-            config=memory_config,
-            on_alert=mock_on_alert,
-            on_ask_restart=mock_on_ask_restart,
-        )
-        monitor._pending_kill = "bitmagnet"
-        monitor._kill_cancelled = True
+        # Use longer delay to allow cancellation
+        memory_config.kill_delay_seconds = 5.0
 
-        await monitor._execute_kill_countdown()
-
-        container.stop.assert_not_called()
-        assert monitor._kill_cancelled is False  # Reset after handling
-
-    def test_cancel_kill_command(
-        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
-    ):
         monitor = MemoryMonitor(
             docker_client=mock_docker_client,
             config=memory_config,
@@ -323,10 +311,45 @@ class TestKillCountdown:
         )
         monitor._pending_kill = "bitmagnet"
 
+        # Start the countdown in background
+        import asyncio
+        countdown_task = asyncio.create_task(monitor._execute_kill_countdown())
+
+        # Wait a bit then cancel
+        await asyncio.sleep(0.01)
         result = monitor.cancel_pending_kill()
 
+        # Wait for countdown to complete
+        await countdown_task
+
         assert result is True
-        assert monitor._kill_cancelled is True
+        container.stop.assert_not_called()
+        assert monitor._pending_kill is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_kill_command(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        memory_config.kill_delay_seconds = 5.0
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._pending_kill = "bitmagnet"
+
+        # Start countdown to create the cancel event
+        import asyncio
+        countdown_task = asyncio.create_task(monitor._execute_kill_countdown())
+        await asyncio.sleep(0.01)  # Let it initialize
+
+        result = monitor.cancel_pending_kill()
+        await countdown_task
+
+        assert result is True
+        assert monitor._pending_kill is None
 
     def test_cancel_kill_no_pending(
         self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart

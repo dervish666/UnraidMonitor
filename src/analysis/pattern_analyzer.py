@@ -5,6 +5,9 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from src.utils.api_errors import handle_anthropic_error
+from src.utils.sanitize import sanitize_container_name, sanitize_logs
+
 if TYPE_CHECKING:
     import anthropic
 
@@ -64,10 +67,15 @@ class PatternAnalyzer:
 
         logs_text = "\n".join(recent_logs[-self._context_lines:]) if recent_logs else "(no recent logs)"
 
+        # Sanitize user-controlled inputs to prevent prompt injection
+        safe_container = sanitize_container_name(container)
+        safe_error = sanitize_logs(error_message, max_length=2000)
+        safe_logs = sanitize_logs(logs_text)
+
         prompt = ANALYSIS_PROMPT.format(
-            container=container,
-            error_message=error_message,
-            recent_logs=logs_text,
+            container=safe_container,
+            error_message=safe_error,
+            recent_logs=safe_logs,
         )
 
         try:
@@ -103,5 +111,6 @@ class PatternAnalyzer:
             return result
 
         except Exception as e:
-            logger.error(f"Error analyzing pattern with Haiku: {e}")
+            error_result = handle_anthropic_error(e)
+            logger.log(error_result.log_level, f"Error analyzing pattern with Haiku: {e}")
             return None

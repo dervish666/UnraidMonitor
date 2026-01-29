@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 
 import docker
 
+from src.utils.api_errors import handle_anthropic_error
+from src.utils.sanitize import sanitize_container_name, sanitize_logs
+
 logger = logging.getLogger(__name__)
 
 
@@ -130,17 +133,22 @@ class DiagnosticService:
 
         uptime_str = self._format_uptime(context.uptime_seconds) if context.uptime_seconds else "unknown"
 
+        # Sanitize user-controlled inputs to prevent prompt injection
+        safe_name = sanitize_container_name(context.container_name)
+        safe_image = sanitize_container_name(context.image)
+        safe_logs = sanitize_logs(context.logs)
+
         prompt = f"""You are a Docker container diagnostics assistant. Analyze this container issue and provide a brief, actionable summary.
 
-Container: {context.container_name}
-Image: {context.image}
+Container: {safe_name}
+Image: {safe_image}
 Exit Code: {context.exit_code}
 Uptime before exit: {uptime_str}
 Restart Count: {context.restart_count}
 
 Last log lines:
 ```
-{context.logs}
+{safe_logs}
 ```
 
 Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. Be specific and actionable. If you see a clear command to run, include it."""
@@ -153,8 +161,9 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
             )
             return message.content[0].text
         except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            return f"❌ Error analyzing container: {e}"
+            error_result = handle_anthropic_error(e)
+            logger.log(error_result.log_level, f"Claude API error in analyze: {e}")
+            return f"❌ {error_result.user_message}"
 
     def _format_uptime(self, seconds: int) -> str:
         """Format uptime in human-readable form."""
@@ -212,14 +221,19 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
         if not self._anthropic:
             return "❌ Anthropic API not configured."
 
+        # Sanitize user-controlled inputs to prevent prompt injection
+        safe_name = sanitize_container_name(context.container_name)
+        safe_logs = sanitize_logs(context.logs)
+        safe_summary = sanitize_logs(context.brief_summary or "", max_length=2000)
+
         prompt = f"""Based on your previous analysis, provide detailed help:
 
-Container: {context.container_name}
-Your brief analysis: {context.brief_summary}
+Container: {safe_name}
+Your brief analysis: {safe_summary}
 
 Logs:
 ```
-{context.logs}
+{safe_logs}
 ```
 
 Provide:
@@ -237,5 +251,6 @@ Be specific and actionable."""
             )
             return message.content[0].text
         except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            return f"❌ Error getting details: {e}"
+            error_result = handle_anthropic_error(e)
+            logger.log(error_result.log_level, f"Claude API error in get_details: {e}")
+            return f"❌ {error_result.user_message}"

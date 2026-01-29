@@ -49,6 +49,11 @@ def parse_container(container: Container) -> ContainerInfo:
 
 
 class DockerEventMonitor:
+    # Reconnection settings
+    INITIAL_BACKOFF_SECONDS = 1
+    MAX_BACKOFF_SECONDS = 60
+    MAX_QUEUE_SIZE = 1000  # Prevent unbounded memory growth
+
     def __init__(
         self,
         state_manager: ContainerStateManager,
@@ -66,8 +71,12 @@ class DockerEventMonitor:
         self._docker_socket_path = docker_socket_path
         self._client: docker.DockerClient | None = None
         self._running = False
-        self._pending_alerts: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # Use bounded queue to prevent memory issues under load
+        self._pending_alerts: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=self.MAX_QUEUE_SIZE
+        )
         self._alert_task: asyncio.Task | None = None
+        self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
 
     def connect(self) -> None:
         """Connect to Docker socket."""
@@ -88,7 +97,7 @@ class DockerEventMonitor:
         logger.info(f"Loaded {len(containers)} containers into state")
 
     async def start(self) -> None:
-        """Start monitoring Docker events."""
+        """Start monitoring Docker events with automatic reconnection."""
         if not self._client:
             raise RuntimeError("Not connected to Docker")
 
@@ -99,8 +108,51 @@ class DockerEventMonitor:
         if self.alert_manager:
             self._alert_task = asyncio.create_task(self._process_alerts())
 
-        # Run blocking event loop in thread
-        await asyncio.to_thread(self._event_loop)
+        # Run event loop with reconnection
+        while self._running:
+            try:
+                # Run blocking event loop in thread
+                await asyncio.to_thread(self._event_loop)
+
+                # If we exit normally (stop was called), break
+                if not self._running:
+                    break
+
+            except Exception as e:
+                if not self._running:
+                    break
+
+                logger.error(f"Docker event monitor error: {e}")
+                logger.info(f"Reconnecting in {self._backoff_seconds} seconds...")
+
+                await asyncio.sleep(self._backoff_seconds)
+
+                # Exponential backoff with cap
+                self._backoff_seconds = min(
+                    self._backoff_seconds * 2,
+                    self.MAX_BACKOFF_SECONDS
+                )
+
+                # Attempt to reconnect
+                try:
+                    self._reconnect()
+                    self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
+                    logger.info("Reconnected to Docker")
+                except Exception as reconnect_error:
+                    logger.error(f"Reconnection failed: {reconnect_error}")
+
+    def _reconnect(self) -> None:
+        """Attempt to reconnect to Docker daemon."""
+        # Close existing client if any
+        if self._client:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+
+        self._client = docker.DockerClient(base_url=self._docker_socket_path)
+        self.load_initial_state()
+        logger.info("Docker reconnection successful")
 
     async def _process_alerts(self) -> None:
         """Process alerts from the queue - runs as async task."""
@@ -123,32 +175,57 @@ class DockerEventMonitor:
         self._running = False
         if self._alert_task:
             self._alert_task.cancel()
+        if self._client:
+            try:
+                self._client.close()
+            except Exception:
+                pass
         logger.info("Stopping Docker event monitor")
 
     def _event_loop(self) -> None:
-        """Blocking event loop - runs in thread."""
+        """Blocking event loop - runs in thread.
+
+        Raises exceptions on connection errors to trigger reconnection.
+        """
         if not self._client:
             return
 
-        for event in self._client.events(decode=True, filters={"type": "container"}):
-            if not self._running:
-                break
+        try:
+            for event in self._client.events(decode=True, filters={"type": "container"}):
+                if not self._running:
+                    break
 
-            action = event.get("Action", "")
-            container_name = event.get("Actor", {}).get("Attributes", {}).get("name", "")
+                action = event.get("Action", "")
+                container_name = event.get("Actor", {}).get("Attributes", {}).get("name", "")
 
-            if container_name in self.ignored_containers:
-                continue
+                if container_name in self.ignored_containers:
+                    continue
 
-            if action in ("start", "die", "health_status"):
-                self._handle_event(event)
+                if action in ("start", "die", "health_status"):
+                    self._handle_event(event)
 
-            # Queue die events for crash alert processing
-            if action == "die" and self.alert_manager:
-                try:
-                    self._pending_alerts.put_nowait(event)
-                except Exception as e:
-                    logger.error(f"Failed to queue crash event: {e}")
+                # Queue die events for crash alert processing
+                if action == "die" and self.alert_manager:
+                    try:
+                        self._pending_alerts.put_nowait(event)
+                    except asyncio.QueueFull:
+                        logger.warning("Alert queue full, dropping oldest event")
+                        # Try to make room by getting one item (non-blocking)
+                        try:
+                            self._pending_alerts.get_nowait()
+                            self._pending_alerts.put_nowait(event)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.error(f"Failed to queue crash event: {e}")
+
+        except docker.errors.APIError as e:
+            logger.error(f"Docker API error: {e}")
+            raise
+        except Exception as e:
+            # Re-raise to trigger reconnection in start()
+            if self._running:
+                raise
 
     def _handle_event(self, event: dict[str, Any]) -> None:
         """Handle a Docker event."""

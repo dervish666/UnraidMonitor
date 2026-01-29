@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from src.services.nl_tools import get_tool_definitions
+from src.utils.api_errors import handle_anthropic_error
 
 logger = logging.getLogger(__name__)
 
@@ -159,9 +160,10 @@ class NLProcessor:
             return ProcessResult(response=response_text, pending_action=pending_action)
 
         except Exception as e:
-            logger.error(f"NL processing error: {e}")
+            error_result = handle_anthropic_error(e)
+            logger.log(error_result.log_level, f"NL processing error: {e}")
             return ProcessResult(
-                response="Sorry, I couldn't process that right now. Try using /commands instead."
+                response=f"Sorry, {error_result.user_message.lower()} Try using /commands instead."
             )
 
     async def _call_claude(self, messages: list[dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:

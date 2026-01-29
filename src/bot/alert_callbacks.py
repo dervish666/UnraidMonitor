@@ -27,7 +27,8 @@ def restart_callback(
             return
 
         # Parse callback data: restart:container_name
-        parts = callback.data.split(":")
+        # Use maxsplit=1 to handle container names with colons
+        parts = callback.data.split(":", 1)
         if len(parts) < 2:
             await callback.answer("Invalid callback data")
             return
@@ -46,14 +47,11 @@ def restart_callback(
         await callback.answer(f"Restarting {actual_name}...")
 
         # Perform restart
-        success, message = controller.restart(actual_name)
+        message = await controller.restart(actual_name)
 
-        # Send result message
+        # Send result message (message already contains emoji indicator)
         if callback.message:
-            if success:
-                await callback.message.answer(f"✅ {message}")
-            else:
-                await callback.message.answer(f"❌ {message}")
+            await callback.message.answer(message)
 
     return handler
 
@@ -71,16 +69,25 @@ def logs_callback(
             return
 
         # Parse callback data: logs:container_name:lines
-        parts = callback.data.split(":")
-        if len(parts) < 3:
+        # Split from the right to handle container names with colons
+        # Format: logs:container_name:50 -> ["logs", "container_name", "50"]
+        parts = callback.data.rsplit(":", 1)  # Split off the lines count
+        if len(parts) < 2:
             await callback.answer("Invalid callback data")
             return
 
-        container_name = parts[1]
         try:
-            lines = int(parts[2])
+            lines = int(parts[1])
         except ValueError:
             lines = 50
+
+        # Now split the prefix to get container name
+        prefix_parts = parts[0].split(":", 1)  # Split off "logs"
+        if len(prefix_parts) < 2:
+            await callback.answer("Invalid callback data")
+            return
+
+        container_name = prefix_parts[1]
 
         # Cap at reasonable limit
         lines = min(lines, max_lines)
@@ -142,7 +149,8 @@ def diagnose_callback(
             return
 
         # Parse callback data: diagnose:container_name
-        parts = callback.data.split(":")
+        # Use maxsplit=1 to handle container names with colons
+        parts = callback.data.split(":", 1)
         if len(parts) < 2:
             await callback.answer("Invalid callback data")
             return
@@ -209,16 +217,24 @@ def mute_callback(
             return
 
         # Parse callback data: mute:container_name:minutes
-        parts = callback.data.split(":")
-        if len(parts) < 3:
+        # Split from the right to handle container names with colons
+        parts = callback.data.rsplit(":", 1)  # Split off the minutes count
+        if len(parts) < 2:
             await callback.answer("Invalid callback data")
             return
 
-        container_name = parts[1]
         try:
-            minutes = int(parts[2])
+            minutes = int(parts[1])
         except ValueError:
             minutes = 60
+
+        # Now split the prefix to get container name
+        prefix_parts = parts[0].split(":", 1)  # Split off "mute"
+        if len(prefix_parts) < 2:
+            await callback.answer("Invalid callback data")
+            return
+
+        container_name = prefix_parts[1]
 
         # Find container
         matches = state.find_by_name(container_name)
