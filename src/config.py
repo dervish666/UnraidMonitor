@@ -85,6 +85,8 @@ class AIConfig:
     default_model: str = "claude-haiku-4-5-20251001"
     anthropic_prompt_caching: bool = True
     ollama_host: str = "http://localhost:11434"
+    # Default model used when Ollama is auto-selected as the provider
+    ollama_default_model: str = "qwen2.5:7b"
 
     @classmethod
     def from_dict(cls, data: dict) -> "AIConfig":
@@ -109,6 +111,7 @@ class AIConfig:
             default_model=data.get("default_model", "claude-haiku-4-5-20251001"),
             anthropic_prompt_caching=providers.get("anthropic", {}).get("prompt_caching", True),
             ollama_host=providers.get("ollama", {}).get("host", "http://localhost:11434"),
+            ollama_default_model=providers.get("ollama", {}).get("default_model", "qwen2.5:7b"),
         )
 
 
@@ -294,6 +297,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     unraid_api_key: str | None = None
     ollama_host: str | None = None
+    default_model: str | None = None
     config_path: str = "config/config.yaml"
     log_level: str = "INFO"
 
@@ -335,6 +339,15 @@ class AppConfig:
 
         # Cache config objects once (config is read-only after startup)
         self._ai = AIConfig.from_dict(self._yaml_config.get("ai", {}))
+
+        # Environment variable DEFAULT_MODEL overrides any YAML/code default
+        if settings.default_model:
+            self._ai.default_model = settings.default_model
+
+        # Environment variable OLLAMA_HOST overrides any YAML/code default
+        if settings.ollama_host:
+            self._ai.ollama_host = settings.ollama_host
+
         self._bot_config = BotConfig.from_dict(self._yaml_config.get("bot", {}))
         self._docker = DockerConfig.from_dict(self._yaml_config.get("docker", {}))
         self._resource_monitoring = ResourceConfig.from_dict(

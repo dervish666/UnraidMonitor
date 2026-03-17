@@ -19,6 +19,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-}
       - UNRAID_API_KEY=${UNRAID_API_KEY:-}
       - TZ=Europe/London
     volumes:

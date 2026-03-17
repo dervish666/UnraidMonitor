@@ -245,6 +245,7 @@ async def start_monitoring(
         ollama_models=ollama_models,
         default_model=ai_config.default_model,
         feature_models=feature_models,
+        ollama_default_model=ai_config.ollama_default_model,
     )
 
     # Log which providers are available

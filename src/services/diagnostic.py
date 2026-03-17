@@ -133,7 +133,7 @@ class DiagnosticService:
             Brief analysis summary.
         """
         if not self._provider:
-            return "❌ AI provider not configured. Set ANTHROPIC_API_KEY in .env"
+            return "❌ AI provider not configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_HOST in .env"
 
         uptime_str = format_uptime(context.uptime_seconds) if context.uptime_seconds else "unknown"
 

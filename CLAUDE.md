@@ -220,6 +220,7 @@ TELEGRAM_ALLOWED_USERS=       # Required - comma-separated Telegram user IDs (e.
 ANTHROPIC_API_KEY=            # Optional - enables AI features via Claude models
 OPENAI_API_KEY=               # Optional - enables AI features via OpenAI models
 OLLAMA_HOST=                  # Optional - Ollama server URL (default: http://localhost:11434)
+DEFAULT_MODEL=                # Optional - override default AI model (e.g. qwen2.5:7b, gpt-4o)
 UNRAID_API_KEY=               # Optional - enables /server, /array, /disks commands
 CONFIG_PATH=                  # Optional - defaults to config/config.yaml
 LOG_LEVEL=                    # Optional - defaults to INFO

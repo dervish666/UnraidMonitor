@@ -69,6 +69,7 @@ The easiest way to install on Unraid.
    - `ANTHROPIC_API_KEY` (optional) - Enables AI features via Claude
    - `OPENAI_API_KEY` (optional) - Enables AI features via OpenAI
    - `OLLAMA_HOST` (optional) - Enables AI features via local Ollama (e.g., `http://192.168.1.100:11434`)
+   - `DEFAULT_MODEL` (optional) - Override the default AI model (e.g., `qwen2.5:7b`, `gpt-4o`)
    - `UNRAID_API_KEY` (optional) - Enables server monitoring
 
 3. **Start the container**
@@ -110,6 +111,9 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 OLLAMA_HOST=http://localhost:11434
 
+# Optional - override the default AI model (e.g. qwen2.5:7b, gpt-4o)
+DEFAULT_MODEL=
+
 # Optional - enables Unraid server monitoring
 UNRAID_API_KEY=your_unraid_api_key_here
 ```
@@ -141,6 +145,7 @@ Go to **Docker** → **Add Container** and configure:
 | `ANTHROPIC_API_KEY` | (optional) Claude AI features |
 | `OPENAI_API_KEY` | (optional) OpenAI AI features |
 | `OLLAMA_HOST` | (optional) Ollama URL, e.g., `http://192.168.1.100:11434` |
+| `DEFAULT_MODEL` | (optional) Override default model, e.g., `qwen2.5:7b` |
 | `UNRAID_API_KEY` | (optional) Unraid server monitoring |
 | `TZ` | Your timezone (e.g., `Europe/London`) |
 
