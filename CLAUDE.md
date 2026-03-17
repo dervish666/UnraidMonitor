@@ -234,3 +234,18 @@ LOG_LEVEL=                    # Optional - defaults to INFO
 - `protected_containers` / `ignored_containers` - Safety and visibility controls
 - `memory_management` - System memory pressure thresholds and kill policy
 - `resource_monitoring` - Per-container CPU/memory alert thresholds
+
+## Design Context
+
+See `.impeccable.md` for the full design system. Key principles:
+
+1. **Clarity over cleverness** — Every message instantly parseable. Status at a glance, details on demand. Semantic emoji as visual anchors, not decoration.
+2. **Action-oriented** — Every alert includes what to do about it. Buttons for common actions. Minimize steps from "something's wrong" to "I fixed it."
+3. **Respectful of attention** — Only interrupt when it matters. Precise severity (🔴 vs ⚠️ vs ✅). Group related info, don't spam.
+4. **Professional warmth** — Competent and trustworthy, not cold. The bot is a reliable colleague, not a robot.
+5. **Progressive disclosure** — Summary first, details available on tap. Respect the small screen.
+
+**Brand personality:** Reliable, professional, precise — like a seasoned sysadmin.
+**Emotional goals:** Confidence & control, calm & reassurance, empowerment & clarity.
+**References:** Uptime Robot/Betterstack (clean, professional) + Home Assistant (tinkerer-friendly, power-user).
+**Color palette:** Brand orange (#FF8C00→#E65C00), accent green (#4ade80), accent pink (#f472b6), dark surfaces (#1a1a2e/#16213e).
