@@ -297,7 +297,7 @@ class TestStartCommand:
         callback.answer = AsyncMock()
         callback.message = MagicMock()
         callback.message.edit_text = AsyncMock()
-        callback.message.answer_chat_action = AsyncMock()
+        callback.message.bot.send_chat_action = AsyncMock()
 
         await handler(callback)
 
@@ -361,7 +361,7 @@ class TestPullCommand:
         callback.answer = AsyncMock()
         callback.message = MagicMock()
         callback.message.edit_text = AsyncMock()
-        callback.message.answer_chat_action = AsyncMock()
+        callback.message.bot.send_chat_action = AsyncMock()
 
         await handler(callback)
 

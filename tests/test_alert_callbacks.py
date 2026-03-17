@@ -31,7 +31,7 @@ def mock_callback():
     callback.answer = AsyncMock()
     callback.message = MagicMock()
     callback.message.answer = AsyncMock()
-    callback.message.answer_chat_action = AsyncMock()
+    callback.message.bot.send_chat_action = AsyncMock()
     callback.from_user = MagicMock()
     callback.from_user.id = 12345
     return callback

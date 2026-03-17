@@ -108,7 +108,7 @@ async def test_ctrl_confirm_callback_executes_restart():
     callback.answer = AsyncMock()
     callback.message = MagicMock()
     callback.message.edit_text = AsyncMock()
-    callback.message.answer_chat_action = AsyncMock()
+    callback.message.bot.send_chat_action = AsyncMock()
 
     await handler(callback)
 
@@ -234,7 +234,7 @@ async def test_ctrl_confirm_callback_executes_all_actions():
         callback.answer = AsyncMock()
         callback.message = MagicMock()
         callback.message.edit_text = AsyncMock()
-        callback.message.answer_chat_action = AsyncMock()
+        callback.message.bot.send_chat_action = AsyncMock()
 
         await handler(callback)
 

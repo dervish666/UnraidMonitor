@@ -162,7 +162,7 @@ def create_ctrl_confirm_callback(
                 callback.message,
                 f"{emoji} Executing {action} on *{escape_markdown(container_name)}*...",
             )
-            await callback.message.answer_chat_action(ChatAction.TYPING)
+            await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
 
         # Execute the action
         if action == "restart":

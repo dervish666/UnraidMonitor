@@ -193,7 +193,7 @@ def server_command(
         text = (message.text or "").strip()
         detailed = "detailed" in text.lower()
 
-        await message.answer_chat_action(ChatAction.TYPING)
+        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
 
         if detailed:
             response = await format_server_detailed(system_monitor)
@@ -355,7 +355,7 @@ def disks_command(
     """Factory for /disks command handler."""
 
     async def handler(message: Message) -> None:
-        await message.answer_chat_action(ChatAction.TYPING)
+        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
         response = await format_disks(system_monitor)
 
         if response:

@@ -49,7 +49,7 @@ async def test_restart_with_confirmation_flow():
     callback.answer = AsyncMock()
     callback.message = MagicMock()
     callback.message.edit_text = AsyncMock()
-    callback.message.answer_chat_action = AsyncMock()
+    callback.message.bot.send_chat_action = AsyncMock()
 
     await confirm_handler(callback)
 

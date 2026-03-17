@@ -51,7 +51,7 @@ async def test_full_diagnose_flow():
     msg1.from_user.id = 123
     msg1.reply_to_message = None
     msg1.answer = AsyncMock()
-    msg1.answer_chat_action = AsyncMock()
+    msg1.bot.send_chat_action = AsyncMock()
 
     await diagnose_handler(msg1)
 
@@ -80,7 +80,7 @@ async def test_full_diagnose_flow():
     callback.answer = AsyncMock()
     callback.message = MagicMock()
     callback.message.answer = AsyncMock()
-    callback.message.answer_chat_action = AsyncMock()
+    callback.message.bot.send_chat_action = AsyncMock()
 
     await details_handler(callback)
 
@@ -126,7 +126,7 @@ Image: linuxserver/overseerr:latest"""
     message.from_user.id = 123
     message.reply_to_message = reply_msg
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 
@@ -169,7 +169,7 @@ async def test_diagnose_different_users_independent_contexts():
     msg1.from_user.id = 111
     msg1.reply_to_message = None
     msg1.answer = AsyncMock()
-    msg1.answer_chat_action = AsyncMock()
+    msg1.bot.send_chat_action = AsyncMock()
     await diagnose_handler(msg1)
 
     # User 2 diagnoses redis
@@ -178,7 +178,7 @@ async def test_diagnose_different_users_independent_contexts():
     msg2.from_user.id = 222
     msg2.reply_to_message = None
     msg2.answer = AsyncMock()
-    msg2.answer_chat_action = AsyncMock()
+    msg2.bot.send_chat_action = AsyncMock()
     await diagnose_handler(msg2)
 
     # Both users should have pending contexts
@@ -196,7 +196,7 @@ async def test_diagnose_different_users_independent_contexts():
     callback1.answer = AsyncMock()
     callback1.message = MagicMock()
     callback1.message.answer = AsyncMock()
-    callback1.message.answer_chat_action = AsyncMock()
+    callback1.message.bot.send_chat_action = AsyncMock()
     await details_handler(callback1)
 
     # User 1 should no longer have pending context
@@ -234,7 +234,7 @@ async def test_diagnose_no_api_key_configured():
     message.from_user.id = 123
     message.reply_to_message = None
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 
@@ -275,7 +275,7 @@ async def test_diagnose_with_custom_line_count():
     message.from_user.id = 123
     message.reply_to_message = None
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 

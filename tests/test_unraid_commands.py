@@ -65,7 +65,7 @@ async def test_server_command_shows_metrics():
     message = MagicMock()
     message.text = "/server"
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 
@@ -107,7 +107,7 @@ async def test_server_command_detailed():
     message = MagicMock()
     message.text = "/server detailed"
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 
@@ -132,7 +132,7 @@ async def test_server_command_not_connected():
     message = MagicMock()
     message.text = "/server"
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 
@@ -317,7 +317,7 @@ async def test_disks_command():
     message = MagicMock()
     message.text = "/disks"
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 

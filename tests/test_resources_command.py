@@ -19,7 +19,7 @@ async def test_resources_command_summary():
     message = MagicMock()
     message.text = "/resources"
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 
@@ -98,7 +98,7 @@ async def test_resources_command_no_containers():
     message = MagicMock()
     message.text = "/resources"
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 

@@ -33,7 +33,7 @@ async def test_diagnose_command_with_container_name():
     message.from_user.id = 123
     message.reply_to_message = None
     message.answer = AsyncMock()
-    message.answer_chat_action = AsyncMock()
+    message.bot.send_chat_action = AsyncMock()
 
     await handler(message)
 
@@ -129,7 +129,7 @@ async def test_diag_details_callback():
     callback.answer = AsyncMock()
     callback.message = MagicMock()
     callback.message.answer = AsyncMock()
-    callback.message.answer_chat_action = AsyncMock()
+    callback.message.bot.send_chat_action = AsyncMock()
 
     await handler(callback)
 

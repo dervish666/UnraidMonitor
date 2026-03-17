@@ -207,7 +207,7 @@ def diagnose_callback(
         await callback.answer(f"Analyzing {actual_name}...")
 
         if callback.message:
-            await callback.message.answer_chat_action(ChatAction.TYPING)
+            await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
             await callback.message.answer(f"Analyzing {actual_name}...")
 
         # Gather context
