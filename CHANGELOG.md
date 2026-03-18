@@ -2,6 +2,13 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.9.5] - 2026-03-18
+
+### Changed
+- **OpenAI SDK** - Bumped version pin to support v2.x (1.x → 2.29.0), enabling latest API features
+- **psutil** - Bumped version pin to support v7.x (6.x → 7.2.2), improved macOS memory accuracy
+- **Anthropic SDK** - Updated to v0.85.0
+
 ## [0.9.3] - 2026-03-12
 
 ### Fixed
