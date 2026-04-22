@@ -2,6 +2,12 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.9.6] - 2026-04-22
+
+### Fixed
+- **Alerts lost after restart** - ChatIdStore was in-memory only; after any bot restart, all alerts silently dropped until user sent a message. Now persists chat IDs to `data/chat_ids.json` so alerts resume immediately
+- **Self-monitoring feedback loop** - Log watcher's self-log filter missed `__main__` logger, causing the bot to detect its own "Alert queue full" warnings as errors, filling the queue faster
+
 ## [0.9.5] - 2026-03-18
 
 ### Changed

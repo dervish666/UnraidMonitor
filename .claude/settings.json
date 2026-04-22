@@ -9,6 +9,28 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "filepath=\"$CLAUDE_FILE_PATH\"; if [ -n \"$filepath\" ] && echo \"$filepath\" | grep -qE '\\.py$'; then cd /Users/dervish/CascadeProjects/UnraidMonitor && uv run ruff check --fix \"$filepath\" 2>/dev/null; exit 0; fi"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if the file being edited has a name matching any of these patterns: .env, .env.*, *.pem, *.key, credentials*, secrets*. If it matches, respond {\"decision\": \"block\", \"reason\": \"Blocked edit to secrets/credentials file. Modify these manually.\"}. Otherwise respond {\"decision\": \"allow\"}."
+          }
+        ]
+      }
     ]
   }
 }

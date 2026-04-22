@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 # Matches the bot's own Python logging output so we never alert on our own logs.
 # Format: "2026-02-12 20:39:54,770 - src.some.module - LEVEL - message"
-_SELF_LOG_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - src\.")
+# Also matches __main__ logger (used by src/main.py when run as entry point).
+_SELF_LOG_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - (?:src\.|__main__)")
 
 
 def matches_error_pattern(

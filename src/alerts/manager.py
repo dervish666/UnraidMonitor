@@ -1,4 +1,7 @@
+import json
 import logging
+from pathlib import Path
+
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -10,14 +13,53 @@ logger = logging.getLogger(__name__)
 
 
 class ChatIdStore:
-    """In-memory storage for alert chat IDs (supports multiple users)."""
+    """Persistent storage for alert chat IDs (supports multiple users).
 
-    def __init__(self):
+    When *json_path* is provided, chat IDs are persisted to disk and
+    survive bot restarts so alerts continue flowing immediately.
+    """
+
+    def __init__(self, json_path: str | None = None):
+        self._json_path = json_path
         self._chat_ids: set[int] = set()
+        if json_path:
+            self._load()
+
+    # -- persistence helpers ------------------------------------------------
+
+    def _load(self) -> None:
+        """Load chat IDs from JSON file if it exists."""
+        if not self._json_path:
+            return
+        try:
+            with open(self._json_path) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                self._chat_ids = {int(cid) for cid in data}
+                logger.info(f"Loaded {len(self._chat_ids)} chat IDs from {self._json_path}")
+        except FileNotFoundError:
+            pass
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed to load chat IDs from {self._json_path}: {e}")
+
+    def _save(self) -> None:
+        """Persist current chat IDs to JSON file."""
+        if not self._json_path:
+            return
+        try:
+            Path(self._json_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(self._json_path, "w") as f:
+                json.dump(sorted(self._chat_ids), f)
+        except OSError as e:
+            logger.error(f"Failed to save chat IDs to {self._json_path}: {e}")
+
+    # -- public API ---------------------------------------------------------
 
     def set_chat_id(self, chat_id: int) -> None:
-        """Add a chat ID to the set."""
-        self._chat_ids.add(chat_id)
+        """Add a chat ID to the set (persists to disk if configured)."""
+        if chat_id not in self._chat_ids:
+            self._chat_ids.add(chat_id)
+            self._save()
 
     def get_chat_id(self) -> int | None:
         """Get any stored chat ID (backward compat)."""

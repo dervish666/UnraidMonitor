@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Codebase Structure Index
 
-The file map below provides instant orientation. For detailed export signatures and dependencies, read the relevant `.claude/structure/*.yaml` file for the directory you're working in.
+The file map below provides instant orientation. For detailed export signatures and dependencies, read the relevant `.claude/structure/*.yaml` file for the directory you're working in (files: alerts.yaml, bot.yaml, llm.yaml, monitors.yaml, root.yaml, services.yaml, unraid.yaml, utils.yaml).
 
 After adding, removing, or renaming source files or public classes/functions, update both the file map below and the relevant structure YAML file.
 
@@ -83,30 +83,38 @@ src/utils/telegram_retry.py - Telegram API retry logic for rate limit handling
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.9.5) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.9.6) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 ## Commands
 
 ```bash
 # Run the application
-python -m src.main
+uv run python -m src.main
 
-# Run tests (uses pytest-asyncio with auto mode)
-pytest tests/
-pytest tests/test_<module>.py
-pytest tests/test_<module>.py -k "test_name"
-pytest --cov=src tests/
+# Run tests (uses pytest-asyncio with auto mode, configured in pyproject.toml)
+uv run pytest tests/
+uv run pytest tests/test_<module>.py
+uv run pytest tests/test_<module>.py -k "test_name"
+uv run pytest --cov=src tests/
 
 # Type checking (strict mode, Python 3.11)
-mypy src/
+uv run mypy src/
 
 # Linting (line-length 100, target py311)
-ruff check src/
+uv run ruff check src/
 
 # Docker (target is Unraid x86_64 -- always build for linux/amd64)
 docker buildx build --platform linux/amd64 -t dervish/unraidmonitorbot:latest --push .
 docker-compose up -d
 ```
+
+## Docker Deployment
+
+The container runs as non-root via `entrypoint.sh`:
+- `PUID`/`PGID` env vars control the runtime user (default: 99:100, Unraid's `nobody:users`)
+- `gosu` drops privileges from root to `appuser` after fixing directory ownership
+- umask is 0022 — config and data files are owner-writable only
+- Base image is `python:3.11-slim` pinned by SHA digest in the Dockerfile
 
 ## Architecture
 
@@ -123,13 +131,14 @@ Unraid API ────→ UnraidSystemMonitor ──→ AlertManagerProxy/
 ### Startup & Wiring (`src/main.py`)
 
 `main.py` is the composition root. It instantiates all components and wires them together:
-- **First-run path:** If no `config.yaml` exists, starts the setup wizard which guides users through Unraid connection and container classification via Telegram, then restarts via `os.execv`
-- **Normal path:** Loads config and starts all monitors immediately
+- **First-run path:** If no `config.yaml` exists, calls `register_setup_wizard()` instead of `register_commands()`. `SetupModeMiddleware` blocks all non-wizard commands during setup. The wizard guides users through Unraid connection and container classification via Telegram, writes config via `ConfigWriter` (merges non-destructively with existing config), then restarts via `os.execv`
+- **Normal path:** Loads config and starts all monitors immediately via `register_commands()`
 - `AlertManagerProxy` wraps `AlertManager` to lazily resolve the Telegram chat ID (set on first `/start` command). Queues up to 50 alerts until a user sends `/start`, then delivers them.
 - Background tasks for each monitor run concurrently via `asyncio.create_task`
 - Telegram bot uses aiogram 3.x polling
 - `ProviderRegistry` manages LLM providers (Anthropic, OpenAI, Ollama) with per-feature model overrides and JSON persistence
 - `AuthMiddleware` on both message and callback_query dispatchers restricts access to `TELEGRAM_ALLOWED_USERS`
+- **NL chat requires Docker:** The NL handler is only registered when both `nl_processor` and `controller` (Docker client) are available
 
 ### Handler Factory Pattern (Critical)
 
@@ -189,6 +198,7 @@ Messages use Markdown parse mode. Use `safe_reply()` and `safe_edit()` from `src
 - **Model discovery** — Ollama models discovered at startup via `/api/tags` endpoint
 - **Per-feature overrides** — `feature_models` dict in config allows different models per AI feature (e.g., cheap model for pattern analysis, capable model for NL chat)
 - **Runtime switching** — `/model` command changes the global default; persisted to `data/model_selection.json`
+- **Auto-selection priority** — When no default is set: anthropic → openai → ollama (first available)
 
 ### Patterns
 
@@ -197,13 +207,13 @@ Messages use Markdown parse mode. Use `safe_reply()` and `safe_edit()` from `src
 - **Graceful degradation** - Bot works without any LLM API keys; AI features just disable. Models without tool support get a note appended to NL responses
 - **JSON persistence** - Mutes and ignores stored in `data/*.json` files with `batch_updates()` context manager to defer saves
 - **Protected containers** - Listed in `config.yaml`, cannot be controlled via Telegram
-- **Confirmation prompts** - Destructive actions (restart, stop, pull) require inline button confirmation (✅ Confirm / ❌ Cancel)
+- **Confirmation prompts** - Destructive actions (restart, stop, start, pull) require inline button confirmation (✅ Confirm / ❌ Cancel)
 - **Europe/London timezone** - All displayed timestamps use this timezone
 - **Prompt caching** - Anthropic API calls use `cache_control` on system prompts and tool definitions for cost savings
 
 ### Testing Conventions
 
-- No `conftest.py` — tests are self-contained with inline imports
+- No `conftest.py` — each test file imports its own helpers and creates mocks inline for full isolation
 - Mock pattern: `MagicMock` for sync objects, `AsyncMock` for async methods (e.g., `message.answer = AsyncMock()`)
 - Test the factory return value directly: `handler = my_command(state); await handler(message)`
 - `ContainerInfo` and `ContainerStateManager` are constructed directly in tests (no fixtures)
@@ -229,24 +239,15 @@ LOG_LEVEL=                    # Optional - defaults to INFO
 ## Configuration
 
 `config/config.yaml` - Created by the setup wizard on first run (or via `/setup`). Key sections:
-- `ai` - Claude model names, token limits, NL processor settings
+- `ai` - LLM model names, token limits, NL processor settings
 - `log_watching` - Watched containers, error/ignore patterns, cooldown
 - `unraid` - Host, polling intervals, alert thresholds (CPU temp, disk temp, memory, etc.)
 - `protected_containers` / `ignored_containers` - Safety and visibility controls
 - `memory_management` - System memory pressure thresholds and kill policy
 - `resource_monitoring` - Per-container CPU/memory alert thresholds
 
+Data files in `data/`: `muted_containers.json`, `server_mutes.json`, `array_mutes.json`, `ignore_patterns.json`, `model_selection.json` (runtime LLM choice)
+
 ## Design Context
 
-See `.impeccable.md` for the full design system. Key principles:
-
-1. **Clarity over cleverness** — Every message instantly parseable. Status at a glance, details on demand. Semantic emoji as visual anchors, not decoration.
-2. **Action-oriented** — Every alert includes what to do about it. Buttons for common actions. Minimize steps from "something's wrong" to "I fixed it."
-3. **Respectful of attention** — Only interrupt when it matters. Precise severity (🔴 vs ⚠️ vs ✅). Group related info, don't spam.
-4. **Professional warmth** — Competent and trustworthy, not cold. The bot is a reliable colleague, not a robot.
-5. **Progressive disclosure** — Summary first, details available on tap. Respect the small screen.
-
-**Brand personality:** Reliable, professional, precise — like a seasoned sysadmin.
-**Emotional goals:** Confidence & control, calm & reassurance, empowerment & clarity.
-**References:** Uptime Robot/Betterstack (clean, professional) + Home Assistant (tinkerer-friendly, power-user).
-**Color palette:** Brand orange (#FF8C00→#E65C00), accent green (#4ade80), accent pink (#f472b6), dark surfaces (#1a1a2e/#16213e).
+See `.impeccable.md` for the full design system (brand personality, color palette, emotional goals, references). Key principles: clarity over cleverness, action-oriented alerts with buttons, respectful of attention (precise severity levels), professional warmth, progressive disclosure.

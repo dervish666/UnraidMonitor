@@ -133,6 +133,67 @@ class TestChatIdStore:
         assert store.get_all_chat_ids() == set()
 
 
+class TestChatIdStorePersistence:
+    """Tests for ChatIdStore JSON persistence (Bug: alerts lost after restart)."""
+
+    def test_persists_to_disk(self, tmp_path):
+        """Chat IDs saved by one store instance should be loadable by another."""
+        from src.alerts.manager import ChatIdStore
+
+        json_path = str(tmp_path / "chat_ids.json")
+
+        store1 = ChatIdStore(json_path=json_path)
+        store1.set_chat_id(111)
+        store1.set_chat_id(222)
+
+        # Simulate restart -- new store loads from same file
+        store2 = ChatIdStore(json_path=json_path)
+        assert store2.get_all_chat_ids() == {111, 222}
+
+    def test_survives_missing_file(self, tmp_path):
+        """Store should start empty when JSON file doesn't exist."""
+        from src.alerts.manager import ChatIdStore
+
+        json_path = str(tmp_path / "nonexistent" / "chat_ids.json")
+        store = ChatIdStore(json_path=json_path)
+        assert store.get_all_chat_ids() == set()
+
+    def test_survives_corrupt_file(self, tmp_path):
+        """Store should start empty when JSON file is corrupt."""
+        from src.alerts.manager import ChatIdStore
+
+        json_path = str(tmp_path / "chat_ids.json")
+        with open(json_path, "w") as f:
+            f.write("not json{{{")
+
+        store = ChatIdStore(json_path=json_path)
+        assert store.get_all_chat_ids() == set()
+
+    def test_no_persistence_without_path(self):
+        """Without json_path, store behaves as pure in-memory (backward compat)."""
+        from src.alerts.manager import ChatIdStore
+
+        store = ChatIdStore()  # No json_path
+        store.set_chat_id(111)
+        assert store.get_all_chat_ids() == {111}
+
+    def test_only_saves_on_new_id(self, tmp_path):
+        """Duplicate set_chat_id calls should not trigger extra writes."""
+        from src.alerts.manager import ChatIdStore
+        from unittest.mock import patch
+
+        json_path = str(tmp_path / "chat_ids.json")
+        store = ChatIdStore(json_path=json_path)
+
+        with patch.object(store, "_save", wraps=store._save) as mock_save:
+            store.set_chat_id(111)
+            store.set_chat_id(111)  # duplicate
+            store.set_chat_id(222)
+
+            # _save called only for genuinely new IDs
+            assert mock_save.call_count == 2
+
+
 @pytest.mark.asyncio
 async def test_proxy_sends_to_all_users():
     """AlertManagerProxy should send each alert to all registered chat IDs."""

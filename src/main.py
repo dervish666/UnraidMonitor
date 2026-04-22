@@ -745,7 +745,7 @@ async def main() -> None:
 
     # Create Telegram bot and dispatcher (needed for both paths)
     bot = create_bot(settings.telegram_bot_token)
-    chat_id_store = ChatIdStore()
+    chat_id_store = ChatIdStore(json_path="data/chat_ids.json")
     dp = create_dispatcher(settings.telegram_allowed_users, chat_id_store=chat_id_store)
 
     bg = _BackgroundTasks()

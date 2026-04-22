@@ -190,6 +190,37 @@ async def test_log_watcher_respects_ignore_manager():
     )
 
 
+def test_self_log_filter_catches_main_logger():
+    """Bot's own __main__ logger output should never trigger error detection.
+
+    Regression test: the self-monitoring regex only matched `- src.` but
+    main.py logs as `__main__`, causing a feedback loop where the bot's own
+    'Alert queue full' warnings were detected as errors.
+    """
+    from src.monitors.log_watcher import matches_error_pattern
+
+    error_patterns = ["error", "warning", "failed"]
+    ignore_patterns = []
+
+    # src.* logger -- already filtered
+    assert matches_error_pattern(
+        "2026-04-22 10:58:24,306 - src.monitors.log_watcher - INFO - Error detected",
+        error_patterns, ignore_patterns,
+    ) is False
+
+    # __main__ logger -- was NOT filtered before the fix
+    assert matches_error_pattern(
+        "2026-04-22 09:59:43,666 - __main__ - WARNING - Alert queue full, dropping send resource alert",
+        error_patterns, ignore_patterns,
+    ) is False
+
+    # Real application error should still match
+    assert matches_error_pattern(
+        "2026-04-22T09:58:24Z ERR failed to accept incoming stream",
+        error_patterns, ignore_patterns,
+    ) is True
+
+
 def test_matches_error_pattern_cache_survives_list_rebuild():
     """Cache should work with new list objects containing identical patterns."""
     from src.monitors.log_watcher import matches_error_pattern
