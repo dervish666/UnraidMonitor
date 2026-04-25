@@ -10,10 +10,13 @@ from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest
 import docker
 
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+from src.config import ResourceConfig
 from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
-from src.utils.formatting import validate_container_name, escape_markdown
+from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data
 from src.utils.sanitize import sanitize_logs_for_display
 
 if TYPE_CHECKING:
@@ -447,5 +450,151 @@ def mem_restart_no_callback(
                 )
             except TelegramBadRequest:
                 await callback.message.answer(f"Won't restart {container_name}.")
+
+    return handler
+
+
+CPU_THRESHOLD_STEPS = [90, 120, 150, 200, 300, 400]
+MEMORY_THRESHOLD_STEPS = [85, 90, 95, 99]
+
+
+def raise_limit_callback(
+    resource_config: ResourceConfig,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for 'Raise Limit' button — shows threshold options."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        if not callback.data:
+            return
+
+        # Format: res_limit:container_name:metric:current_threshold
+        # Split from right to get trailing fields
+        parts = callback.data.rsplit(":", 2)
+        if len(parts) < 3:
+            await callback.answer("Invalid callback data")
+            return
+
+        try:
+            current_threshold = int(parts[2])
+        except ValueError:
+            current_threshold = 80
+
+        metric = parts[1]
+        if metric not in ("cpu", "memory"):
+            await callback.answer("Invalid metric")
+            return
+
+        prefix_parts = parts[0].split(":", 1)
+        if len(prefix_parts) < 2:
+            await callback.answer("Invalid callback data")
+            return
+
+        container_name = prefix_parts[1]
+
+        if not validate_container_name(container_name):
+            logger.warning(f"Invalid container name in res_limit callback: {container_name[:50]}")
+            await callback.answer("Invalid container name")
+            return
+
+        await callback.answer()
+
+        # Build option buttons — only show values above current threshold
+        # CPU uses per-core reporting, so >100% is normal on multi-core systems
+        steps = CPU_THRESHOLD_STEPS if metric == "cpu" else MEMORY_THRESHOLD_STEPS
+        options = [v for v in steps if v > current_threshold]
+        if not options:
+            options = [steps[-1]]
+
+        buttons: list[list[InlineKeyboardButton]] = []
+        row: list[InlineKeyboardButton] = []
+        for value in options:
+            row.append(InlineKeyboardButton(
+                text=f"{value}%",
+                callback_data=truncate_callback_data("res_set:", f"{container_name}:{metric}:{value}"),
+            ))
+        buttons.append(row)
+
+        # Reset to default option
+        buttons.append([InlineKeyboardButton(
+            text="↩️ Reset to default",
+            callback_data=truncate_callback_data("res_set:", f"{container_name}:{metric}:0"),
+        )])
+
+        safe_name = escape_markdown(container_name)
+        metric_label = "CPU" if metric == "cpu" else "Memory"
+
+        if callback.message:
+            try:
+                await callback.message.answer(
+                    f"⚙️ Set *{metric_label}* threshold for *{safe_name}*\nCurrent: {current_threshold}%",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                )
+            except TelegramBadRequest:
+                await callback.message.answer(
+                    f"Set {metric_label} threshold for {container_name}\nCurrent: {current_threshold}%",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                )
+
+    return handler
+
+
+def set_limit_callback(
+    resource_config: ResourceConfig,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for applying a selected threshold."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        if not callback.data:
+            return
+
+        # Format: res_set:container_name:metric:value
+        parts = callback.data.rsplit(":", 2)
+        if len(parts) < 3:
+            await callback.answer("Invalid callback data")
+            return
+
+        try:
+            value = int(parts[2])
+        except ValueError:
+            await callback.answer("Invalid threshold value")
+            return
+
+        metric = parts[1]
+        if metric not in ("cpu", "memory"):
+            await callback.answer("Invalid metric")
+            return
+
+        prefix_parts = parts[0].split(":", 1)
+        if len(prefix_parts) < 2:
+            await callback.answer("Invalid callback data")
+            return
+
+        container_name = prefix_parts[1]
+
+        if not validate_container_name(container_name):
+            logger.warning(f"Invalid container name in res_set callback: {container_name[:50]}")
+            await callback.answer("Invalid container name")
+            return
+
+        resource_config.set_threshold(container_name, metric, value)
+
+        metric_label = "CPU" if metric == "cpu" else "Memory"
+        safe_name = escape_markdown(container_name)
+
+        if value == 0:
+            cpu_default, mem_default = resource_config.get_thresholds(container_name)
+            default_val = cpu_default if metric == "cpu" else mem_default
+            msg = f"↩️ *{metric_label}* threshold for *{safe_name}* reset to default ({default_val}%)"
+        else:
+            msg = f"✅ *{metric_label}* threshold for *{safe_name}* set to {value}%"
+
+        await callback.answer(f"{'Reset' if value == 0 else 'Set'} to {value or 'default'}%")
+
+        if callback.message:
+            try:
+                await callback.message.edit_text(msg, parse_mode="Markdown")
+            except TelegramBadRequest:
+                await callback.message.answer(msg.replace("*", ""))
 
     return handler

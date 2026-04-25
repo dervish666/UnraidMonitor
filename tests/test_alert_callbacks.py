@@ -9,6 +9,8 @@ from src.bot.alert_callbacks import (
     logs_callback,
     diagnose_callback,
     mute_callback,
+    raise_limit_callback,
+    set_limit_callback,
 )
 from src.state import ContainerStateManager
 from src.models import ContainerInfo
@@ -536,3 +538,106 @@ class TestMemKillCallback:
         await handler(callback)
 
         memory_monitor.kill_container.assert_called_once_with("plex")
+
+
+class TestRaiseLimitCallback:
+    """Tests for raise_limit_callback."""
+
+    @pytest.mark.asyncio
+    async def test_shows_threshold_options(self, mock_callback):
+        from src.config import ResourceConfig
+
+        config = ResourceConfig(default_cpu_percent=80)
+        handler = raise_limit_callback(config)
+
+        mock_callback.data = "res_limit:plex:cpu:80"
+        await handler(mock_callback)
+
+        mock_callback.answer.assert_called_once()
+        mock_callback.message.answer.assert_called_once()
+        call_kwargs = mock_callback.message.answer.call_args
+        assert "CPU" in call_kwargs.args[0]
+        assert "plex" in call_kwargs.args[0]
+        assert call_kwargs.kwargs["reply_markup"] is not None
+
+    @pytest.mark.asyncio
+    async def test_invalid_metric(self, mock_callback):
+        from src.config import ResourceConfig
+
+        config = ResourceConfig()
+        handler = raise_limit_callback(config)
+
+        mock_callback.data = "res_limit:plex:disk:80"
+        await handler(mock_callback)
+
+        mock_callback.answer.assert_called_once_with("Invalid metric")
+
+    @pytest.mark.asyncio
+    async def test_invalid_container_name(self, mock_callback):
+        from src.config import ResourceConfig
+
+        config = ResourceConfig()
+        handler = raise_limit_callback(config)
+
+        mock_callback.data = "res_limit:../etc/passwd:cpu:80"
+        await handler(mock_callback)
+
+        mock_callback.answer.assert_called_once_with("Invalid container name")
+
+
+class TestSetLimitCallback:
+    """Tests for set_limit_callback."""
+
+    @pytest.mark.asyncio
+    async def test_sets_cpu_threshold(self, mock_callback):
+        from src.config import ResourceConfig
+
+        config = ResourceConfig()
+        mock_callback.message.edit_text = AsyncMock()
+        handler = set_limit_callback(config)
+
+        mock_callback.data = "res_set:plex:cpu:95"
+        await handler(mock_callback)
+
+        assert config.get_thresholds("plex") == (95, 85)
+        mock_callback.message.edit_text.assert_called_once()
+        assert "95%" in mock_callback.message.edit_text.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_sets_memory_threshold(self, mock_callback):
+        from src.config import ResourceConfig
+
+        config = ResourceConfig()
+        mock_callback.message.edit_text = AsyncMock()
+        handler = set_limit_callback(config)
+
+        mock_callback.data = "res_set:plex:memory:90"
+        await handler(mock_callback)
+
+        assert config.get_thresholds("plex") == (80, 90)
+
+    @pytest.mark.asyncio
+    async def test_reset_to_default(self, mock_callback):
+        from src.config import ResourceConfig
+
+        config = ResourceConfig(container_overrides={"plex": {"cpu_percent": 95}})
+        mock_callback.message.edit_text = AsyncMock()
+        handler = set_limit_callback(config)
+
+        mock_callback.data = "res_set:plex:cpu:0"
+        await handler(mock_callback)
+
+        assert config.get_thresholds("plex") == (80, 85)
+        assert "Reset" in mock_callback.answer.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_invalid_metric(self, mock_callback):
+        from src.config import ResourceConfig
+
+        config = ResourceConfig()
+        handler = set_limit_callback(config)
+
+        mock_callback.data = "res_set:plex:disk:95"
+        await handler(mock_callback)
+
+        mock_callback.answer.assert_called_once_with("Invalid metric")

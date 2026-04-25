@@ -109,6 +109,116 @@ def test_app_config_resource_monitoring_property():
     assert config.resource_monitoring.enabled is True
 
 
+def test_set_threshold_cpu():
+    """Test setting a per-container CPU threshold."""
+    from src.config import ResourceConfig
+
+    config = ResourceConfig()
+    config.set_threshold("plex", "cpu", 95)
+
+    cpu, mem = config.get_thresholds("plex")
+    assert cpu == 95
+    assert mem == 85  # Unchanged
+
+
+def test_set_threshold_memory():
+    """Test setting a per-container memory threshold."""
+    from src.config import ResourceConfig
+
+    config = ResourceConfig()
+    config.set_threshold("plex", "memory", 90)
+
+    cpu, mem = config.get_thresholds("plex")
+    assert cpu == 80  # Unchanged
+    assert mem == 90
+
+
+def test_set_threshold_reset():
+    """Test resetting a per-container threshold to default."""
+    from src.config import ResourceConfig
+
+    config = ResourceConfig()
+    config.set_threshold("plex", "cpu", 95)
+    assert config.get_thresholds("plex") == (95, 85)
+
+    config.set_threshold("plex", "cpu", 0)
+    assert config.get_thresholds("plex") == (80, 85)
+    assert "plex" not in config.container_overrides
+
+
+def test_set_threshold_reset_partial():
+    """Test resetting one metric keeps the other override."""
+    from src.config import ResourceConfig
+
+    config = ResourceConfig()
+    config.set_threshold("plex", "cpu", 95)
+    config.set_threshold("plex", "memory", 90)
+    assert config.get_thresholds("plex") == (95, 90)
+
+    config.set_threshold("plex", "cpu", 0)
+    assert config.get_thresholds("plex") == (80, 90)
+    assert config.container_overrides == {"plex": {"memory_percent": 90}}
+
+
+def test_set_threshold_clamps_memory():
+    """Test that memory threshold is clamped to 1-100."""
+    from src.config import ResourceConfig
+
+    config = ResourceConfig()
+    config.set_threshold("plex", "memory", 150)
+    assert config.get_thresholds("plex") == (80, 100)
+
+    config.set_threshold("plex", "memory", -5)
+    assert config.get_thresholds("plex") == (80, 1)
+
+
+def test_set_threshold_cpu_allows_over_100():
+    """Test that CPU threshold allows values over 100% (per-core reporting)."""
+    from src.config import ResourceConfig
+
+    config = ResourceConfig()
+    config.set_threshold("plex", "cpu", 200)
+    assert config.get_thresholds("plex") == (200, 85)
+
+    config.set_threshold("plex", "cpu", 400)
+    assert config.get_thresholds("plex") == (400, 85)
+
+
+def test_set_threshold_persists(tmp_path):
+    """Test that set_threshold writes to config.yaml."""
+    import yaml
+    from src.config import ResourceConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("log_watching:\n  containers: []\n")
+
+    config = ResourceConfig(config_path=str(config_file))
+    config.set_threshold("plex", "cpu", 95)
+
+    saved = yaml.safe_load(config_file.read_text())
+    assert saved["resource_monitoring"]["containers"] == {"plex": {"cpu_percent": 95}}
+    # Verify other config sections are preserved
+    assert "log_watching" in saved
+
+
+def test_set_threshold_persist_reset_removes_section(tmp_path):
+    """Test that resetting all overrides removes the containers section."""
+    import yaml
+    from src.config import ResourceConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("resource_monitoring:\n  containers:\n    plex:\n      cpu_percent: 95\n")
+
+    config = ResourceConfig(
+        config_path=str(config_file),
+        container_overrides={"plex": {"cpu_percent": 95}},
+    )
+    config.set_threshold("plex", "cpu", 0)
+
+    saved = yaml.safe_load(config_file.read_text())
+    assert "containers" not in saved.get("resource_monitoring", {})
+
+
 def test_app_config_resource_monitoring_from_yaml(tmp_path):
     """Test AppConfig loads resource_monitoring from YAML."""
     from unittest.mock import MagicMock

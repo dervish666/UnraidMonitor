@@ -260,6 +260,12 @@ Exceeded for: {duration_str}
                     InlineKeyboardButton(text="🔕 Mute 1h", callback_data=truncate_callback_data("mute:", f"{container_name}:60")),
                     InlineKeyboardButton(text="🔕 Mute 24h", callback_data=truncate_callback_data("mute:", f"{container_name}:1440")),
                 ],
+                [
+                    InlineKeyboardButton(
+                        text=f"⚙️ Raise {metric.upper()} Limit",
+                        callback_data=truncate_callback_data("res_limit:", f"{container_name}:{metric}:{threshold}"),
+                    ),
+                ],
             ]
         )
 

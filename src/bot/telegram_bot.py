@@ -32,6 +32,8 @@ from src.bot.alert_callbacks import (
     logs_callback,
     diagnose_callback,
     mute_callback,
+    raise_limit_callback,
+    set_limit_callback,
     mem_kill_callback,
     mem_cancel_kill_callback,
     mem_restart_yes_callback,
@@ -123,6 +125,7 @@ def register_commands(
     protected_containers: list[str] | None = None,
     registry: Any | None = None,
     resource_monitor: Any | None = None,
+    resource_config: Any | None = None,
     ignore_manager: Any | None = None,
     recent_errors_buffer: Any | None = None,
     mute_manager: Any | None = None,
@@ -263,6 +266,17 @@ def register_commands(
             dp.callback_query.register(
                 mute_callback(state, mute_manager),
                 F.data.startswith("mute:"),
+            )
+
+        # Register resource threshold adjustment callbacks
+        if resource_config is not None:
+            dp.callback_query.register(
+                raise_limit_callback(resource_config),
+                F.data.startswith("res_limit:"),
+            )
+            dp.callback_query.register(
+                set_limit_callback(resource_config),
+                F.data.startswith("res_set:"),
             )
 
         # Register /mute, /mutes, /unmute commands

@@ -284,10 +284,10 @@ class TestConfigValidation:
         cfg = ResourceConfig.from_dict({"defaults": {"cpu_percent": -5}})
         assert cfg.default_cpu_percent >= 1
 
-    def test_resource_config_excessive_cpu_threshold_clamped(self):
+    def test_resource_config_high_cpu_threshold_allowed(self):
         from src.config import ResourceConfig
         cfg = ResourceConfig.from_dict({"defaults": {"cpu_percent": 200}})
-        assert cfg.default_cpu_percent <= 100
+        assert cfg.default_cpu_percent == 200
 
     def test_resource_config_negative_memory_threshold_clamped(self):
         from src.config import ResourceConfig

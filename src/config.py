@@ -173,10 +173,12 @@ class ResourceConfig:
             enabled=data.get("enabled", True),
             poll_interval_seconds=max(data.get("poll_interval_seconds", 60), 10),
             sustained_threshold_seconds=max(data.get("sustained_threshold_seconds", 120), 10),
-            default_cpu_percent=max(min(defaults.get("cpu_percent", 80), 100), 1),
+            default_cpu_percent=max(defaults.get("cpu_percent", 80), 1),
             default_memory_percent=max(min(defaults.get("memory_percent", 85), 100), 1),
             container_overrides=data.get("containers", {}),
         )
+
+    config_path: str | None = None
 
     def get_thresholds(self, container_name: str) -> tuple[int, int]:
         """Get CPU and memory thresholds for a container.
@@ -188,6 +190,65 @@ class ResourceConfig:
         cpu = overrides.get("cpu_percent", self.default_cpu_percent)
         memory = overrides.get("memory_percent", self.default_memory_percent)
         return cpu, memory
+
+    def set_threshold(self, container_name: str, metric: str, value: int) -> None:
+        """Set a per-container threshold and persist to config.yaml.
+
+        Args:
+            container_name: Container name.
+            metric: "cpu" or "memory".
+            value: Threshold percentage, or 0 to remove the override.
+                   CPU can exceed 100% on multi-core (per-core reporting).
+                   Memory is clamped to 1-100%.
+        """
+        key = f"{metric}_percent"
+
+        if value == 0:
+            if container_name in self.container_overrides:
+                self.container_overrides[container_name].pop(key, None)
+                if not self.container_overrides[container_name]:
+                    del self.container_overrides[container_name]
+        else:
+            if metric == "cpu":
+                value = max(1, value)
+            else:
+                value = max(1, min(value, 100))
+            self.container_overrides.setdefault(container_name, {})[key] = value
+
+        self._persist()
+
+    def _persist(self) -> None:
+        """Write current container_overrides back to config.yaml."""
+        if not self.config_path:
+            return
+        import tempfile
+        from pathlib import Path
+
+        path = Path(self.config_path)
+        if not path.exists():
+            return
+
+        data = load_yaml_config(str(path))
+        rm = data.setdefault("resource_monitoring", {})
+        if self.container_overrides:
+            rm["containers"] = self.container_overrides
+        else:
+            rm.pop("containers", None)
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=path.parent, suffix=".tmp", prefix=".config_"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 @dataclass
@@ -353,6 +414,7 @@ class AppConfig:
         self._resource_monitoring = ResourceConfig.from_dict(
             self._yaml_config.get("resource_monitoring", {})
         )
+        self._resource_monitoring.config_path = settings.config_path
         self._unraid = UnraidConfig.from_dict(self._yaml_config.get("unraid", {}))
         self._memory_management = MemoryConfig.from_dict(
             self._yaml_config.get("memory_management", {})

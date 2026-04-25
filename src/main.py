@@ -578,6 +578,7 @@ async def start_monitoring(
         protected_containers=config.protected_containers,
         registry=registry,
         resource_monitor=resource_monitor,
+        resource_config=resource_config,
         ignore_manager=ignore_manager,
         recent_errors_buffer=recent_errors_buffer,
         mute_manager=mute_manager,

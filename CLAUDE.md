@@ -169,6 +169,8 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `ign_toggle:index`, `ign_all`, `ign_done`, `ign_cancel`
 - `mdi:container:index` (manage delete ignore), `mdm:type:key` (manage delete mute)
 - `help:section_key`, `help:back`
+- `res_limit:container_name:metric:threshold` (show threshold options)
+- `res_set:container_name:metric:value` (apply threshold, 0 = reset to default)
 - `mem_kill:container_name`, `mem_restart_yes:container_name`
 - `nl_confirm:action_id`, `nl_cancel`
 - `manage:section` (e.g., `manage:status`, `manage:ignores`, `manage:back`)
