@@ -6,7 +6,7 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 
 - **Interactive Setup Wizard** - Guided first-run setup via Telegram with auto-classification of containers
 - **Container Monitoring** - Status, health checks, crash detection, and recovery notifications
-- **Resource Alerts** - CPU/memory usage with configurable thresholds
+- **Resource Alerts** - CPU/memory usage with per-container thresholds, adjustable directly from alert buttons
 - **Log Watching** - Automatic alerts when errors appear in container logs
 - **AI Diagnostics** - LLM-powered log analysis and troubleshooting (Anthropic, OpenAI, or Ollama)
 - **Smart Ignore Patterns** - AI-generated patterns to filter known errors, with interactive toggle selection
@@ -19,18 +19,14 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Interactive Dashboard** - `/manage` hub for status, resources, ignores, and mutes
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
 
-## What's New in v0.9.0
+## What's New in v0.9.6
 
-This release overhauls the bot's UX with inline keyboard buttons throughout:
-
-- **Button confirmations** - `/restart`, `/stop`, `/start`, `/pull` now show ✅ Confirm / ❌ Cancel buttons
-- **Diagnose details button** - After AI diagnosis, tap 📋 More Details instead of typing
-- **Toggle ignore selection** - `/ignore` shows ☐/☑ checkboxes per error with Select All
-- **Manage with delete buttons** - Remove ignores and mutes with per-item 🗑 buttons
-- **Recovery alerts** - Get notified when a crashed container comes back online
-- **Sectioned /help** - Browse commands by category (Containers, Server, Alerts, Setup)
-- **Back navigation** - All sub-views include ⬅️ Back buttons
-- **Smarter mute display** - Shows "until tomorrow 14:30" instead of just a time
+- **In-app threshold adjustment** - Resource alerts include a ⚙️ Raise Limit button to adjust CPU/memory thresholds per container directly from Telegram, no config editing or restart needed
+- **CPU thresholds above 100%** - Linux reports CPU per-core, so multi-threaded apps like Plex can exceed 100%. Thresholds now support values like 200% or 400%
+- **Persistent chat IDs** - Alerts now survive bot restarts without needing to send `/start` again
+- **Multi-provider LLM** - Switch between Anthropic Claude, OpenAI GPT, or local Ollama models at runtime with `/model`
+- **DEFAULT_MODEL env var** - Override the default AI model without editing config
+- **Interactive setup wizard** - `/setup` guides you through Unraid connection and container classification with AI-assisted categorization
 
 See the [changelog](CHANGELOG.md) for full details.
 
@@ -244,6 +240,8 @@ protected_containers:
 
 ### Resource Monitoring
 
+CPU is reported per-core on Linux, so multi-threaded apps can exceed 100% (e.g., 200% = 2 cores fully used). Set thresholds accordingly.
+
 ```yaml
 resource_monitoring:
   enabled: true
@@ -254,14 +252,16 @@ resource_monitoring:
     cpu_percent: 80
     memory_percent: 85
 
-  # Per-container overrides
+  # Per-container overrides (also adjustable via Telegram)
   containers:
     plex:
-      cpu_percent: 95    # Plex often uses high CPU
+      cpu_percent: 200   # Plex transcoding uses multiple cores
       memory_percent: 90
     handbrake:
-      cpu_percent: 100   # Expected to max out
+      cpu_percent: 400   # Expected to max out all cores
 ```
+
+Per-container thresholds can also be adjusted directly from Telegram: when a resource alert fires, tap **⚙️ Raise Limit** to pick a new threshold. The change applies immediately and persists across restarts.
 
 ### Memory Pressure Management
 
@@ -435,7 +435,10 @@ CPU: 45% (normal)
 
 [📋 Logs] [🔍 Diagnose]
 [🔕 Mute 1h] [🔕 Mute 24h]
+[⚙️ Raise MEMORY Limit]
 ```
+
+Tapping **⚙️ Raise Limit** shows threshold options (e.g., 90%, 95%, 99% for memory, or 120%, 200%, 400% for CPU). The new threshold applies immediately.
 
 ### Log Error Alert
 ```
