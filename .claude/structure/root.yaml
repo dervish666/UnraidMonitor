@@ -5,83 +5,114 @@ description: Core application entry point, configuration management, data models
 
 files:
   main.py:
-    description: Application entry point and composition root. Orchestrates bot setup, monitor wiring, graceful shutdown, and first-run wizard.
+    description: Entry point, signal handling, wizard setup. Delegates monitoring to startup.py.
+    exports:
+      - name: main
+        kind: function
+        description: Main entry point. Handles first-run wizard or normal startup.
+        params: []
+        returns: Coroutine
+    imports:
+      - from: src.config
+        items: [Settings, AppConfig]
+      - from: src.constants
+        items: [DEFAULT_HAIKU_MODEL]
+      - from: src.alerts.manager
+        items: [ChatIdStore]
+      - from: src.bot.telegram_bot
+        items: [create_bot, create_dispatcher, register_setup_wizard]
+      - from: src.background
+        items: [_BackgroundTasks]
+      - from: src.startup
+        items: [start_monitoring]
+
+  alert_proxy.py:
+    description: AlertManagerProxy for multi-user alert delivery with queuing.
     exports:
       - name: AlertManagerProxy
         kind: class
-        description: Proxy that dynamically resolves chat_id and queues alerts until bot is ready. Includes send lock to prevent Telegram rate limit abuse.
+        description: Proxy that dynamically resolves chat_id and queues alerts until bot is ready.
         methods:
           - name: __init__
-            params: [{name: bot, type: object}, {name: chat_id_store, type: ChatIdStore}, {name: error_display_max_chars, type: int}]
+            params: [{name: bot, type: Bot}, {name: chat_id_store, type: ChatIdStore}, {name: error_display_max_chars, type: int}]
             returns: None
-          - name: _get_manager
-            params: [{name: chat_id, type: int}]
-            returns: AlertManager
-          - name: _send_alert
-            params: [{name: method_name, type: str}]
-            returns: Coroutine
-          - name: _flush_queue
-            params: [{name: chat_id, type: int}]
-            returns: Coroutine
           - name: send_crash_alert
             returns: Coroutine
           - name: send_log_error_alert
             returns: Coroutine
           - name: send_resource_alert
             returns: Coroutine
+          - name: send_recovery_alert
+            returns: Coroutine
+          - name: send_health_alert
+            returns: Coroutine
+    imports:
+      - from: src.alerts.manager
+        items: [AlertManager, ChatIdStore]
+      - from: src.constants
+        items: [ALERT_QUEUE_MAX, ALERT_SEND_DELAY, ERROR_DISPLAY_MAX_CHARS]
+
+  background.py:
+    description: Background task tracker for graceful shutdown of monitors.
+    exports:
       - name: _BackgroundTasks
         kind: class
         description: Holds references to all background monitors and async tasks for coordinated shutdown.
         methods:
-          - name: __init__
-            params: []
-            returns: None
           - name: add_task
             params: [{name: task, type: asyncio.Task}]
             returns: None
           - name: shutdown
             returns: Coroutine
+
+  monitor_callbacks.py:
+    description: Factory functions for monitor alert and mute maintenance callbacks.
+    exports:
+      - name: make_log_error_handler
+        kind: function
+        description: Creates log error callback with rate limiting and mute support.
+      - name: make_server_alert_handler
+        kind: function
+        description: Creates Unraid server alert callback with memory stats enhancement.
+      - name: make_memory_alert_handler
+        kind: function
+        description: Creates memory pressure alert callback with kill buttons.
+      - name: make_ask_restart_handler
+        kind: function
+        description: Creates restart prompt callback for recovered containers.
+      - name: make_mute_maintenance_loop
+        kind: function
+        description: Creates periodic mute flush and expiry notification loop.
+    imports:
+      - from: src.constants
+        items: [MUTE_MAINTENANCE_INTERVAL_SECONDS]
+
+  startup.py:
+    description: Monitor initialization orchestrator. Builds providers, wires monitors, registers commands.
+    exports:
       - name: start_monitoring
         kind: function
-        description: Initializes all monitors (Docker, logs, resources, Unraid) and registers bot commands. Called on startup or after wizard completion.
-        params: [{name: config, type: AppConfig}, {name: settings, type: Settings}, {name: bot, type: object}, {name: dp, type: object}, {name: chat_id_store, type: ChatIdStore}, {name: bg, type: _BackgroundTasks}]
+        description: Initializes all monitors (Docker, logs, resources, Unraid) and registers bot commands.
+        params: [{name: config, type: AppConfig}, {name: settings, type: Settings}, {name: bot, type: Bot}, {name: dp, type: Dispatcher}, {name: chat_id_store, type: ChatIdStore}, {name: bg, type: _BackgroundTasks}]
         returns: Coroutine
-      - name: main
-        kind: function
-        description: Main entry point. Handles first-run wizard or normal startup with all monitors.
-        params: []
-        returns: Coroutine
-    imports:
-      - from: src.config
-        items: [Settings, AppConfig]
-      - from: src.state
-        items: [ContainerStateManager]
-      - from: src.monitors.docker_events
-        items: [DockerEventMonitor]
-      - from: src.monitors.log_watcher
-        items: [LogWatcher]
-      - from: src.monitors.memory_monitor
-        items: [MemoryMonitor]
-      - from: src.monitors.resource_monitor
-        items: [ResourceMonitor]
-      - from: src.alerts.manager
-        items: [AlertManager, ChatIdStore]
-      - from: src.alerts.rate_limiter
-        items: [RateLimiter]
-      - from: src.alerts.ignore_manager
-        items: [IgnoreManager]
-      - from: src.alerts.mute_manager
-        items: [MuteManager]
-      - from: src.analysis.pattern_analyzer
-        items: [PatternAnalyzer]
-      - from: src.unraid.client
-        items: [UnraidClientWrapper]
-      - from: src.unraid.monitors.system_monitor
-        items: [UnraidSystemMonitor]
-      - from: src.unraid.monitors.array_monitor
-        items: [ArrayMonitor]
-      - from: src.bot.telegram_bot
-        items: [create_bot, create_dispatcher, register_commands, register_setup_wizard]
+
+  constants.py:
+    description: Named constants for all configuration defaults and thresholds.
+    exports:
+      - name: DEFAULT_COOLDOWN_SECONDS
+        kind: constant
+      - name: DEFAULT_CPU_PERCENT
+        kind: constant
+      - name: DEFAULT_MEMORY_PERCENT
+        kind: constant
+      - name: DEFAULT_HAIKU_MODEL
+        kind: constant
+      - name: DEFAULT_SONNET_MODEL
+        kind: constant
+      - name: ALERT_QUEUE_MAX
+        kind: constant
+      - name: MUTE_MAINTENANCE_INTERVAL_SECONDS
+        kind: constant
 
   config.py:
     description: Configuration management using Pydantic Settings (env vars) and YAML config. Provides typed config objects and ConfigWriter for setup wizard.

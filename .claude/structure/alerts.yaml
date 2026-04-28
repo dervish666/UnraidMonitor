@@ -17,6 +17,9 @@ files:
           - name: get_chat_id
             params: []
             returns: int | None
+      - name: AlertSender
+        kind: protocol
+        description: Protocol for alert sending (satisfied by both AlertManager and AlertManagerProxy)
       - name: AlertManager
         kind: class
         description: Manages sending formatted alerts to Telegram with inline keyboards

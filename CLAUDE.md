@@ -13,13 +13,18 @@ After adding, removing, or renaming source files or public classes/functions, up
 <!-- One line per source file: relative path - brief description -->
 
 # Root
-src/main.py - Composition root, bot startup, monitor wiring, AlertManagerProxy
+src/main.py - Entry point, signal handling, wizard setup (delegates to startup.py)
+src/startup.py - start_monitoring() orchestrator, provider/monitor initialization
+src/alert_proxy.py - AlertManagerProxy for multi-user alert delivery with queuing
+src/background.py - _BackgroundTasks tracker for graceful shutdown of monitors
+src/monitor_callbacks.py - Factory functions for monitor alert/mute callbacks
+src/constants.py - Named constants for all configuration defaults and thresholds
 src/config.py - Settings, configuration loading, YAML parsing, ConfigWriter
 src/models.py - ContainerInfo dataclass for Docker container state
 src/state.py - ContainerStateManager for thread-safe container state tracking
 
 # Alerts
-src/alerts/manager.py - AlertManager for sending formatted alerts to Telegram
+src/alerts/manager.py - AlertManager, AlertSender protocol, ChatIdStore
 src/alerts/rate_limiter.py - RateLimiter for deduplicating container alerts
 src/alerts/mute_manager.py - MuteManager for temporary container alert mutes
 src/alerts/server_mute_manager.py - ServerMuteManager for Unraid server/array mutes
@@ -128,17 +133,21 @@ Unraid API ────→ UnraidSystemMonitor ──→ AlertManagerProxy/
                  ArrayMonitor ─────────→
 ```
 
-### Startup & Wiring (`src/main.py`)
+### Startup & Wiring
 
-`main.py` is the composition root. It instantiates all components and wires them together:
-- **First-run path:** If no `config.yaml` exists, calls `register_setup_wizard()` instead of `register_commands()`. `SetupModeMiddleware` blocks all non-wizard commands during setup. The wizard guides users through Unraid connection and container classification via Telegram, writes config via `ConfigWriter` (merges non-destructively with existing config), then restarts via `os.execv`
-- **Normal path:** Loads config and starts all monitors immediately via `register_commands()`
-- `AlertManagerProxy` wraps `AlertManager` to lazily resolve the Telegram chat ID (set on first `/start` command). Queues up to 50 alerts until a user sends `/start`, then delivers them.
-- Background tasks for each monitor run concurrently via `asyncio.create_task`
-- Telegram bot uses aiogram 3.x polling
-- `ProviderRegistry` manages LLM providers (Anthropic, OpenAI, Ollama) with per-feature model overrides and JSON persistence
-- `AuthMiddleware` on both message and callback_query dispatchers restricts access to `TELEGRAM_ALLOWED_USERS`
-- **NL chat requires Docker:** The NL handler is only registered when both `nl_processor` and `controller` (Docker client) are available
+Startup is split across three files:
+- **`src/main.py`** — Entry point. Creates bot/dispatcher, handles first-run wizard setup vs normal boot, signal handlers, and graceful shutdown.
+- **`src/startup.py`** — `start_monitoring()` orchestrates all component initialization: LLM providers, monitors, state managers, and bot command registration.
+- **`src/monitor_callbacks.py`** — Factory functions (`make_log_error_handler`, `make_server_alert_handler`, etc.) that create the async callbacks wired into monitors.
+
+Key behaviours:
+- **First-run path:** If no `config.yaml` exists, calls `register_setup_wizard()` instead of `register_commands()`. `SetupModeMiddleware` blocks all non-wizard commands during setup. The wizard writes config via `ConfigWriter`, then restarts via `os.execv`.
+- **Normal path:** Loads config and calls `start_monitoring()` which initializes all monitors.
+- `AlertManagerProxy` (`src/alert_proxy.py`) wraps `AlertManager` to lazily resolve chat IDs. Queues alerts until a user sends `/start`.
+- `_BackgroundTasks` (`src/background.py`) tracks all running monitors for graceful shutdown.
+- `ProviderRegistry` manages LLM providers (Anthropic, OpenAI, Ollama) with per-feature model overrides and JSON persistence.
+- `AuthMiddleware` on both message and callback_query dispatchers restricts access to `TELEGRAM_ALLOWED_USERS`.
+- **NL chat requires Docker:** The NL handler is only registered when both `nl_processor` and `controller` (Docker client) are available.
 
 ### Handler Factory Pattern (Critical)
 
