@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
+from aiogram.types import Message
+
 
 @pytest.mark.asyncio
 async def test_diagnose_command_with_container_name():
@@ -127,8 +129,11 @@ async def test_diag_details_callback():
     callback.data = "diag_details:overseerr"
     callback.from_user.id = 123
     callback.answer = AsyncMock()
-    callback.message = MagicMock()
+    callback.message = MagicMock(spec=Message)
     callback.message.answer = AsyncMock()
+    callback.message.chat = MagicMock()
+    callback.message.chat.id = 12345
+    callback.message.bot = MagicMock()
     callback.message.bot.send_chat_action = AsyncMock()
 
     await handler(callback)

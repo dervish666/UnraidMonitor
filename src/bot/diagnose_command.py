@@ -89,7 +89,8 @@ def diagnose_command(
 
         actual_name = matches[0].name
 
-        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+        if message.bot:
+            await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
         await message.answer(f"Analyzing {actual_name}...")
 
         # Gather context
@@ -143,13 +144,14 @@ def diag_details_callback(
 
         await callback.answer()
 
-        if callback.message:
-            await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
+        if isinstance(callback.message, Message):
+            if callback.message.bot:
+                await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
 
         details = await diagnostic_service.get_details(user_id)
         if details:
             response = f"*Detailed Analysis*\n\n{details}"
-            if callback.message:
+            if isinstance(callback.message, Message):
                 await safe_reply(callback.message, response)
         else:
             if callback.message:

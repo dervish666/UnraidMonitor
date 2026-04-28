@@ -19,6 +19,11 @@ ai = [
     "anthropic>=0.40.0,<1.0.0",
     "openai>=1.50.0,<3.0.0",
 ]
+dev = [
+    "types-PyYAML>=6.0",
+    "types-psutil>=6.0",
+    "types-docker>=7.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

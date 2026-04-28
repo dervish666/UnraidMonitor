@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import docker
+from typing import Any
 
 from src.utils.api_errors import handle_llm_error
 from src.utils.formatting import format_uptime
@@ -52,7 +53,7 @@ class DiagnosticContext:
     brief_summary: str | None = None
     created_at: datetime | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.created_at is None:
             self.created_at = datetime.now()
 
@@ -63,7 +64,7 @@ class DiagnosticService:
     def __init__(
         self,
         docker_client: docker.DockerClient,
-        provider=None,
+        provider: Any = None,
         brief_max_tokens: int = 300,
         detail_max_tokens: int = 800,
         context_expiry_seconds: int = 600,
@@ -109,8 +110,12 @@ class DiagnosticService:
 
         # Get image -- may have been removed after an update
         try:
-            image_tags = container.image.tags
-            image = image_tags[0] if image_tags else "unknown"
+            img = container.image
+            if img is not None:
+                image_tags = img.tags
+                image = image_tags[0] if image_tags else "unknown"
+            else:
+                image = container.attrs.get("Config", {}).get("Image", "unknown")
         except Exception:
             image = container.attrs.get("Config", {}).get("Image", "unknown")
 
@@ -162,7 +167,8 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=self._brief_max_tokens,
             )
-            return response.text
+            result: str = response.text
+            return result
         except Exception as e:
             error_result = handle_llm_error(e)
             logger.log(error_result.log_level, f"Claude API error in analyze: {e}")
@@ -255,7 +261,8 @@ Be specific and actionable."""
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=self._detail_max_tokens,
             )
-            return response.text
+            result: str = response.text
+            return result
         except Exception as e:
             error_result = handle_llm_error(e)
             logger.log(error_result.log_level, f"Claude API error in get_details: {e}")

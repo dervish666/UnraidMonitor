@@ -19,6 +19,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    TelegramObject,
 )
 
 from src.config import ConfigWriter
@@ -29,8 +30,8 @@ from src.services.container_classifier import (
 )
 
 if TYPE_CHECKING:
-    import anthropic
     import docker
+    from src.services.llm.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class SetupWizard:
         self,
         config_path: str,
         docker_client: "docker.DockerClient",
-        anthropic_client: "anthropic.AsyncAnthropic | None" = None,
+        anthropic_client: "LLMProvider | None" = None,
         unraid_api_key: str | None = None,
     ) -> None:
         self._config_path = config_path
@@ -237,7 +238,7 @@ class SetupWizard:
                         headers=headers,
                         json={"query": "{ info { os { hostname } } }"},
                         timeout=aiohttp.ClientTimeout(total=10),
-                        ssl=ssl_ctx,
+                        ssl=ssl_ctx if ssl_ctx is not None else False,
                     ) as resp:
                         logger.info(
                             f"Unraid connection test {scheme}://{host}:{port} "
@@ -259,10 +260,14 @@ class SetupWizard:
             containers = self._docker_client.containers.list(all=True)
             results: list[tuple[str, str, str]] = []
             for c in containers:
-                name = c.name
+                name = c.name or ""
                 try:
-                    image_tags = c.image.tags
-                    image = image_tags[0] if image_tags else str(c.image.id)[:20]
+                    img = c.image
+                    if img is not None:
+                        image_tags = img.tags
+                        image = image_tags[0] if image_tags else str(img.id)[:20]
+                    else:
+                        image = c.attrs.get("Config", {}).get("Image", "unknown")
                 except Exception:
                     image = c.attrs.get("Config", {}).get("Image", "unknown")
                 status = c.status
@@ -363,23 +368,29 @@ class SetupWizard:
                 killable.append(c.name)
 
         writer = ConfigWriter(self._config_path)
-        kwargs = dict(
-            unraid_host=session.unraid_host,
-            unraid_port=session.unraid_port,
-            unraid_use_ssl=session.unraid_use_ssl,
-            watched_containers=watched,
-            protected_containers=protected,
-            ignored_containers=ignored,
-            priority_containers=priority,
-            killable_containers=killable,
-        )
         if merge:
             writer.merge(
+                unraid_host=session.unraid_host,
+                unraid_port=session.unraid_port,
+                unraid_use_ssl=session.unraid_use_ssl,
+                watched_containers=watched,
+                protected_containers=protected,
+                ignored_containers=ignored,
+                priority_containers=priority,
+                killable_containers=killable,
                 skip_unraid=session.unraid_host is None,
-                **kwargs,
             )
         else:
-            writer.write(**kwargs)
+            writer.write(
+                unraid_host=session.unraid_host,
+                unraid_port=session.unraid_port,
+                unraid_use_ssl=session.unraid_use_ssl,
+                watched_containers=watched,
+                protected_containers=protected,
+                ignored_containers=ignored,
+                priority_containers=priority,
+                killable_containers=killable,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +721,7 @@ def create_toggle_callback(
 
         # Refresh the keyboard
         keyboard = build_adjust_keyboard(session.classifications, category)
-        if callback.message:
+        if isinstance(callback.message, Message):
             try:
                 await callback.message.edit_reply_markup(reply_markup=keyboard)
             except Exception:
@@ -806,8 +817,8 @@ class SetupModeMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[[Message | CallbackQuery, dict[str, Any]], Awaitable[Any]],
-        event: Message | CallbackQuery,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
         # Always let callback queries through (inline buttons)

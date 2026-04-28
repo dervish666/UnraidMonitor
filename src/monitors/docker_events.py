@@ -11,7 +11,7 @@ from src.state import ContainerStateManager
 from src.services.docker_client import SharedDockerClient
 
 if TYPE_CHECKING:
-    from src.alerts.manager import AlertManager
+    from src.alerts.manager import AlertSender
     from src.alerts.rate_limiter import RateLimiter
     from src.alerts.mute_manager import MuteManager
 
@@ -107,8 +107,12 @@ def parse_container(container: Container) -> ContainerInfo:
     """Convert Docker SDK container to ContainerInfo."""
     # Get image name -- image may have been removed (e.g. after an update)
     try:
-        tags = container.image.tags
-        image = tags[0] if tags else container.image.id
+        img = container.image
+        if img is not None:
+            tags = img.tags
+            image = tags[0] if tags else img.id
+        else:
+            image = container.attrs.get("Config", {}).get("Image", "unknown")
     except docker.errors.ImageNotFound:
         image = container.attrs.get("Config", {}).get("Image", "unknown")
 
@@ -129,10 +133,10 @@ def parse_container(container: Container) -> ContainerInfo:
             pass
 
     return ContainerInfo(
-        name=container.name,
+        name=container.name or "",
         status=container.status,
         health=health,
-        image=image,
+        image=str(image),
         started_at=started_at,
     )
 
@@ -147,7 +151,7 @@ class DockerEventMonitor:
         self,
         state_manager: ContainerStateManager,
         ignored_containers: list[str] | None = None,
-        alert_manager: "AlertManager | None" = None,
+        alert_manager: "AlertSender | None" = None,
         rate_limiter: "RateLimiter | None" = None,
         mute_manager: "MuteManager | None" = None,
         docker_socket_path: str = "unix:///var/run/docker.sock",
@@ -162,10 +166,10 @@ class DockerEventMonitor:
         self._shared_client: SharedDockerClient | None = None
         self._running = False
         # Use bounded queue to prevent memory issues under load
-        self._pending_alerts: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+        self._pending_alerts: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(
             maxsize=self.MAX_QUEUE_SIZE
         )
-        self._alert_task: asyncio.Task | None = None
+        self._alert_task: asyncio.Task[None] | None = None
         self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
         self._crash_tracker = CrashTracker()
         self._unhealthy_alerted: set[str] = set()  # Track containers already alerted as unhealthy
@@ -181,7 +185,7 @@ class DockerEventMonitor:
         self._shared_client = SharedDockerClient(self._client)
         logger.info("Connected to Docker socket")
 
-    def load_initial_state(self, containers: list | None = None) -> None:
+    def load_initial_state(self, containers: list[Any] | None = None) -> None:
         """Load all containers into state manager.
 
         Args:

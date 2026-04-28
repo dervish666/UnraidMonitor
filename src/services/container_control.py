@@ -14,7 +14,7 @@ class ContainerController:
         self,
         docker_client: docker.DockerClient,
         protected_containers: list[str],
-    ):
+    ) -> None:
         self.docker_client = docker_client
         self.protected_containers = set(protected_containers)
 
@@ -25,7 +25,7 @@ class ContainerController:
     async def restart(self, container_name: str) -> str:
         """Restart a container. Returns a status message."""
         try:
-            def _do_restart():
+            def _do_restart() -> None:
                 container = self.docker_client.containers.get(container_name)
                 container.restart()
 
@@ -41,7 +41,7 @@ class ContainerController:
     async def stop(self, container_name: str) -> str:
         """Stop a container. Returns a status message."""
         try:
-            def _do_stop():
+            def _do_stop() -> bool:
                 container = self.docker_client.containers.get(container_name)
                 if container.status != "running":
                     return False
@@ -62,7 +62,7 @@ class ContainerController:
     async def start(self, container_name: str) -> str:
         """Start a container. Returns a status message."""
         try:
-            def _do_start():
+            def _do_start() -> bool:
                 container = self.docker_client.containers.get(container_name)
                 if container.status == "running":
                     return False
@@ -91,11 +91,16 @@ class ContainerController:
         5. If recreation fails, attempt rollback with old image
         """
         try:
-            def _get_container_info():
+            def _get_container_info() -> tuple[Any, str, str | None]:
                 container = self.docker_client.containers.get(container_name)
                 try:
-                    image_name = container.image.tags[0] if container.image.tags else container.image.id
-                    old_image_id = container.image.id
+                    img = container.image
+                    if img is not None:
+                        image_name = img.tags[0] if img.tags else (img.id or "unknown")
+                        old_image_id: str | None = img.id
+                    else:
+                        image_name = container.attrs.get("Config", {}).get("Image", "unknown")
+                        old_image_id = None
                 except docker.errors.ImageNotFound:
                     image_name = container.attrs.get("Config", {}).get("Image", "unknown")
                     old_image_id = None
@@ -125,7 +130,7 @@ class ContainerController:
             # Step 4: Recreate container with new image
             try:
                 await asyncio.to_thread(
-                    self.docker_client.containers.run,
+                    self.docker_client.containers.run,  # type: ignore[arg-type]
                     image_name,
                     name=container_name,
                     detach=True,
@@ -165,7 +170,7 @@ class ContainerController:
                 rollback_image = old_image_id or image_name
                 try:
                     await asyncio.to_thread(
-                        self.docker_client.containers.run,
+                        self.docker_client.containers.run,  # type: ignore[arg-type]
                         rollback_image,
                         name=container_name,
                         detach=True,
@@ -193,7 +198,7 @@ class ContainerController:
             return f"❌ Failed to update {container_name}. Check logs for details."
 
     @staticmethod
-    def _get_secondary_networks(attrs: dict) -> dict[str, dict]:
+    def _get_secondary_networks(attrs: dict[str, Any]) -> dict[str, dict[str, Any]]:
         """Extract secondary network connections (excluding the primary NetworkMode).
 
         Returns a dict of network_name -> endpoint_config for networks that need
@@ -219,7 +224,7 @@ class ContainerController:
             secondary[net_name] = endpoint
         return secondary
 
-    def _extract_run_config(self, attrs: dict) -> dict:
+    def _extract_run_config(self, attrs: dict[str, Any]) -> dict[str, Any]:
         """Extract comprehensive run configuration from container attributes.
 
         Extracts all significant container properties to ensure faithful recreation.

@@ -5,7 +5,7 @@ import logging
 from datetime import timedelta
 from typing import Callable, Awaitable, Any, TYPE_CHECKING
 
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest
 import docker
@@ -209,8 +209,9 @@ def diagnose_callback(
         # Acknowledge button press
         await callback.answer(f"Analyzing {actual_name}...")
 
-        if callback.message:
-            await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
+        if isinstance(callback.message, Message):
+            if callback.message.bot:
+                await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
             await callback.message.answer(f"Analyzing {actual_name}...")
 
         # Gather context
@@ -399,9 +400,8 @@ def mem_restart_yes_callback(
 
         success = await memory_monitor.confirm_restart(container_name)
 
-        if callback.message:
+        if isinstance(callback.message, Message):
             if success:
-                # Edit the original message to show the result
                 try:
                     await callback.message.edit_text(
                         f"💾 Restarted {container_name} after memory recovery."
@@ -443,7 +443,7 @@ def mem_restart_no_callback(
         await memory_monitor.decline_restart(container_name)
         await callback.answer(f"Won't restart {container_name}")
 
-        if callback.message:
+        if isinstance(callback.message, Message):
             try:
                 await callback.message.edit_text(
                     f"💾 Declined restart of {container_name}. It will stay stopped."
@@ -591,7 +591,7 @@ def set_limit_callback(
 
         await callback.answer(f"{'Reset' if value == 0 else 'Set'} to {value or 'default'}%")
 
-        if callback.message:
+        if isinstance(callback.message, Message):
             try:
                 await callback.message.edit_text(msg, parse_mode="Markdown")
             except TelegramBadRequest:

@@ -79,6 +79,9 @@ def _control_command(
             await safe_reply(message, error)
             return
 
+        if container_name is None:
+            return
+
         if controller.is_protected(container_name):
             await message.answer(f"🔒 {container_name} is protected and cannot be controlled via Telegram")
             return
@@ -157,12 +160,13 @@ def create_ctrl_confirm_callback(
 
         # Update the message to show we're executing
         emoji = ACTION_EMOJI.get(action, "⚠️")
-        if callback.message:
+        if isinstance(callback.message, Message):
             await safe_edit(
                 callback.message,
                 f"{emoji} Executing {action} on *{escape_markdown(container_name)}*...",
             )
-            await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
+            if callback.message.bot:
+                await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
 
         # Execute the action
         if action == "restart":
@@ -177,7 +181,7 @@ def create_ctrl_confirm_callback(
             result = f"❌ Unknown action: {action}"
 
         # Update with result
-        if callback.message:
+        if isinstance(callback.message, Message):
             await safe_edit(callback.message, result)
 
     return handler
@@ -188,7 +192,7 @@ def create_ctrl_cancel_callback() -> Callable[[CallbackQuery], Awaitable[None]]:
 
     async def handler(callback: CallbackQuery) -> None:
         await callback.answer("Cancelled")
-        if callback.message:
+        if isinstance(callback.message, Message):
             await safe_edit(callback.message, "Action cancelled.")
 
     return handler

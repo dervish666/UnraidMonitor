@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import time
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from src.utils.api_errors import handle_llm_error
 from src.utils.sanitize import sanitize_container_name, sanitize_logs
@@ -51,14 +51,14 @@ class PatternAnalyzer:
         self._provider = provider
         self._max_tokens = max_tokens
         self._context_lines = context_lines
-        self._cache: dict[str, tuple[float, dict]] = {}
+        self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     async def analyze_error(
         self,
         container: str,
         error_message: str,
         recent_logs: list[str],
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Analyze an error and generate an ignore pattern.
 
         Returns:
@@ -102,7 +102,7 @@ class PatternAnalyzer:
                 return None
 
             try:
-                result = json.loads(json_match.group())
+                result: dict[str, Any] = json.loads(json_match.group())
             except json.JSONDecodeError as e:
                 logger.warning(f"Invalid JSON in Haiku response: {e}")
                 return None

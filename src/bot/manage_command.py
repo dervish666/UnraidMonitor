@@ -375,9 +375,9 @@ def _collect_mutes(
 
     # Array mutes
     if array_mute_manager:
-        expiry = array_mute_manager.get_mute_expiry()
-        if expiry:
-            mutes.append(("array", "array", f"Array alerts - {format_mute_expiry(expiry)}"))
+        array_expiry = array_mute_manager.get_mute_expiry()
+        if array_expiry:
+            mutes.append(("array", "array", f"Array alerts - {format_mute_expiry(array_expiry)}"))
 
     return mutes
 

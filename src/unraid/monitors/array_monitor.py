@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Callable, Awaitable, TYPE_CHECKING
+from typing import Any, Callable, Awaitable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.config import UnraidConfig
@@ -35,7 +35,7 @@ class ArrayMonitor:
         self._on_alert = on_alert
         self._mute_manager = mute_manager
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
         self._alerted_disks: set[str] = set()  # Track disks that have been alerted
 
     async def start(self) -> None:
@@ -68,7 +68,7 @@ class ArrayMonitor:
 
             await asyncio.sleep(self._config.poll_array_seconds)
 
-    async def check_once(self) -> dict | None:
+    async def check_once(self) -> dict[str, Any] | None:
         """Check array status once and alert if needed.
 
         Returns:
@@ -95,7 +95,7 @@ class ArrayMonitor:
 
         return status
 
-    async def _check_capacity(self, status: dict) -> None:
+    async def _check_capacity(self, status: dict[str, Any]) -> None:
         """Check array capacity and alert if threshold exceeded.
 
         Args:
@@ -130,7 +130,7 @@ class ArrayMonitor:
         except (ValueError, TypeError) as e:
             logger.warning(f"Failed to parse capacity: {e}")
 
-    async def _check_disks(self, disks: list[dict], disk_type: str) -> None:
+    async def _check_disks(self, disks: list[dict[str, Any]], disk_type: str) -> None:
         """Check disk temperatures and status.
 
         Args:

@@ -221,7 +221,8 @@ class NLToolExecutor:
         handler = getattr(self, f"_tool_{tool_name}", None)
         if handler is None:
             return f"Unknown tool: {tool_name}"
-        return await handler(args)
+        result: str = await handler(args)
+        return result
 
     def _resolve_container(self, name: str) -> ContainerInfo | str:
         """Resolve partial container name. Returns ContainerInfo or error string.

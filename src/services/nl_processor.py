@@ -18,11 +18,11 @@ class ConversationMemory:
 
     user_id: int
     max_exchanges: int = 5
-    messages: deque = field(default_factory=deque)
+    messages: deque[dict[str, str]] = field(default_factory=deque)
     last_activity: datetime = field(default_factory=lambda: datetime.now())
     pending_action: dict[str, Any] | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Set maxlen on deque after dataclass init."""
         if not isinstance(self.messages, deque) or self.messages.maxlen is None:
             self.messages = deque(self.messages, maxlen=self.max_exchanges * 2)

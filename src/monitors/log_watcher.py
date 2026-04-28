@@ -106,7 +106,7 @@ class LogWatcher:
         self._docker_socket_path = docker_socket_path
         self._client: docker.DockerClient | None = None
         self._running = False
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: list[asyncio.Task[None]] = []
         self._total_drops: int = 0
 
     def connect(self) -> None:
@@ -184,7 +184,7 @@ class LogWatcher:
                     _drop_count = 0
                     _last_drop_warn = now
 
-        def stream_to_queue():
+        def stream_to_queue() -> None:
             """Blocking function that streams logs and puts them in the queue."""
             nonlocal log_stream
             try:

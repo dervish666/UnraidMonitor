@@ -3,7 +3,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import docker
 
@@ -11,7 +11,7 @@ from src.utils.formatting import format_bytes
 
 if TYPE_CHECKING:
     from src.config import ResourceConfig
-    from src.alerts.manager import AlertManager
+    from src.alerts.manager import AlertSender
     from src.alerts.rate_limiter import RateLimiter
     from src.alerts.mute_manager import MuteManager
 
@@ -44,7 +44,7 @@ class ContainerStats:
         return format_bytes(self.memory_limit)
 
 
-def calculate_cpu_percent(stats: dict) -> float:
+def calculate_cpu_percent(stats: dict[str, Any]) -> float:
     """Calculate CPU percentage from Docker stats.
 
     Docker provides cumulative CPU usage, so we need to calculate
@@ -59,23 +59,23 @@ def calculate_cpu_percent(stats: dict) -> float:
     cpu_stats = stats.get("cpu_stats", {})
     precpu_stats = stats.get("precpu_stats", {})
 
-    cpu_usage = cpu_stats.get("cpu_usage", {}).get("total_usage", 0)
-    precpu_usage = precpu_stats.get("cpu_usage", {}).get("total_usage", 0)
+    cpu_usage: int = cpu_stats.get("cpu_usage", {}).get("total_usage", 0)
+    precpu_usage: int = precpu_stats.get("cpu_usage", {}).get("total_usage", 0)
 
-    system_usage = cpu_stats.get("system_cpu_usage", 0)
-    presystem_usage = precpu_stats.get("system_cpu_usage", 0)
+    system_usage: int = cpu_stats.get("system_cpu_usage", 0)
+    presystem_usage: int = precpu_stats.get("system_cpu_usage", 0)
 
     cpu_delta = cpu_usage - precpu_usage
     system_delta = system_usage - presystem_usage
 
     if system_delta > 0 and cpu_delta >= 0:
-        num_cpus = cpu_stats.get("online_cpus", 1)
+        num_cpus: int = cpu_stats.get("online_cpus", 1)
         return (cpu_delta / system_delta) * num_cpus * 100.0
 
     return 0.0
 
 
-def parse_container_stats(name: str, stats: dict) -> ContainerStats:
+def parse_container_stats(name: str, stats: dict[str, Any]) -> ContainerStats:
     """Parse Docker stats response into ContainerStats.
 
     Args:
@@ -150,7 +150,7 @@ class ResourceMonitor:
         self,
         docker_client: docker.DockerClient,
         config: "ResourceConfig",
-        alert_manager: "AlertManager",
+        alert_manager: "AlertSender",
         rate_limiter: "RateLimiter",
         mute_manager: "MuteManager | None" = None,
     ):
@@ -181,7 +181,7 @@ class ResourceMonitor:
             self._docker.containers.list, filters={"status": "running"}
         )
 
-        async def fetch_one(container) -> ContainerStats | None:
+        async def fetch_one(container: Any) -> ContainerStats | None:
             async with self._stats_semaphore:
                 try:
                     raw_stats = await asyncio.to_thread(container.stats, stream=False)
@@ -205,11 +205,11 @@ class ResourceMonitor:
         import asyncio
 
         try:
-            def _get_stats():
+            def _get_stats() -> dict[str, Any] | None:
                 container = self._docker.containers.get(name)
                 if container.status != "running":
                     return None
-                return container.stats(stream=False)
+                return container.stats(stream=False)  # type: ignore[return-value]
 
             raw_stats = await asyncio.to_thread(_get_stats)
             if raw_stats is None:
@@ -338,7 +338,7 @@ class ResourceMonitor:
             container_name=stats.name,
             metric=violation.metric,
             current_value=violation.current_value,
-            threshold=violation.threshold,
+            threshold=int(violation.threshold),
             duration_seconds=duration,
             memory_bytes=stats.memory_bytes,
             memory_limit=stats.memory_limit,

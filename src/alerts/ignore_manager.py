@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Iterator, Literal
 
 from src.utils.formatting import strip_log_timestamps
 
@@ -55,7 +55,7 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
     test_string = "a" * 100
     result: list[bool] = []
 
-    def _test_regex():
+    def _test_regex() -> None:
         compiled.search(test_string)
         result.append(True)
 
@@ -78,9 +78,9 @@ class IgnorePattern:
     explanation: str | None = None
     added: str | None = None  # ISO timestamp
     # Exclude from serialization and comparison
-    _compiled_regex: re.Pattern | None = field(default=None, init=False, repr=False, compare=False)
+    _compiled_regex: re.Pattern[str] | None = field(default=None, init=False, repr=False, compare=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Pre-compile regex patterns for performance."""
         if self.match_type == "regex":
             try:
@@ -118,7 +118,7 @@ class IgnoreManager:
         self._load_runtime_ignores()
 
     @contextmanager
-    def batch_updates(self):
+    def batch_updates(self) -> Iterator[None]:
         """Context manager to defer saves during bulk operations.
 
         While inside the batch, add/remove calls skip writing to disk.

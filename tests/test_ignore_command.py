@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
+from aiogram.types import Message
+
 
 @pytest.mark.asyncio
 async def test_ignore_command_shows_recent_errors():
@@ -260,7 +262,8 @@ class TestIgnoreToggleCallback:
         callback.data = "ign_toggle:0"
         callback.from_user = MagicMock()
         callback.from_user.id = 123
-        callback.message = AsyncMock()
+        callback.message = MagicMock(spec=Message)
+        callback.message.edit_reply_markup = AsyncMock()
 
         await handler(callback)
 
@@ -305,7 +308,8 @@ class TestIgnoreAllCallback:
         callback.data = "ign_all"
         callback.from_user = MagicMock()
         callback.from_user.id = 123
-        callback.message = AsyncMock()
+        callback.message = MagicMock(spec=Message)
+        callback.message.edit_reply_markup = AsyncMock()
 
         await handler(callback)
 

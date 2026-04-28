@@ -139,7 +139,8 @@ class UnraidClientWrapper:
                     return
         except Exception as e:
             logger.error(f"Unraid connectivity test failed: {e}")
-            await self._session.close()
+            if self._session:
+                await self._session.close()
             self._session = None
             return
 
@@ -185,6 +186,7 @@ class UnraidClientWrapper:
         if not self._connected or self._session is None:
             await self._reconnect_if_needed()
         self._ensure_connected()
+        assert self._session is not None
 
         payload = {"query": query}
 
@@ -209,7 +211,8 @@ class UnraidClientWrapper:
                     logger.error(f"GraphQL query returned errors: {errors}")
                     raise UnraidConnectionError(f"GraphQL errors: {errors}")
 
-                return result.get("data", {})
+                data: dict[str, Any] = result.get("data", {})
+                return data
 
         except aiohttp.ClientError as e:
             # Mark disconnected so next call will try to reconnect
@@ -253,5 +256,6 @@ class UnraidClientWrapper:
             Dict with state, capacity, disks, etc.
         """
         data = await self._execute_query(ARRAY_STATUS_QUERY)
-        return data.get("array", {})
+        result: dict[str, Any] = data.get("array", {})
+        return result
 

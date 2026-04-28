@@ -2,8 +2,9 @@
 
 import re
 from datetime import datetime, timedelta
+from typing import Any
 
-from aiogram.types import Message
+from aiogram.types import Message, MaybeInaccessibleMessage
 from aiogram.exceptions import TelegramBadRequest
 
 # Valid Docker container name pattern (alphanumeric, dash, underscore, dot, colon)
@@ -27,7 +28,7 @@ async def safe_reply(
     message: Message,
     text: str,
     parse_mode: str = "Markdown",
-    **kwargs: object,
+    **kwargs: Any,
 ) -> Message:
     """Send a message with Markdown, falling back to plain text on parse failure."""
     try:
@@ -39,17 +40,17 @@ async def safe_reply(
 
 
 async def safe_edit(
-    message: Message,
+    message: "Message | MaybeInaccessibleMessage",
     text: str,
     parse_mode: str = "Markdown",
-    **kwargs: object,
-) -> Message:
+    **kwargs: Any,
+) -> Message | bool:
     """Edit a message with Markdown, falling back to plain text on parse failure."""
     try:
-        return await message.edit_text(text, parse_mode=parse_mode, **kwargs)
+        return await message.edit_text(text, parse_mode=parse_mode, **kwargs)  # type: ignore[union-attr]
     except TelegramBadRequest as e:
         if "can't parse entities" in str(e):
-            return await message.edit_text(_strip_markdown(text), **kwargs)
+            return await message.edit_text(_strip_markdown(text), **kwargs)  # type: ignore[union-attr]
         raise
 
 

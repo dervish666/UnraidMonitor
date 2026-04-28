@@ -11,7 +11,7 @@ class ContainerStateManager:
     and the async event loop, so all access to _containers must be protected.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._containers: dict[str, ContainerInfo] = {}
         self._lock = threading.Lock()
 

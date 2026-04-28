@@ -63,7 +63,8 @@ def resources_command(
 
         if len(parts) == 1:
             # Summary view
-            await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+            if message.bot:
+                await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
             summary = await format_resources_summary(resource_monitor)
 
             if not summary:

@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
+from aiogram.types import Message
 from src.services.llm.provider import LLMResponse
 
 
@@ -78,8 +79,11 @@ async def test_full_diagnose_flow():
     callback.data = "diag_details:overseerr"
     callback.from_user.id = 123
     callback.answer = AsyncMock()
-    callback.message = MagicMock()
+    callback.message = MagicMock(spec=Message)
     callback.message.answer = AsyncMock()
+    callback.message.chat = MagicMock()
+    callback.message.chat.id = 12345
+    callback.message.bot = MagicMock()
     callback.message.bot.send_chat_action = AsyncMock()
 
     await details_handler(callback)
@@ -194,8 +198,11 @@ async def test_diagnose_different_users_independent_contexts():
     callback1.data = "diag_details:nginx"
     callback1.from_user.id = 111
     callback1.answer = AsyncMock()
-    callback1.message = MagicMock()
+    callback1.message = MagicMock(spec=Message)
     callback1.message.answer = AsyncMock()
+    callback1.message.chat = MagicMock()
+    callback1.message.chat.id = 12345
+    callback1.message.bot = MagicMock()
     callback1.message.bot.send_chat_action = AsyncMock()
     await details_handler(callback1)
 

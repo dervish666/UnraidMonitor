@@ -3,7 +3,7 @@ from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher, BaseMiddleware, F
 from aiogram.filters import Command, Filter
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, TelegramObject
 import docker
 
 from src.state import ContainerStateManager
@@ -75,18 +75,20 @@ logger = logging.getLogger(__name__)
 
 
 class AuthMiddleware(BaseMiddleware):
-    def __init__(self, allowed_users: list[int], chat_id_store=None):
+    def __init__(self, allowed_users: list[int], chat_id_store: Any = None) -> None:
         self.allowed_users = set(allowed_users)
         self.chat_id_store = chat_id_store
         super().__init__()
 
     async def __call__(
         self,
-        handler: Callable[[Message | CallbackQuery, dict[str, Any]], Awaitable[Any]],
-        event: Message | CallbackQuery,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        user_id = event.from_user.id if event.from_user else None
+        user_id = None
+        if isinstance(event, (Message, CallbackQuery)) and event.from_user:
+            user_id = event.from_user.id
 
         if user_id not in self.allowed_users:
             logger.warning(f"Unauthorized access attempt from user {user_id}")
@@ -99,7 +101,7 @@ class AuthMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
-def create_auth_middleware(allowed_users: list[int], chat_id_store=None) -> AuthMiddleware:
+def create_auth_middleware(allowed_users: list[int], chat_id_store: Any = None) -> AuthMiddleware:
     """Factory function for auth middleware."""
     return AuthMiddleware(allowed_users, chat_id_store=chat_id_store)
 
@@ -109,7 +111,7 @@ def create_bot(token: str) -> Bot:
     return Bot(token=token)
 
 
-def create_dispatcher(allowed_users: list[int], chat_id_store=None) -> Dispatcher:
+def create_dispatcher(allowed_users: list[int], chat_id_store: Any = None) -> Dispatcher:
     """Create dispatcher with auth middleware."""
     dp = Dispatcher()
     auth = AuthMiddleware(allowed_users, chat_id_store=chat_id_store)

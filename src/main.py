@@ -4,9 +4,11 @@ import os
 import signal
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import anthropic
 import docker
+from aiogram import Bot, Dispatcher
 
 from src.config import Settings, AppConfig
 from src.state import ContainerStateManager
@@ -51,11 +53,11 @@ class AlertManagerProxy:
     # Minimum delay between consecutive alert sends (seconds)
     _SEND_DELAY = 0.1
 
-    def __init__(self, bot, chat_id_store: ChatIdStore, error_display_max_chars: int = 200):
+    def __init__(self, bot: Bot, chat_id_store: ChatIdStore, error_display_max_chars: int = 200) -> None:
         self.bot = bot
         self.chat_id_store = chat_id_store
         self.error_display_max_chars = error_display_max_chars
-        self._queued_alerts: list[tuple[str, dict]] = []
+        self._queued_alerts: list[tuple[str, dict[str, Any]]] = []
         self._managers: dict[int, AlertManager] = {}
         self._send_lock = asyncio.Lock()
 
@@ -67,7 +69,7 @@ class AlertManagerProxy:
             )
         return self._managers[chat_id]
 
-    async def _send_alert(self, method_name: str, **kwargs):
+    async def _send_alert(self, method_name: str, **kwargs: Any) -> None:
         """Generic alert sender that delegates to AlertManager.
 
         Sends to all known chat IDs. Uses a lock to serialize sends
@@ -107,20 +109,70 @@ class AlertManagerProxy:
                 except Exception as e:
                     logger.error(f"Failed to send queued alert to {chat_id}: {e}")
 
-    async def send_crash_alert(self, **kwargs):
-        await self._send_alert("send_crash_alert", **kwargs)
+    async def send_crash_alert(
+        self,
+        container_name: str,
+        exit_code: int,
+        image: str,
+        uptime_seconds: int | None = None,
+        restart_loop_count: int | None = None,
+    ) -> None:
+        await self._send_alert(
+            "send_crash_alert",
+            container_name=container_name,
+            exit_code=exit_code,
+            image=image,
+            uptime_seconds=uptime_seconds,
+            restart_loop_count=restart_loop_count,
+        )
 
-    async def send_log_error_alert(self, **kwargs):
-        await self._send_alert("send_log_error_alert", **kwargs)
+    async def send_log_error_alert(
+        self,
+        container_name: str,
+        error_line: str,
+        suppressed_count: int = 0,
+    ) -> None:
+        await self._send_alert(
+            "send_log_error_alert",
+            container_name=container_name,
+            error_line=error_line,
+            suppressed_count=suppressed_count,
+        )
 
-    async def send_resource_alert(self, **kwargs):
-        await self._send_alert("send_resource_alert", **kwargs)
+    async def send_resource_alert(
+        self,
+        container_name: str,
+        metric: str,
+        current_value: float,
+        threshold: int,
+        duration_seconds: int,
+        memory_bytes: int,
+        memory_limit: int,
+        memory_percent: float,
+        cpu_percent: float,
+    ) -> None:
+        await self._send_alert(
+            "send_resource_alert",
+            container_name=container_name,
+            metric=metric,
+            current_value=current_value,
+            threshold=threshold,
+            duration_seconds=duration_seconds,
+            memory_bytes=memory_bytes,
+            memory_limit=memory_limit,
+            memory_percent=memory_percent,
+            cpu_percent=cpu_percent,
+        )
 
-    async def send_recovery_alert(self, container_name: str):
+    async def send_recovery_alert(self, container_name: str) -> None:
         await self._send_alert("send_recovery_alert", container_name=container_name)
 
-    async def send_health_alert(self, **kwargs):
-        await self._send_alert("send_health_alert", **kwargs)
+    async def send_health_alert(self, container_name: str, health_status: str) -> None:
+        await self._send_alert(
+            "send_health_alert",
+            container_name=container_name,
+            health_status=health_status,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -138,10 +190,10 @@ class _BackgroundTasks:
         self.unraid_client: UnraidClientWrapper | None = None
         self.unraid_system_monitor: UnraidSystemMonitor | None = None
         self.unraid_array_monitor: ArrayMonitor | None = None
-        self.mute_managers: list = []
-        self._tasks: list[asyncio.Task] = []
+        self.mute_managers: list[Any] = []
+        self._tasks: list[asyncio.Task[Any]] = []
 
-    def add_task(self, task: asyncio.Task) -> None:
+    def add_task(self, task: asyncio.Task[Any]) -> None:
         self._tasks.append(task)
 
     async def shutdown(self) -> None:
@@ -182,8 +234,8 @@ class _BackgroundTasks:
 async def start_monitoring(
     config: AppConfig,
     settings: Settings,
-    bot,
-    dp,
+    bot: Bot,
+    dp: Dispatcher,
     chat_id_store: ChatIdStore,
     bg: _BackgroundTasks,
 ) -> None:
@@ -400,7 +452,7 @@ async def start_monitoring(
     bg.monitor = monitor
 
     # Initialize log watcher
-    async def on_log_error(container_name: str, error_line: str):
+    async def on_log_error(container_name: str, error_line: str) -> None:
         """Handle log errors with rate limiting."""
         # Check if muted
         if mute_manager.is_muted(container_name):
@@ -442,7 +494,7 @@ async def start_monitoring(
     resource_config = config.resource_monitoring
     if resource_config.enabled:
         resource_monitor = ResourceMonitor(
-            docker_client=monitor.shared_client,
+            docker_client=monitor.shared_client,  # type: ignore[arg-type]
             config=resource_config,
             alert_manager=alert_manager,
             rate_limiter=rate_limiter,
@@ -536,7 +588,7 @@ async def start_monitoring(
                     logger.error(f"Failed to send restart prompt to {cid}: {e}")
 
         memory_monitor = MemoryMonitor(
-            docker_client=monitor.shared_client,
+            docker_client=monitor.shared_client,  # type: ignore[arg-type]
             config=memory_config,
             on_alert=on_memory_alert,
             on_ask_restart=on_ask_restart,
@@ -554,7 +606,7 @@ async def start_monitoring(
 
         nl_executor = NLToolExecutor(
             state=state,
-            docker_client=monitor.shared_client,
+            docker_client=monitor.shared_client,  # type: ignore[arg-type]
             protected_containers=config.protected_containers,
             controller=None,  # Will be set after register_commands
             resource_monitor=resource_monitor,
@@ -574,7 +626,7 @@ async def start_monitoring(
     controller, diagnostic_service = register_commands(
         dp,
         state,
-        docker_client=monitor.shared_client,
+        docker_client=monitor.shared_client,  # type: ignore[arg-type]
         protected_containers=config.protected_containers,
         registry=registry,
         resource_monitor=resource_monitor,
@@ -719,14 +771,14 @@ async def start_monitoring(
 
 _shutting_down = False
 
-async def _graceful_shutdown(dp: object) -> None:
+async def _graceful_shutdown(dp: Dispatcher) -> None:
     """Signal handler: stop polling so the finally block runs."""
     global _shutting_down
     if _shutting_down:
         return
     _shutting_down = True
     logger.info("Received shutdown signal, stopping...")
-    dp.stop_polling()
+    await dp.stop_polling()
 
 
 # ---------------------------------------------------------------------------
@@ -739,7 +791,7 @@ async def main() -> None:
 
     # Settings always loads from env vars (no config.yaml needed)
     try:
-        settings = Settings()
+        settings = Settings()  # type: ignore[call-arg]
     except Exception as e:
         logger.error(f"Failed to load settings from environment: {e}")
         sys.exit(1)
@@ -747,7 +799,7 @@ async def main() -> None:
     # Create Telegram bot and dispatcher (needed for both paths)
     bot = create_bot(settings.telegram_bot_token)
     chat_id_store = ChatIdStore(json_path="data/chat_ids.json")
-    dp = create_dispatcher(settings.telegram_allowed_users, chat_id_store=chat_id_store)
+    dp = create_dispatcher(cast(list[int], settings.telegram_allowed_users), chat_id_store=chat_id_store)
 
     bg = _BackgroundTasks()
 
@@ -792,7 +844,7 @@ async def main() -> None:
                 except Exception:
                     pass
             # Stop polling gracefully before re-exec to flush pending updates
-            dp.stop_polling()
+            await dp.stop_polling()
             await asyncio.sleep(1)
             # Re-exec the process so it boots with the new config.yaml
             os.execv(sys.executable, [sys.executable, "-m", "src.main"])
@@ -846,7 +898,7 @@ async def main() -> None:
                     except Exception:
                         pass
                 # Stop polling gracefully before re-exec to flush pending updates
-                dp.stop_polling()
+                await dp.stop_polling()
                 await asyncio.sleep(1)
                 os.execv(sys.executable, [sys.executable, "-m", "src.main"])
 

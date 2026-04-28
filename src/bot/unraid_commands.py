@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Callable, Awaitable, TYPE_CHECKING
+from typing import Any, Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message
 from aiogram.enums import ChatAction
@@ -193,7 +193,8 @@ def server_command(
         text = (message.text or "").strip()
         detailed = "detailed" in text.lower()
 
-        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+        if message.bot:
+            await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
 
         if detailed:
             response = await format_server_detailed(system_monitor)
@@ -329,7 +330,7 @@ def unmute_array_command(
     return handler
 
 
-def _format_disk_line(disk: dict) -> str:
+def _format_disk_line(disk: dict[str, Any]) -> str:
     """Format a single disk for display."""
     name = disk.get("name", "unknown")
     temp = disk.get("temp", 0)
@@ -355,7 +356,8 @@ def disks_command(
     """Factory for /disks command handler."""
 
     async def handler(message: Message) -> None:
-        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+        if message.bot:
+            await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
         response = await format_disks(system_monitor)
 
         if response:

@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
+from aiogram.types import Message
+
 
 @pytest.mark.asyncio
 async def test_restart_command_shows_confirmation_buttons():
@@ -106,8 +108,11 @@ async def test_ctrl_confirm_callback_executes_restart():
     callback.data = "ctrl_confirm:restart:radarr"
     callback.from_user.id = 123
     callback.answer = AsyncMock()
-    callback.message = MagicMock()
+    callback.message = MagicMock(spec=Message)
     callback.message.edit_text = AsyncMock()
+    callback.message.chat = MagicMock()
+    callback.message.chat.id = 12345
+    callback.message.bot = MagicMock()
     callback.message.bot.send_chat_action = AsyncMock()
 
     await handler(callback)
@@ -171,7 +176,7 @@ async def test_ctrl_cancel_callback():
 
     callback = MagicMock()
     callback.answer = AsyncMock()
-    callback.message = MagicMock()
+    callback.message = MagicMock(spec=Message)
     callback.message.edit_text = AsyncMock()
 
     await handler(callback)

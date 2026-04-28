@@ -89,7 +89,7 @@ class AIConfig:
     ollama_default_model: str = "qwen2.5:7b"
 
     @classmethod
-    def from_dict(cls, data: dict) -> "AIConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "AIConfig":
         """Create AIConfig from YAML dict."""
         models = data.get("models", {})
         max_tokens = data.get("max_tokens", {})
@@ -127,7 +127,7 @@ class BotConfig:
     error_display_max_chars: int = 200
 
     @classmethod
-    def from_dict(cls, data: dict) -> "BotConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "BotConfig":
         """Create BotConfig from YAML dict."""
         log_display = data.get("log_display", {})
         return cls(
@@ -147,7 +147,7 @@ class DockerConfig:
     socket_path: str = "unix:///var/run/docker.sock"
 
     @classmethod
-    def from_dict(cls, data: dict) -> "DockerConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "DockerConfig":
         """Create DockerConfig from YAML dict."""
         return cls(
             socket_path=data.get("socket_path", "unix:///var/run/docker.sock"),
@@ -166,7 +166,7 @@ class ResourceConfig:
     container_overrides: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ResourceConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "ResourceConfig":
         """Create ResourceConfig from YAML dict."""
         defaults = data.get("defaults", {})
         return cls(
@@ -265,7 +265,7 @@ class MemoryConfig:
     killable_containers: list[str]  # Kill in this order
 
     @classmethod
-    def from_dict(cls, data: dict) -> "MemoryConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "MemoryConfig":
         config = cls(
             enabled=data.get("enabled", False),
             warning_threshold=max(min(data.get("warning_threshold", 90), 99), 50),
@@ -307,7 +307,7 @@ class UnraidConfig:
     array_usage_threshold: int = 85
 
     @classmethod
-    def from_dict(cls, data: dict) -> "UnraidConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "UnraidConfig":
         """Create UnraidConfig from YAML dict."""
         polling = data.get("polling", {})
         thresholds = data.get("thresholds", {})

@@ -1,6 +1,7 @@
 import json
 import logging
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,6 +11,44 @@ from src.utils.formatting import format_bytes, format_uptime, strip_log_timestam
 from src.utils.telegram_retry import send_with_retry
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class AlertSender(Protocol):
+    """Protocol for sending alerts to Telegram."""
+
+    async def send_crash_alert(
+        self,
+        container_name: str,
+        exit_code: int,
+        image: str,
+        uptime_seconds: int | None = None,
+        restart_loop_count: int | None = None,
+    ) -> None: ...
+
+    async def send_log_error_alert(
+        self,
+        container_name: str,
+        error_line: str,
+        suppressed_count: int = 0,
+    ) -> None: ...
+
+    async def send_resource_alert(
+        self,
+        container_name: str,
+        metric: str,
+        current_value: float,
+        threshold: int,
+        duration_seconds: int,
+        memory_bytes: int,
+        memory_limit: int,
+        memory_percent: float,
+        cpu_percent: float,
+    ) -> None: ...
+
+    async def send_health_alert(self, container_name: str, health_status: str) -> None: ...
+
+    async def send_recovery_alert(self, container_name: str) -> None: ...
 
 
 class ChatIdStore:

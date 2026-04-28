@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from typing import Callable, Awaitable, TYPE_CHECKING
+from typing import Any, Callable, Awaitable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.config import UnraidConfig
@@ -43,8 +43,8 @@ class UnraidSystemMonitor:
         self._mute_manager = mute_manager
         self._running = False
         self._last_alert_times: dict[str, float] = {}
-        self._cached_metrics: dict | None = None
-        self._cached_array: dict | None = None
+        self._cached_metrics: dict[str, Any] | None = None
+        self._cached_array: dict[str, Any] | None = None
         self._metrics_cache_time: float = 0.0
         self._array_cache_time: float = 0.0
 
@@ -72,7 +72,7 @@ class UnraidSystemMonitor:
         self._running = False
         logger.info("Unraid system monitor stopped")
 
-    async def check_once(self) -> dict | None:
+    async def check_once(self) -> dict[str, Any] | None:
         """Check system metrics once and alert if needed.
 
         Returns:
@@ -134,7 +134,7 @@ class UnraidSystemMonitor:
 
         return metrics
 
-    async def _rate_limited_alert(self, key: str, **kwargs) -> None:
+    async def _rate_limited_alert(self, key: str, **kwargs: Any) -> None:
         """Send an alert only if cooldown has elapsed for this key."""
         now = time.monotonic()
         last = self._last_alert_times.get(key, 0)
@@ -144,7 +144,7 @@ class UnraidSystemMonitor:
         self._last_alert_times[key] = now
         await self._on_alert(**kwargs)
 
-    async def get_current_metrics(self) -> dict | None:
+    async def get_current_metrics(self) -> dict[str, Any] | None:
         """Get current metrics, using cache if fresh.
 
         Returns:
@@ -161,7 +161,7 @@ class UnraidSystemMonitor:
             logger.error(f"Failed to get system metrics: {e}")
             return None
 
-    async def get_array_status(self) -> dict | None:
+    async def get_array_status(self) -> dict[str, Any] | None:
         """Get array status, using cache if fresh.
 
         Returns:

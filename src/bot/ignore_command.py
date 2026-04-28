@@ -21,7 +21,7 @@ _SELECTION_TTL = 600
 class IgnoreSelectionState:
     """Shared state for ignore selections across handlers."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         # user_id -> (timestamp, container, errors, selected_indices)
         self.pending_selections: dict[int, tuple[float, str, list[str], set[int]]] = {}
 
@@ -222,7 +222,7 @@ def ignore_toggle_callback(
         # Update keyboard only (don't change message text)
         keyboard = _build_ignore_keyboard(errors, selected)
         await callback.answer()
-        if callback.message:
+        if isinstance(callback.message, Message):
             try:
                 await callback.message.edit_reply_markup(reply_markup=keyboard)
             except TelegramBadRequest:
@@ -255,7 +255,7 @@ def ignore_all_callback(
 
         keyboard = _build_ignore_keyboard(errors, selected)
         await callback.answer()
-        if callback.message:
+        if isinstance(callback.message, Message):
             try:
                 await callback.message.edit_reply_markup(reply_markup=keyboard)
             except Exception:

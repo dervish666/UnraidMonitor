@@ -66,7 +66,7 @@ class MemoryMonitor:
 
     def get_memory_percent(self) -> float:
         """Get current system memory usage percentage."""
-        return psutil.virtual_memory().percent
+        return float(psutil.virtual_memory().percent)
 
     async def _get_next_killable(self) -> str | None:
         """Get the next container to kill from the killable list.
@@ -89,7 +89,7 @@ class MemoryMonitor:
     async def _stop_container(self, name: str) -> None:
         """Stop a container and record it as killed."""
         try:
-            def _do_stop():
+            def _do_stop() -> None:
                 container = self._docker.containers.get(name)
                 container.stop(timeout=10)
 
@@ -223,7 +223,7 @@ class MemoryMonitor:
         self.cancel_pending_kill()
 
         try:
-            def _do_kill():
+            def _do_kill() -> None:
                 container = self._docker.containers.get(name)
                 container.stop(timeout=10)
 
@@ -252,7 +252,7 @@ class MemoryMonitor:
             return False
 
         try:
-            def _do_start():
+            def _do_start() -> None:
                 container = self._docker.containers.get(name)
                 container.start()
 

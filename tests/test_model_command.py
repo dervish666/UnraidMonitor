@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
+from aiogram.types import Message
 from src.services.llm.provider import ModelInfo
 from src.services.llm.registry import ProviderInfo
 
@@ -65,7 +66,7 @@ class TestModelCommand:
 
         callback = MagicMock()
         callback.data = "model:anthropic"
-        callback.message = MagicMock()
+        callback.message = MagicMock(spec=Message)
         callback.message.edit_text = AsyncMock()
         callback.answer = AsyncMock()
 
@@ -82,7 +83,7 @@ class TestModelCommand:
 
         callback = MagicMock()
         callback.data = "model:anthropic"
-        callback.message = MagicMock()
+        callback.message = MagicMock(spec=Message)
         callback.message.edit_text = AsyncMock()
         callback.answer = AsyncMock()
 
@@ -114,7 +115,7 @@ class TestModelCommand:
 
         callback = MagicMock()
         callback.data = "model_select:openai:gpt-4o"
-        callback.message = MagicMock()
+        callback.message = MagicMock(spec=Message)
         callback.message.edit_text = AsyncMock()
         callback.answer = AsyncMock()
 
@@ -129,7 +130,7 @@ class TestModelCommand:
         from src.bot.model_command import model_back_callback
 
         callback = MagicMock()
-        callback.message = MagicMock()
+        callback.message = MagicMock(spec=Message)
         callback.message.edit_text = AsyncMock()
         callback.answer = AsyncMock()
 
@@ -171,7 +172,7 @@ class TestModelCommand:
 
         callback = MagicMock()
         callback.data = "model:ollama"
-        callback.message = MagicMock()
+        callback.message = MagicMock(spec=Message)
         callback.message.edit_text = AsyncMock()
         callback.answer = AsyncMock()
 

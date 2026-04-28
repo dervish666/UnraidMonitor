@@ -4,6 +4,8 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import timedelta
 
+from aiogram.types import Message
+
 from src.bot.alert_callbacks import (
     restart_callback,
     logs_callback,
@@ -31,8 +33,12 @@ def mock_callback():
     """Create a mock CallbackQuery."""
     callback = MagicMock()
     callback.answer = AsyncMock()
-    callback.message = MagicMock()
+    callback.message = MagicMock(spec=Message)
     callback.message.answer = AsyncMock()
+    callback.message.edit_text = AsyncMock()
+    callback.message.chat = MagicMock()
+    callback.message.chat.id = 12345
+    callback.message.bot = MagicMock()
     callback.message.bot.send_chat_action = AsyncMock()
     callback.from_user = MagicMock()
     callback.from_user.id = 12345

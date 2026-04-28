@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
+from aiogram.types import Message
+
 
 @pytest.mark.asyncio
 async def test_auth_middleware_allows_authorized_user():
@@ -9,8 +11,11 @@ async def test_auth_middleware_allows_authorized_user():
     middleware = create_auth_middleware(allowed_users=[123, 456])
 
     # Mock message from authorized user
-    message = MagicMock()
+    message = MagicMock(spec=Message)
+    message.from_user = MagicMock()
     message.from_user.id = 123
+    message.chat = MagicMock()
+    message.chat.id = 123
 
     handler = AsyncMock(return_value="ok")
 
@@ -27,7 +32,8 @@ async def test_auth_middleware_blocks_unauthorized_user():
     middleware = create_auth_middleware(allowed_users=[123, 456])
 
     # Mock message from unauthorized user
-    message = MagicMock()
+    message = MagicMock(spec=Message)
+    message.from_user = MagicMock()
     message.from_user.id = 999
 
     handler = AsyncMock(return_value="ok")

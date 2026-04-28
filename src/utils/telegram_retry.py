@@ -3,21 +3,20 @@
 import asyncio
 import logging
 from functools import wraps
-from typing import TypeVar, Callable, Awaitable, ParamSpec
+from typing import TypeVar, Callable, Awaitable, Any
 
 from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError
 
 logger = logging.getLogger(__name__)
 
-P = ParamSpec("P")
 T = TypeVar("T")
 
 
 async def send_with_retry(
-    coro_func: Callable[P, Awaitable[T]],
-    *args: P.args,
+    coro_func: Callable[..., Awaitable[T]],
+    *args: Any,
     max_retries: int = 3,
-    **kwargs: P.kwargs,
+    **kwargs: Any,
 ) -> T | None:
     """Execute a Telegram API call with retry logic for rate limits.
 
@@ -54,7 +53,7 @@ async def send_with_retry(
     return None
 
 
-def with_telegram_retry(max_retries: int = 3):
+def with_telegram_retry(max_retries: int = 3) -> Callable[..., Any]:
     """Decorator for methods that send Telegram messages with retry logic.
 
     Args:
@@ -63,9 +62,9 @@ def with_telegram_retry(max_retries: int = 3):
     Returns:
         Decorator function.
     """
-    def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T | None]]:
+    def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T | None]]:
         @wraps(func)
-        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T | None:
+        async def wrapper(*args: Any, **kwargs: Any) -> T | None:
             for attempt in range(max_retries + 1):
                 try:
                     return await func(*args, **kwargs)
@@ -88,6 +87,8 @@ def with_telegram_retry(max_retries: int = 3):
                     # For other Telegram errors, don't retry
                     logger.error(f"Telegram API error in {func.__name__}: {e}")
                     raise
+
+            return None
 
         return wrapper
 
