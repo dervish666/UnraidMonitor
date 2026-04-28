@@ -52,7 +52,7 @@ def test_alert_manager_proxy_has_resource_alert():
 @pytest.mark.asyncio
 async def test_alert_manager_proxy_send_resource_alert():
     """Test that AlertManagerProxy.send_resource_alert forwards to AlertManager."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
 
     # Create mocks
@@ -87,7 +87,7 @@ async def test_alert_manager_proxy_send_resource_alert():
 @pytest.mark.asyncio
 async def test_alert_manager_proxy_no_chat_id():
     """Test that AlertManagerProxy logs warning when no chat ID."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
 
     mock_bot = MagicMock()

@@ -197,7 +197,7 @@ class TestChatIdStorePersistence:
 @pytest.mark.asyncio
 async def test_proxy_sends_to_all_users():
     """AlertManagerProxy should send each alert to all registered chat IDs."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
     from unittest.mock import patch
 
@@ -208,7 +208,7 @@ async def test_proxy_sends_to_all_users():
 
     proxy = AlertManagerProxy(bot, store)
 
-    with patch("src.main.AlertManager") as MockAM:
+    with patch("src.alert_proxy.AlertManager") as MockAM:
         mock_instance = MagicMock()
         mock_instance.send_crash_alert = AsyncMock()
         MockAM.return_value = mock_instance
@@ -226,7 +226,7 @@ async def test_proxy_sends_to_all_users():
 @pytest.mark.asyncio
 async def test_proxy_flushes_queue_to_all_users():
     """Queued alerts should be flushed to all users when chat IDs become available."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
     from unittest.mock import patch
 
@@ -235,7 +235,7 @@ async def test_proxy_flushes_queue_to_all_users():
     proxy = AlertManagerProxy(bot, store)
 
     # Queue alert while no users
-    with patch("src.main.AlertManager"):
+    with patch("src.alert_proxy.AlertManager"):
         await proxy.send_crash_alert(container_name="r", exit_code=1, image="i")
     assert len(proxy._queued_alerts) == 1
 
@@ -243,7 +243,7 @@ async def test_proxy_flushes_queue_to_all_users():
     store.set_chat_id(111)
     store.set_chat_id(222)
 
-    with patch("src.main.AlertManager") as MockAM:
+    with patch("src.alert_proxy.AlertManager") as MockAM:
         mock_instance = MagicMock()
         mock_instance.send_crash_alert = AsyncMock()
         mock_instance.send_log_error_alert = AsyncMock()

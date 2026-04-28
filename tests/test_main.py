@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 @pytest.mark.asyncio
 async def test_proxy_queues_alerts_when_no_chat_id():
     """Alerts are queued when no chat ID is registered."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
 
     store = ChatIdStore()
@@ -23,7 +23,7 @@ async def test_proxy_queues_alerts_when_no_chat_id():
 @pytest.mark.asyncio
 async def test_proxy_drops_alerts_when_queue_full():
     """Alerts are dropped when the queue exceeds MAX_QUEUED."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
 
     store = ChatIdStore()
@@ -39,7 +39,7 @@ async def test_proxy_drops_alerts_when_queue_full():
 @pytest.mark.asyncio
 async def test_proxy_sends_to_all_chat_ids():
     """Alerts are delivered to all registered chat IDs."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
 
     store = ChatIdStore()
@@ -65,7 +65,7 @@ async def test_proxy_sends_to_all_chat_ids():
 @pytest.mark.asyncio
 async def test_proxy_flushes_queue_on_first_send():
     """Queued alerts are flushed when the first real send happens."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
 
     store = ChatIdStore()
@@ -96,7 +96,7 @@ async def test_proxy_flushes_queue_on_first_send():
 @pytest.mark.asyncio
 async def test_proxy_health_alert():
     """send_health_alert delegates properly."""
-    from src.main import AlertManagerProxy
+    from src.alert_proxy import AlertManagerProxy
     from src.alerts.manager import ChatIdStore
 
     store = ChatIdStore()
@@ -119,7 +119,7 @@ async def test_proxy_health_alert():
 @pytest.mark.asyncio
 async def test_background_tasks_shutdown_flushes_mutes():
     """Shutdown flushes all mute managers."""
-    from src.main import _BackgroundTasks
+    from src.background import _BackgroundTasks
 
     bg = _BackgroundTasks()
 
@@ -136,7 +136,7 @@ async def test_background_tasks_shutdown_flushes_mutes():
 @pytest.mark.asyncio
 async def test_background_tasks_shutdown_handles_flush_errors():
     """Shutdown continues even if a mute manager flush fails."""
-    from src.main import _BackgroundTasks
+    from src.background import _BackgroundTasks
 
     bg = _BackgroundTasks()
 

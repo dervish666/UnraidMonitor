@@ -417,7 +417,7 @@ class TestAlertManagerProxy:
     """Tests for AlertManagerProxy from main.py."""
 
     def _make_proxy(self, chat_id=None):
-        from src.main import AlertManagerProxy
+        from src.alert_proxy import AlertManagerProxy
         from src.alerts.manager import ChatIdStore
 
         mock_bot = MagicMock()
@@ -433,7 +433,7 @@ class TestAlertManagerProxy:
         """When chat_id is set, alert is sent immediately via AlertManager."""
         proxy, mock_bot, store = self._make_proxy(chat_id=12345)
 
-        with patch("src.main.AlertManager") as MockAlertManager:
+        with patch("src.alert_proxy.AlertManager") as MockAlertManager:
             mock_mgr_instance = MagicMock()
             mock_mgr_instance.send_crash_alert = AsyncMock()
             MockAlertManager.return_value = mock_mgr_instance
@@ -451,6 +451,8 @@ class TestAlertManagerProxy:
                 container_name="radarr",
                 exit_code=137,
                 image="linuxserver/radarr:latest",
+                uptime_seconds=None,
+                restart_loop_count=None,
             )
 
     @pytest.mark.asyncio
@@ -458,7 +460,7 @@ class TestAlertManagerProxy:
         """When no chat_id, alerts are queued instead of sent."""
         proxy, mock_bot, store = self._make_proxy(chat_id=None)
 
-        with patch("src.main.AlertManager") as MockAlertManager:
+        with patch("src.alert_proxy.AlertManager") as MockAlertManager:
             await proxy.send_crash_alert(
                 container_name="radarr",
                 exit_code=1,
@@ -479,7 +481,7 @@ class TestAlertManagerProxy:
         proxy, mock_bot, store = self._make_proxy(chat_id=None)
 
         # Queue some alerts while no chat_id
-        with patch("src.main.AlertManager"):
+        with patch("src.alert_proxy.AlertManager"):
             await proxy.send_crash_alert(
                 container_name="radarr", exit_code=1, image="img1"
             )
@@ -493,7 +495,7 @@ class TestAlertManagerProxy:
         store.set_chat_id(99999)
 
         # Send another alert -- should flush the queue first
-        with patch("src.main.AlertManager") as MockAlertManager:
+        with patch("src.alert_proxy.AlertManager") as MockAlertManager:
             mock_mgr = MagicMock()
             mock_mgr.send_crash_alert = AsyncMock()
             mock_mgr.send_log_error_alert = AsyncMock()
@@ -517,10 +519,12 @@ class TestAlertManagerProxy:
 
             # The queued alerts should have been delivered
             mock_mgr.send_crash_alert.assert_called_once_with(
-                container_name="radarr", exit_code=1, image="img1"
+                container_name="radarr", exit_code=1, image="img1",
+                uptime_seconds=None, restart_loop_count=None,
             )
             mock_mgr.send_log_error_alert.assert_called_once_with(
-                container_name="sonarr", error_line="connection failed"
+                container_name="sonarr", error_line="connection failed",
+                suppressed_count=0,
             )
             # Plus the new alert
             mock_mgr.send_resource_alert.assert_called_once()
@@ -530,7 +534,7 @@ class TestAlertManagerProxy:
         """Queue is capped at MAX_QUEUED (50). Excess alerts are dropped."""
         proxy, mock_bot, store = self._make_proxy(chat_id=None)
 
-        with patch("src.main.AlertManager"):
+        with patch("src.alert_proxy.AlertManager"):
             # Fill the queue to MAX_QUEUED
             for i in range(proxy.MAX_QUEUED):
                 await proxy.send_crash_alert(
@@ -558,7 +562,7 @@ class TestAlertManagerProxy:
     @pytest.mark.asyncio
     async def test_max_queued_is_50(self):
         """Verify the MAX_QUEUED constant is 50."""
-        from src.main import AlertManagerProxy
+        from src.alert_proxy import AlertManagerProxy
 
         assert AlertManagerProxy.MAX_QUEUED == 50
 
@@ -567,7 +571,7 @@ class TestAlertManagerProxy:
         """All alert types (crash, log_error, resource) can be queued."""
         proxy, mock_bot, store = self._make_proxy(chat_id=None)
 
-        with patch("src.main.AlertManager"):
+        with patch("src.alert_proxy.AlertManager"):
             await proxy.send_crash_alert(
                 container_name="a", exit_code=1, image="img"
             )
