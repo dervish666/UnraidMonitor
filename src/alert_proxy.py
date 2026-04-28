@@ -7,6 +7,7 @@ from typing import Any
 from aiogram import Bot
 
 from src.alerts.manager import AlertManager, ChatIdStore
+from src.constants import ALERT_QUEUE_MAX, ALERT_SEND_DELAY, ERROR_DISPLAY_MAX_CHARS
 
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,10 @@ class AlertManagerProxy:
     during alert storms.
     """
 
-    MAX_QUEUED = 50
-    # Minimum delay between consecutive alert sends (seconds)
-    _SEND_DELAY = 0.1
+    MAX_QUEUED = ALERT_QUEUE_MAX
+    _SEND_DELAY = ALERT_SEND_DELAY
 
-    def __init__(self, bot: Bot, chat_id_store: ChatIdStore, error_display_max_chars: int = 200) -> None:
+    def __init__(self, bot: Bot, chat_id_store: ChatIdStore, error_display_max_chars: int = ERROR_DISPLAY_MAX_CHARS) -> None:
         self.bot = bot
         self.chat_id_store = chat_id_store
         self.error_display_max_chars = error_display_max_chars

@@ -11,6 +11,7 @@ import docker
 from aiogram import Dispatcher
 
 from src.config import Settings, AppConfig
+from src.constants import DEFAULT_HAIKU_MODEL
 from src.alerts.manager import ChatIdStore
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_setup_wizard
 from src.bot.setup_wizard import SetupWizard
@@ -58,7 +59,7 @@ async def main() -> None:
         from src.services.llm.anthropic_provider import AnthropicProvider
         _wizard_anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         wizard_provider = AnthropicProvider(
-            client=_wizard_anthropic_client, model="claude-haiku-4-5-20251001"
+            client=_wizard_anthropic_client, model=DEFAULT_HAIKU_MODEL
         )
 
     if first_run:

@@ -8,6 +8,8 @@ from typing import Any, Awaitable, Callable
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from src.constants import MUTE_MAINTENANCE_INTERVAL_SECONDS
+
 from src.alerts.manager import ChatIdStore
 from src.alerts.mute_manager import MuteManager
 from src.alerts.rate_limiter import RateLimiter
@@ -194,7 +196,7 @@ def make_mute_maintenance_loop(
 ) -> Callable[[], Coroutine[Any, Any, None]]:
     async def _mute_maintenance_loop() -> None:
         while True:
-            await asyncio.sleep(300)  # Every 5 minutes
+            await asyncio.sleep(MUTE_MAINTENANCE_INTERVAL_SECONDS)
             for mgr in mute_managers:
                 try:
                     mgr.flush()

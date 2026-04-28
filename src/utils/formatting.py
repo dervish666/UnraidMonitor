@@ -7,6 +7,8 @@ from typing import Any
 from aiogram.types import Message, MaybeInaccessibleMessage
 from aiogram.exceptions import TelegramBadRequest
 
+from src.constants import MAX_CONTAINER_NAME_LENGTH
+
 # Valid Docker container name pattern (alphanumeric, dash, underscore, dot, colon)
 # Docker allows: [a-zA-Z0-9][a-zA-Z0-9_.-]* but we also allow colons for compose names
 _VALID_CONTAINER_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$")
@@ -14,7 +16,7 @@ _VALID_CONTAINER_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$")
 
 def validate_container_name(name: str) -> bool:
     """Validate that a string looks like a valid container name."""
-    if not name or len(name) > 256:
+    if not name or len(name) > MAX_CONTAINER_NAME_LENGTH:
         return False
     return bool(_VALID_CONTAINER_NAME.match(name))
 
