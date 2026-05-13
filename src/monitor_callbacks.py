@@ -53,6 +53,8 @@ def make_server_alert_handler(
     config: Any,
     escape_markdown_fn: Callable[[str], str],
     resource_monitor_ref: list[ResourceMonitor | None],
+    array_mute_manager: Any = None,
+    unraid_config: Any = None,
 ) -> Callable[[str, str, str], Awaitable[None]]:
     async def on_server_alert(title: str, message: str, alert_type: str) -> None:
         chat_ids = chat_id_store.get_all_chat_ids()
@@ -92,6 +94,29 @@ def make_server_alert_handler(
                         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
             except Exception as e:
                 logger.warning(f"Failed to get container stats for server alert: {e}")
+
+        # Add mute and threshold buttons to array alerts
+        if alert_type == "array" and array_mute_manager is not None:
+            arr_buttons: list[list[InlineKeyboardButton]] = [
+                [
+                    InlineKeyboardButton(text="🔇 Mute 1h", callback_data="arr_mute:60"),
+                    InlineKeyboardButton(text="🔇 Mute 24h", callback_data="arr_mute:1440"),
+                ],
+            ]
+            if unraid_config is not None:
+                if "Capacity Warning" in title:
+                    current = unraid_config.array_usage_threshold
+                    arr_buttons.append([InlineKeyboardButton(
+                        text=f"⚙️ Adjust Threshold ({current}%)",
+                        callback_data=f"arr_thresh:capacity:{current}",
+                    )])
+                elif "High Temperature" in title:
+                    current = unraid_config.disk_temp_threshold
+                    arr_buttons.append([InlineKeyboardButton(
+                        text=f"⚙️ Adjust Threshold ({current}°C)",
+                        callback_data=f"arr_thresh:disk_temp:{current}",
+                    )])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=arr_buttons)
 
         for cid in chat_ids:
             try:

@@ -143,6 +143,8 @@ def _init_unraid(
 
         on_server_alert = make_server_alert_handler(
             chat_id_store, bot, config, escape_markdown, uc.resource_monitor_ref,
+            array_mute_manager=uc.array_mute_manager,
+            unraid_config=config.unraid,
         )
 
         uc.system_monitor = UnraidSystemMonitor(
@@ -361,6 +363,7 @@ async def start_monitoring(
         server_mute_manager=uc.server_mute_manager,
         array_mute_manager=uc.array_mute_manager,
         array_monitor=uc.array_monitor,
+        unraid_config=config.unraid if uc.array_mute_manager else None,
         memory_monitor=memory_monitor,
         pattern_analyzer=pattern_analyzer,
         nl_processor=nl_processor,

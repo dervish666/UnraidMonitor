@@ -344,6 +344,8 @@ class UnraidConfig:
     disk_temp_threshold: int = UNRAID_DISK_TEMP_THRESHOLD
     array_usage_threshold: int = UNRAID_ARRAY_USAGE_THRESHOLD
 
+    config_path: str | None = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "UnraidConfig":
         """Create UnraidConfig from YAML dict."""
@@ -363,6 +365,57 @@ class UnraidConfig:
             disk_temp_threshold=max(20, min(thresholds.get("disk_temp", UNRAID_DISK_TEMP_THRESHOLD), 100)),
             array_usage_threshold=max(1, min(thresholds.get("array_usage", UNRAID_ARRAY_USAGE_THRESHOLD), 100)),
         )
+
+    def set_threshold(self, metric: str, value: int) -> None:
+        """Set an array threshold and persist to config.yaml.
+
+        Args:
+            metric: "array_usage" or "disk_temp".
+            value: New threshold value, or 0 to reset to default.
+        """
+        if metric == "array_usage":
+            if value == 0:
+                value = UNRAID_ARRAY_USAGE_THRESHOLD
+            self.array_usage_threshold = max(1, min(value, 100))
+        elif metric == "disk_temp":
+            if value == 0:
+                value = UNRAID_DISK_TEMP_THRESHOLD
+            self.disk_temp_threshold = max(20, min(value, 100))
+        else:
+            return
+        self._persist()
+
+    def _persist(self) -> None:
+        """Write current thresholds back to config.yaml."""
+        if not self.config_path:
+            return
+        import tempfile
+        from pathlib import Path as _Path
+
+        path = _Path(self.config_path)
+        if not path.exists():
+            return
+
+        data = load_yaml_config(str(path))
+        unraid = data.setdefault("unraid", {})
+        thresholds = unraid.setdefault("thresholds", {})
+        thresholds["array_usage"] = self.array_usage_threshold
+        thresholds["disk_temp"] = self.disk_temp_threshold
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=path.parent, suffix=".tmp", prefix=".config_"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def load_yaml_config(path: str) -> dict[str, Any]:
@@ -454,6 +507,7 @@ class AppConfig:
         )
         self._resource_monitoring.config_path = settings.config_path
         self._unraid = UnraidConfig.from_dict(self._yaml_config.get("unraid", {}))
+        self._unraid.config_path = settings.config_path
         self._memory_management = MemoryConfig.from_dict(
             self._yaml_config.get("memory_management", {})
         )

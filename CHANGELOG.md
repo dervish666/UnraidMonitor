@@ -2,6 +2,15 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.9.7] - 2026-05-13
+
+### Added
+- **Array alert action buttons** - Array capacity and disk temperature alerts now include inline Mute (1h/24h) and Adjust Threshold buttons, matching the UX of container alerts
+- **Runtime array threshold adjustment** - Capacity and disk temp thresholds can be changed via alert buttons and persist to config.yaml
+
+### Changed
+- **UnraidConfig persistence** - Array thresholds now support runtime modification with automatic config.yaml persistence
+
 ## [0.9.6] - 2026-04-22
 
 ### Fixed

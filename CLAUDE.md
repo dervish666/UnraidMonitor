@@ -88,7 +88,7 @@ src/utils/telegram_retry.py - Telegram API retry logic for rate limit handling
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.9.6) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.9.7) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 ## Commands
 
@@ -183,6 +183,9 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `mem_kill:container_name`, `mem_restart_yes:container_name`
 - `nl_confirm:action_id`, `nl_cancel`
 - `manage:section` (e.g., `manage:status`, `manage:ignores`, `manage:back`)
+- `arr_mute:minutes` (mute array alerts, e.g., `arr_mute:60`)
+- `arr_thresh:metric:current` (show array threshold options, e.g., `arr_thresh:capacity:85`)
+- `arr_set:metric:value` (apply array threshold, e.g., `arr_set:array_usage:90`, 0 = reset to default)
 - `model:provider_name`, `model_select:provider:model`, `model:back`
 - `setup:confirm`, `setup:toggle:container_name`, `setup:adjust:category`
 

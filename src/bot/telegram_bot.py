@@ -38,6 +38,9 @@ from src.bot.alert_callbacks import (
     mem_cancel_kill_callback,
     mem_restart_yes_callback,
     mem_restart_no_callback,
+    array_mute_callback,
+    array_threshold_callback,
+    array_set_threshold_callback,
 )
 from src.bot.memory_commands import cancel_kill_command
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
@@ -135,6 +138,7 @@ def register_commands(
     server_mute_manager: Any | None = None,
     array_mute_manager: Any | None = None,
     array_monitor: Any | None = None,
+    unraid_config: Any | None = None,
     memory_monitor: "MemoryMonitor | None" = None,
     pattern_analyzer: Any | None = None,
     nl_processor: Any | None = None,
@@ -329,6 +333,22 @@ def register_commands(
             dp.message.register(
                 unmute_array_command(array_mute_manager, array_monitor=array_monitor),
                 Command("unmute-array"),
+            )
+
+            # Register array alert button callbacks
+            dp.callback_query.register(
+                array_mute_callback(array_mute_manager),
+                F.data.startswith("arr_mute:"),
+            )
+
+        if array_mute_manager is not None and unraid_config is not None:
+            dp.callback_query.register(
+                array_threshold_callback(unraid_config),
+                F.data.startswith("arr_thresh:"),
+            )
+            dp.callback_query.register(
+                array_set_threshold_callback(unraid_config),
+                F.data.startswith("arr_set:"),
             )
 
         # Register memory commands
