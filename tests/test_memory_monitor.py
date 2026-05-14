@@ -373,7 +373,7 @@ class TestKillCountdown:
 
         # Wait a bit then cancel
         await asyncio.sleep(0.01)
-        result = monitor.cancel_pending_kill()
+        result = await monitor.cancel_pending_kill()
 
         # Wait for countdown to complete
         await countdown_task
@@ -401,13 +401,14 @@ class TestKillCountdown:
         countdown_task = asyncio.create_task(monitor._execute_kill_countdown())
         await asyncio.sleep(0.01)  # Let it initialize
 
-        result = monitor.cancel_pending_kill()
+        result = await monitor.cancel_pending_kill()
         await countdown_task
 
         assert result is True
         assert monitor._pending_kill is None
 
-    def test_cancel_kill_no_pending(
+    @pytest.mark.asyncio
+    async def test_cancel_kill_no_pending(
         self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
     ):
         monitor = MemoryMonitor(
@@ -417,7 +418,7 @@ class TestKillCountdown:
             on_ask_restart=mock_on_ask_restart,
         )
 
-        result = monitor.cancel_pending_kill()
+        result = await monitor.cancel_pending_kill()
 
         assert result is False
 

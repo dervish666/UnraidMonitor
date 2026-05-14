@@ -9,6 +9,7 @@ from typing import Any
 from src.services.nl_tools import get_tool_definitions
 from src.utils.api_errors import handle_llm_error
 from src.utils.rate_limiter import PerUserRateLimiter
+from src.utils.sanitize import sanitize_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,11 @@ class NLProcessor:
         self._cached_tools: list[dict[str, Any]] | None = None
         self._user_locks: dict[int, asyncio.Lock] = {}
 
+    def set_controller(self, controller: Any) -> None:
+        """Set the container controller on the tool executor."""
+        if self._executor is not None:
+            self._executor.set_controller(controller)
+
     def _resolve_provider(self) -> Any:
         """Resolve the current LLM provider, preferring registry for runtime changes."""
         if self._registry is not None:
@@ -293,10 +299,10 @@ class NLProcessor:
                 tool_results.append({
                     "role": "tool_result",
                     "tool_use_id": tc.id,
-                    "content": result,
+                    "content": sanitize_for_prompt(result, max_length=8000),
                 })
 
-            messages = messages + [
+            messages.extend([
                 {
                     "role": "assistant",
                     "content": response.text,
@@ -306,7 +312,7 @@ class NLProcessor:
                     ],
                 },
                 *tool_results,
-            ]
+            ])
 
             response = await provider.chat(
                 messages=messages,

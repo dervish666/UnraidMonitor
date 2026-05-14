@@ -165,6 +165,10 @@ class ResourceMonitor:
         self._last_cleanup: float = 0.0
 
     @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
     def is_enabled(self) -> bool:
         """Check if resource monitoring is enabled."""
         return self._config.enabled
@@ -175,8 +179,6 @@ class ResourceMonitor:
         Returns:
             List of ContainerStats for all running containers.
         """
-        import asyncio
-
         containers = await asyncio.to_thread(
             self._docker.containers.list, filters={"status": "running"}
         )
@@ -202,8 +204,6 @@ class ResourceMonitor:
         Returns:
             ContainerStats or None if container not found.
         """
-        import asyncio
-
         try:
             def _get_stats() -> dict[str, Any] | None:
                 container = self._docker.containers.get(name)

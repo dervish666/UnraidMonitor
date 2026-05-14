@@ -22,7 +22,7 @@ def cancel_kill_command(
             return
 
         pending = memory_monitor.get_pending_kill()
-        if memory_monitor.cancel_pending_kill():
+        if await memory_monitor.cancel_pending_kill():
             await message.answer(f"Cancelled pending kill of {pending}.")
             logger.info(f"User cancelled kill of {pending}")
         else:

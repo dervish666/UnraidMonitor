@@ -132,7 +132,9 @@ class UnraidClientWrapper:
             payload = {"query": "{ info { os { hostname } } }"}
             async with self._session.post(self._base_url, json=payload) as response:
                 if response.status != 200:
-                    text = await response.text()
+                    text = (await response.text())[:200]
+                    if self._api_key:
+                        text = text.replace(self._api_key, "[REDACTED]")
                     logger.error(f"Unraid connectivity test failed: {response.status} - {text}")
                     await self._session.close()
                     self._session = None

@@ -141,6 +141,15 @@ def format_bytes(bytes_val: int) -> str:
     return f"{mb:.0f}MB"
 
 
+def format_duration_minutes(minutes: int) -> str:
+    """Format a duration in minutes to human-readable string."""
+    if minutes >= 1440:
+        return f"{minutes // 1440} day(s)"
+    elif minutes >= 60:
+        return f"{minutes // 60} hour(s)"
+    return f"{minutes} minute(s)"
+
+
 def format_uptime(seconds: int) -> str:
     """Format seconds into human-readable uptime.
 

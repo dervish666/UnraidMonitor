@@ -67,19 +67,19 @@ class TestHealthCommand:
         start_time = datetime.now(timezone.utc)
 
         mock_monitor = MagicMock()
-        mock_monitor._running = True
+        mock_monitor.is_running = True
         mock_monitor.state_manager.get_all.return_value = [MagicMock(), MagicMock()]
-        mock_monitor._crash_tracker._crashes = {}
+        mock_monitor.crash_tracker.get_active_crash_loops.return_value = []
 
         mock_log_watcher = MagicMock()
-        mock_log_watcher._running = True
+        mock_log_watcher.is_running = True
         mock_log_watcher.containers = ["plex", "radarr"]
 
         mock_resource = MagicMock()
-        mock_resource._running = True
+        mock_resource.is_running = True
 
         mock_memory = MagicMock()
-        mock_memory._running = True
+        mock_memory.is_running = True
 
         handler = health_command(
             start_time,
@@ -105,9 +105,9 @@ class TestHealthCommand:
         start_time = datetime.now(timezone.utc)
 
         mock_monitor = MagicMock()
-        mock_monitor._running = False
+        mock_monitor.is_running = False
         mock_monitor.state_manager.get_all.return_value = []
-        mock_monitor._crash_tracker._crashes = {}
+        mock_monitor.crash_tracker.get_active_crash_loops.return_value = []
 
         handler = health_command(start_time, monitor=mock_monitor)
 
@@ -125,14 +125,11 @@ class TestHealthCommand:
         start_time = datetime.now(timezone.utc)
 
         mock_monitor = MagicMock()
-        mock_monitor._running = True
+        mock_monitor.is_running = True
         mock_monitor.state_manager.get_all.return_value = []
 
         # Simulate a container with crash loop
-        tracker = MagicMock()
-        tracker._crashes = {"plex": [datetime.now() for _ in range(5)]}
-        tracker.get_crash_count.return_value = 5
-        mock_monitor._crash_tracker = tracker
+        mock_monitor.crash_tracker.get_active_crash_loops.return_value = [("plex", 5)]
 
         handler = health_command(start_time, monitor=mock_monitor)
 

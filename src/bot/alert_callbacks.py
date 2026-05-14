@@ -14,6 +14,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from src.config import ResourceConfig, UnraidConfig
 from src.constants import (
+    CPU_THRESHOLD_STEPS,
+    MEMORY_THRESHOLD_STEPS,
     UNRAID_ARRAY_USAGE_THRESHOLD,
     UNRAID_CPU_TEMP_THRESHOLD,
     UNRAID_CPU_USAGE_THRESHOLD,
@@ -22,7 +24,7 @@ from src.constants import (
 from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
-from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data
+from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes
 from src.utils.sanitize import sanitize_logs_for_display
 
 if TYPE_CHECKING:
@@ -274,7 +276,7 @@ def mute_callback(
             return
 
         try:
-            minutes = int(parts[1])
+            minutes = max(1, min(int(parts[1]), 43200))
         except ValueError:
             minutes = 60
 
@@ -304,12 +306,7 @@ def mute_callback(
         mute_manager.add_mute(actual_name, timedelta(minutes=minutes))
 
         # Format duration for display
-        if minutes >= 1440:
-            duration_str = f"{minutes // 1440} day(s)"
-        elif minutes >= 60:
-            duration_str = f"{minutes // 60} hour(s)"
-        else:
-            duration_str = f"{minutes} minute(s)"
+        duration_str = format_duration_minutes(minutes)
 
         await callback.answer(f"Muted {actual_name} for {duration_str}")
 
@@ -370,7 +367,7 @@ def mem_cancel_kill_callback(
     """Factory for cancel auto-kill button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        cancelled = memory_monitor.cancel_pending_kill()
+        cancelled = await memory_monitor.cancel_pending_kill()
 
         if cancelled:
             await callback.answer("Auto-kill cancelled")
@@ -461,12 +458,96 @@ def mem_restart_no_callback(
     return handler
 
 
-CPU_THRESHOLD_STEPS = [90, 120, 150, 200, 300, 400]
-MEMORY_THRESHOLD_STEPS = [85, 90, 95, 99]
-ARRAY_CAPACITY_STEPS = [80, 85, 90, 95, 98]
-DISK_TEMP_STEPS = [45, 50, 55, 60, 65, 70]
-SERVER_CPU_TEMP_STEPS = [70, 80, 85, 90, 95, 100]
-SERVER_CPU_USAGE_STEPS = [80, 85, 90, 95, 98]
+
+_UNRAID_METRICS: dict[str, tuple[list[int], str, str, int, str]] = {
+    # metric_key: (steps, unit, label, default, config_attr)
+    "capacity":  ([80, 85, 90, 95, 98], "%", "Array Capacity", UNRAID_ARRAY_USAGE_THRESHOLD, "array_usage_threshold"),
+    "disk_temp": ([45, 50, 55, 60, 65, 70], "°C", "Disk Temperature", UNRAID_DISK_TEMP_THRESHOLD, "disk_temp_threshold"),
+    "cpu_temp":  ([70, 80, 85, 90, 95, 100], "°C", "CPU Temperature", UNRAID_CPU_TEMP_THRESHOLD, "cpu_temp_threshold"),
+    "cpu_usage": ([80, 85, 90, 95, 98], "%", "CPU Usage", UNRAID_CPU_USAGE_THRESHOLD, "cpu_usage_threshold"),
+}
+
+_METRIC_TO_SET_KEY: dict[str, str] = {
+    "capacity": "array_usage",
+    "disk_temp": "disk_temp",
+    "cpu_temp": "cpu_temp",
+    "cpu_usage": "cpu_usage",
+}
+
+
+async def _show_threshold_picker(
+    callback: CallbackQuery,
+    metric: str,
+    current: int,
+    set_prefix: str,
+    allowed_metrics: set[str],
+) -> None:
+    """Show threshold picker keyboard for any Unraid metric."""
+    if metric not in allowed_metrics or metric not in _UNRAID_METRICS:
+        await callback.answer("Unknown metric")
+        return
+
+    steps, unit, label, default, _ = _UNRAID_METRICS[metric]
+    set_key = _METRIC_TO_SET_KEY.get(metric, metric)
+
+    await callback.answer()
+
+    options = [v for v in steps if v > current] or [steps[-1]]
+
+    row = [
+        InlineKeyboardButton(
+            text=f"{v}{unit}", callback_data=f"{set_prefix}:{set_key}:{v}",
+        )
+        for v in options
+    ]
+    reset_row = [InlineKeyboardButton(
+        text=f"↩️ Reset to default ({default}{unit})",
+        callback_data=f"{set_prefix}:{set_key}:0",
+    )]
+
+    if callback.message:
+        try:
+            await callback.message.answer(
+                f"⚙️ Set *{label}* threshold\nCurrent: {current}{unit}",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[row, reset_row]),
+            )
+        except TelegramBadRequest:
+            await callback.message.answer(
+                f"Set {label} threshold\nCurrent: {current}{unit}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[row, reset_row]),
+            )
+
+
+async def _apply_threshold(
+    callback: CallbackQuery,
+    metric: str,
+    value: int,
+    unraid_config: UnraidConfig,
+    allowed_metrics: set[str],
+) -> None:
+    """Apply a threshold and send confirmation."""
+    if metric not in allowed_metrics:
+        await callback.answer("Invalid metric")
+        return
+
+    unraid_config.set_threshold(metric, value)
+
+    _, unit, label, _, config_attr = _UNRAID_METRICS[metric]
+    actual = getattr(unraid_config, config_attr)
+
+    if value == 0:
+        msg = f"↩️ *{label}* threshold reset to default ({actual}{unit})"
+    else:
+        msg = f"✅ *{label}* threshold set to {actual}{unit}"
+
+    await callback.answer(f"{'Reset' if value == 0 else 'Set'} to {actual}{unit}")
+
+    if isinstance(callback.message, Message):
+        try:
+            await callback.message.edit_text(msg, parse_mode="Markdown")
+        except TelegramBadRequest:
+            await callback.message.answer(msg.replace("*", ""))
 
 
 def raise_limit_callback(
@@ -626,18 +707,13 @@ def array_mute_callback(
             return
 
         try:
-            minutes = int(parts[1])
+            minutes = max(1, min(int(parts[1]), 43200))
         except ValueError:
             minutes = 60
 
         array_mute_manager.mute_array(timedelta(minutes=minutes))
 
-        if minutes >= 1440:
-            duration_str = f"{minutes // 1440} day(s)"
-        elif minutes >= 60:
-            duration_str = f"{minutes // 60} hour(s)"
-        else:
-            duration_str = f"{minutes} minute(s)"
+        duration_str = format_duration_minutes(minutes)
 
         await callback.answer(f"Muted array alerts for {duration_str}")
 
@@ -665,67 +741,17 @@ def array_threshold_callback(
     async def handler(callback: CallbackQuery) -> None:
         if not callback.data:
             return
-
-        # Format: arr_thresh:metric:current_value
         parts = callback.data.split(":")
         if len(parts) < 3:
             await callback.answer("Invalid callback data")
             return
-
-        metric = parts[1]
         try:
             current = int(parts[2])
         except ValueError:
             current = 0
-
-        await callback.answer()
-
-        if metric == "capacity":
-            steps = ARRAY_CAPACITY_STEPS
-            unit = "%"
-            label = "Array Capacity"
-            default = UNRAID_ARRAY_USAGE_THRESHOLD
-        elif metric == "disk_temp":
-            steps = DISK_TEMP_STEPS
-            unit = "°C"
-            label = "Disk Temperature"
-            default = UNRAID_DISK_TEMP_THRESHOLD
-        else:
-            await callback.answer("Unknown metric")
-            return
-
-        options = [v for v in steps if v > current]
-        if not options:
-            options = [steps[-1]]
-
-        buttons: list[list[InlineKeyboardButton]] = []
-        row: list[InlineKeyboardButton] = []
-        for value in options:
-            arr_metric = "array_usage" if metric == "capacity" else "disk_temp"
-            row.append(InlineKeyboardButton(
-                text=f"{value}{unit}",
-                callback_data=f"arr_set:{arr_metric}:{value}",
-            ))
-        buttons.append(row)
-
-        arr_metric = "array_usage" if metric == "capacity" else "disk_temp"
-        buttons.append([InlineKeyboardButton(
-            text=f"↩️ Reset to default ({default}{unit})",
-            callback_data=f"arr_set:{arr_metric}:0",
-        )])
-
-        if callback.message:
-            try:
-                await callback.message.answer(
-                    f"⚙️ Set *{label}* threshold\nCurrent: {current}{unit}",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                )
-            except TelegramBadRequest:
-                await callback.message.answer(
-                    f"Set {label} threshold\nCurrent: {current}{unit}",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                )
+        await _show_threshold_picker(
+            callback, parts[1], current, "arr_set", {"capacity", "disk_temp"},
+        )
 
     return handler
 
@@ -738,47 +764,18 @@ def array_set_threshold_callback(
     async def handler(callback: CallbackQuery) -> None:
         if not callback.data:
             return
-
-        # Format: arr_set:metric:value
         parts = callback.data.split(":")
         if len(parts) < 3:
             await callback.answer("Invalid callback data")
             return
-
-        metric = parts[1]
-        if metric not in ("array_usage", "disk_temp"):
-            await callback.answer("Invalid metric")
-            return
-
         try:
             value = int(parts[2])
         except ValueError:
             await callback.answer("Invalid threshold value")
             return
-
-        unraid_config.set_threshold(metric, value)
-
-        if metric == "array_usage":
-            label = "Array Capacity"
-            unit = "%"
-            actual = unraid_config.array_usage_threshold
-        else:
-            label = "Disk Temperature"
-            unit = "°C"
-            actual = unraid_config.disk_temp_threshold
-
-        if value == 0:
-            msg = f"↩️ *{label}* threshold reset to default ({actual}{unit})"
-        else:
-            msg = f"✅ *{label}* threshold set to {actual}{unit}"
-
-        await callback.answer(f"{'Reset' if value == 0 else 'Set'} to {actual}{unit}")
-
-        if isinstance(callback.message, Message):
-            try:
-                await callback.message.edit_text(msg, parse_mode="Markdown")
-            except TelegramBadRequest:
-                await callback.message.answer(msg.replace("*", ""))
+        await _apply_threshold(
+            callback, parts[1], value, unraid_config, {"array_usage", "disk_temp"},
+        )
 
     return handler
 
@@ -798,18 +795,13 @@ def server_mute_callback(
             return
 
         try:
-            minutes = int(parts[1])
+            minutes = max(1, min(int(parts[1]), 43200))
         except ValueError:
             minutes = 60
 
         server_mute_manager.mute_server(timedelta(minutes=minutes))
 
-        if minutes >= 1440:
-            duration_str = f"{minutes // 1440} day(s)"
-        elif minutes >= 60:
-            duration_str = f"{minutes // 60} hour(s)"
-        else:
-            duration_str = f"{minutes} minute(s)"
+        duration_str = format_duration_minutes(minutes)
 
         await callback.answer(f"Muted server alerts for {duration_str}")
 
@@ -837,64 +829,17 @@ def server_threshold_callback(
     async def handler(callback: CallbackQuery) -> None:
         if not callback.data:
             return
-
         parts = callback.data.split(":")
         if len(parts) < 3:
             await callback.answer("Invalid callback data")
             return
-
-        metric = parts[1]
         try:
             current = int(parts[2])
         except ValueError:
             current = 0
-
-        await callback.answer()
-
-        if metric == "cpu_temp":
-            steps = SERVER_CPU_TEMP_STEPS
-            unit = "°C"
-            label = "CPU Temperature"
-            default = UNRAID_CPU_TEMP_THRESHOLD
-        elif metric == "cpu_usage":
-            steps = SERVER_CPU_USAGE_STEPS
-            unit = "%"
-            label = "CPU Usage"
-            default = UNRAID_CPU_USAGE_THRESHOLD
-        else:
-            await callback.answer("Unknown metric")
-            return
-
-        options = [v for v in steps if v > current]
-        if not options:
-            options = [steps[-1]]
-
-        buttons: list[list[InlineKeyboardButton]] = []
-        row: list[InlineKeyboardButton] = []
-        for value in options:
-            row.append(InlineKeyboardButton(
-                text=f"{value}{unit}",
-                callback_data=f"srv_set:{metric}:{value}",
-            ))
-        buttons.append(row)
-
-        buttons.append([InlineKeyboardButton(
-            text=f"↩️ Reset to default ({default}{unit})",
-            callback_data=f"srv_set:{metric}:0",
-        )])
-
-        if callback.message:
-            try:
-                await callback.message.answer(
-                    f"⚙️ Set *{label}* threshold\nCurrent: {current}{unit}",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                )
-            except TelegramBadRequest:
-                await callback.message.answer(
-                    f"Set {label} threshold\nCurrent: {current}{unit}",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                )
+        await _show_threshold_picker(
+            callback, parts[1], current, "srv_set", {"cpu_temp", "cpu_usage"},
+        )
 
     return handler
 
@@ -907,45 +852,17 @@ def server_set_threshold_callback(
     async def handler(callback: CallbackQuery) -> None:
         if not callback.data:
             return
-
         parts = callback.data.split(":")
         if len(parts) < 3:
             await callback.answer("Invalid callback data")
             return
-
-        metric = parts[1]
-        if metric not in ("cpu_temp", "cpu_usage"):
-            await callback.answer("Invalid metric")
-            return
-
         try:
             value = int(parts[2])
         except ValueError:
             await callback.answer("Invalid threshold value")
             return
-
-        unraid_config.set_threshold(metric, value)
-
-        if metric == "cpu_temp":
-            label = "CPU Temperature"
-            unit = "°C"
-            actual = unraid_config.cpu_temp_threshold
-        else:
-            label = "CPU Usage"
-            unit = "%"
-            actual = unraid_config.cpu_usage_threshold
-
-        if value == 0:
-            msg = f"↩️ *{label}* threshold reset to default ({actual}{unit})"
-        else:
-            msg = f"✅ *{label}* threshold set to {actual}{unit}"
-
-        await callback.answer(f"{'Reset' if value == 0 else 'Set'} to {actual}{unit}")
-
-        if isinstance(callback.message, Message):
-            try:
-                await callback.message.edit_text(msg, parse_mode="Markdown")
-            except TelegramBadRequest:
-                await callback.message.answer(msg.replace("*", ""))
+        await _apply_threshold(
+            callback, parts[1], value, unraid_config, {"cpu_temp", "cpu_usage"},
+        )
 
     return handler

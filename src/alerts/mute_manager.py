@@ -34,13 +34,17 @@ def parse_duration(text: str) -> timedelta | None:
         return None
 
     if unit == "m":
-        return timedelta(minutes=value)
+        result = timedelta(minutes=value)
     elif unit == "h":
-        return timedelta(hours=value)
+        result = timedelta(hours=value)
     elif unit == "d":
-        return timedelta(days=value)
+        result = timedelta(days=value)
+    else:
+        return None
 
-    return None
+    if result > timedelta(days=7):
+        return None
+    return result
 
 
 class MuteManager(BaseMuteManager):

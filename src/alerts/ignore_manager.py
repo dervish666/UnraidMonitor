@@ -356,7 +356,7 @@ class IgnoreManager:
                     suffix=".json",
                 )
                 try:
-                    os.fchmod(fd, 0o666)
+                    os.fchmod(fd, 0o644)
                     with os.fdopen(fd, "w", encoding="utf-8") as f:
                         json.dump(data, f, indent=2)
                     os.replace(temp_path, self._json_path)  # Atomic on POSIX

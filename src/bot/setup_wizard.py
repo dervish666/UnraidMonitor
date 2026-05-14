@@ -5,8 +5,10 @@ and config generation via an interactive Telegram conversation.
 """
 
 import asyncio
+import ipaddress
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
@@ -34,6 +36,50 @@ if TYPE_CHECKING:
     from src.services.llm.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
+
+_VALID_HOSTNAME = re.compile(
+    r"^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,253}[a-zA-Z0-9])?$"
+)
+
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/32"),
+    ipaddress.ip_network("::1/128"),
+]
+
+
+def _validate_host(host: str) -> str | None:
+    """Validate a host string for SSRF safety.
+
+    Returns None if valid, or an error message string if invalid.
+    Blocks loopback, link-local (cloud metadata), and malformed inputs.
+    Private LAN IPs (10.x, 172.16-31.x, 192.168.x) are allowed since
+    Unraid servers typically live on the local network.
+    """
+    if not host or len(host) > 255:
+        return "Invalid hostname (empty or too long)."
+
+    if "://" in host or "/" in host or ":" in host or " " in host:
+        return "Enter just the hostname or IP — no scheme, port, or path."
+
+    try:
+        addr = ipaddress.ip_address(host)
+        for network in _BLOCKED_NETWORKS:
+            if addr in network:
+                return f"`{host}` is a loopback or link-local address and cannot be used."
+        return None
+    except ValueError:
+        pass
+
+    if not _VALID_HOSTNAME.match(host):
+        return f"`{host}` doesn't look like a valid hostname."
+
+    lower = host.lower()
+    if lower in ("localhost", "metadata", "metadata.google.internal"):
+        return f"`{host}` is a reserved hostname and cannot be used."
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +661,14 @@ def create_host_handler(
             return
         user_id = message.from_user.id
         host = message.text.strip()
+
+        error = _validate_host(host)
+        if error:
+            await message.answer(
+                f"{error}\n\nPlease enter a valid Unraid server IP or hostname:",
+                parse_mode="Markdown",
+            )
+            return
 
         wizard.set_host(user_id, host)
 

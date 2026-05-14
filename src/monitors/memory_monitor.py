@@ -59,6 +59,11 @@ class MemoryMonitor:
         self._pending_kill: str | None = None
         self._kill_cancel_event: asyncio.Event | None = None
         self._restart_prompted = False
+        self._kill_lock = asyncio.Lock()
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
 
     def is_enabled(self) -> bool:
         """Check if memory monitoring is enabled."""
@@ -161,57 +166,61 @@ class MemoryMonitor:
 
     async def _execute_kill_countdown(self) -> None:
         """Execute the kill countdown for pending container."""
-        if not self._pending_kill:
-            return
-        container_name = self._pending_kill
-        # Create a new cancel event for this countdown
-        self._kill_cancel_event = asyncio.Event()
-        cancel_event = self._kill_cancel_event
+        async with self._kill_lock:
+            if not self._pending_kill:
+                return
+            container_name = self._pending_kill
+            self._kill_cancel_event = asyncio.Event()
+            cancel_event = self._kill_cancel_event
 
-        # Wait for kill delay, but allow cancellation
+        # Wait outside the lock so cancel_pending_kill can acquire it
         try:
-            # Use wait_for with the cancel event to allow interruption
             await asyncio.wait_for(
                 cancel_event.wait(),
                 timeout=self._config.kill_delay_seconds
             )
-            # If we get here, the event was set (cancelled)
-            logger.info(f"Kill of {container_name} was cancelled")
-            self._pending_kill = None
-            self._kill_cancel_event = None
+            async with self._kill_lock:
+                logger.info(f"Kill of {container_name} was cancelled")
+                self._pending_kill = None
+                self._kill_cancel_event = None
             return
         except asyncio.TimeoutError:
-            # Timeout means no cancellation - proceed with kill check
             pass
 
-        # Double-check we still have the same pending kill
-        if self._pending_kill != container_name:
-            logger.info(f"Pending kill changed, aborting kill of {container_name}")
+        async with self._kill_lock:
+            if self._pending_kill != container_name:
+                logger.info(f"Pending kill changed, aborting kill of {container_name}")
+                self._kill_cancel_event = None
+                return
+
+            if cancel_event.is_set():
+                logger.info(f"Kill of {container_name} was cancelled (late)")
+                self._pending_kill = None
+                self._kill_cancel_event = None
+                return
+
+            percent = self.get_memory_percent()
+            if percent >= self._config.critical_threshold:
+                await self._stop_container(container_name)
+                await self._on_alert(
+                    "Container Stopped",
+                    f"Stopped {container_name} to free memory. Memory now at {percent:.0f}%",
+                    "info",
+                    [],
+                )
+            else:
+                logger.info(f"Memory recovered, not killing {container_name}")
+
+            self._pending_kill = None
             self._kill_cancel_event = None
-            return
 
-        # Check if memory is still critical
-        percent = self.get_memory_percent()
-        if percent >= self._config.critical_threshold:
-            await self._stop_container(container_name)
-            await self._on_alert(
-                "Container Stopped",
-                f"Stopped {container_name} to free memory. Memory now at {percent:.0f}%",
-                "info",
-                [],
-            )
-        else:
-            logger.info(f"Memory recovered, not killing {container_name}")
-
-        self._pending_kill = None
-        self._kill_cancel_event = None
-
-    def cancel_pending_kill(self) -> bool:
+    async def cancel_pending_kill(self) -> bool:
         """Cancel a pending kill. Returns True if there was one to cancel."""
-        if self._pending_kill and self._kill_cancel_event:
-            self._kill_cancel_event.set()
-            return True
-        return False
+        async with self._kill_lock:
+            if self._pending_kill and self._kill_cancel_event:
+                self._kill_cancel_event.set()
+                return True
+            return False
 
     async def kill_container(self, name: str) -> bool:
         """Kill a container immediately (from button press).
@@ -220,7 +229,7 @@ class MemoryMonitor:
         Returns True if the container was stopped successfully.
         """
         # Cancel any pending auto-kill to avoid double-stopping
-        self.cancel_pending_kill()
+        await self.cancel_pending_kill()
 
         try:
             def _do_kill() -> None:
@@ -248,8 +257,9 @@ class MemoryMonitor:
 
         Returns True if container was started successfully.
         """
-        if name not in self._killed_containers:
-            return False
+        async with self._kill_lock:
+            if name not in self._killed_containers:
+                return False
 
         try:
             def _do_start() -> None:
@@ -257,12 +267,13 @@ class MemoryMonitor:
                 container.start()
 
             await asyncio.to_thread(_do_start)
-            self._killed_containers.remove(name)
-            self._restart_prompted = False
-            logger.info(f"Restarted container {name}")
 
-            if not self._killed_containers:
-                self._state = MemoryState.NORMAL
+            async with self._kill_lock:
+                self._killed_containers.remove(name)
+                self._restart_prompted = False
+                logger.info(f"Restarted container {name}")
+                if not self._killed_containers:
+                    self._state = MemoryState.NORMAL
 
             return True
         except Exception as e:
@@ -271,13 +282,14 @@ class MemoryMonitor:
 
     async def decline_restart(self, name: str) -> None:
         """Decline restart of a killed container."""
-        if name in self._killed_containers:
-            self._killed_containers.remove(name)
-            logger.info(f"User declined restart of {name}")
+        async with self._kill_lock:
+            if name in self._killed_containers:
+                self._killed_containers.remove(name)
+                logger.info(f"User declined restart of {name}")
 
-        if not self._killed_containers:
-            self._restart_prompted = False
-            self._state = MemoryState.NORMAL
+            if not self._killed_containers:
+                self._restart_prompted = False
+                self._state = MemoryState.NORMAL
 
     def get_killed_containers(self) -> list[str]:
         """Get list of containers killed in this pressure event."""

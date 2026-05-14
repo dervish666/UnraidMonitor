@@ -48,6 +48,10 @@ class UnraidSystemMonitor:
         self._metrics_cache_time: float = 0.0
         self._array_cache_time: float = 0.0
 
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
     async def start(self) -> None:
         """Start the monitoring loop.
 

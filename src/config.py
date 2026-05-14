@@ -1,5 +1,6 @@
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,24 @@ from src.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def atomic_yaml_write(data: dict[str, Any], target: Path) -> None:
+    """Write a dict as YAML atomically using tempfile + os.replace."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=target.parent, suffix=".tmp", prefix=".config_"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 # Default containers to watch for log errors
@@ -259,9 +278,6 @@ class ResourceConfig:
         """Write current container_overrides back to config.yaml."""
         if not self.config_path:
             return
-        import tempfile
-        from pathlib import Path
-
         path = Path(self.config_path)
         if not path.exists():
             return
@@ -273,20 +289,7 @@ class ResourceConfig:
         else:
             rm.pop("containers", None)
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=path.parent, suffix=".tmp", prefix=".config_"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-            os.replace(tmp_path, path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        atomic_yaml_write(data, path)
 
 
 @dataclass
@@ -397,10 +400,7 @@ class UnraidConfig:
         """Write current thresholds back to config.yaml."""
         if not self.config_path:
             return
-        import tempfile
-        from pathlib import Path as _Path
-
-        path = _Path(self.config_path)
+        path = Path(self.config_path)
         if not path.exists():
             return
 
@@ -412,20 +412,7 @@ class UnraidConfig:
         thresholds["cpu_temp"] = self.cpu_temp_threshold
         thresholds["cpu_usage"] = self.cpu_usage_threshold
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=path.parent, suffix=".tmp", prefix=".config_"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-            os.replace(tmp_path, path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        atomic_yaml_write(data, path)
 
 
 def load_yaml_config(path: str) -> dict[str, Any]:
@@ -799,23 +786,7 @@ class ConfigWriter:
 
     def _write_yaml(self, config: dict[str, Any]) -> None:
         """Write config dict to the YAML file atomically."""
-        import tempfile
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        # Write to temp file then atomically rename to prevent corruption
-        fd, tmp_path = tempfile.mkstemp(
-            dir=self._path.parent, suffix=".tmp", prefix=".config_"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            os.replace(tmp_path, self._path)
-        except Exception:
-            # Clean up temp file on failure
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        atomic_yaml_write(config, self._path)
 
 
 DEFAULT_CONFIG_TEMPLATE = '''# Unraid Monitor Bot Configuration

@@ -7,7 +7,7 @@ import docker
 
 from src.state import ContainerStateManager
 from src.models import ContainerInfo
-from src.utils.sanitize import sanitize_logs
+from src.utils.sanitize import sanitize_for_prompt, sanitize_logs
 
 if TYPE_CHECKING:
     from src.services.container_control import ContainerController
@@ -207,6 +207,10 @@ class NLToolExecutor:
         self._recent_errors = recent_errors_buffer
         self._unraid = unraid_system_monitor
         self._log_max_chars = log_max_chars
+
+    def set_controller(self, controller: "ContainerController") -> None:
+        """Set the container controller (for deferred wiring at startup)."""
+        self._controller = controller
 
     async def execute(self, tool_name: str, args: dict[str, Any]) -> str:
         """Execute a tool and return the result as a string.
@@ -459,8 +463,7 @@ class NLToolExecutor:
 
             lines = [f"Recent errors for {resolved.name} ({len(errors)} unique):"]
             for i, error in enumerate(errors[:10], 1):  # Limit to 10
-                # Truncate long error messages
-                error_display = error[:200] + "..." if len(error) > 200 else error
+                error_display = sanitize_for_prompt(error, max_length=200)
                 lines.append(f"  {i}. {error_display}")
             if len(errors) > 10:
                 lines.append(f"  ... and {len(errors) - 10} more")
@@ -482,7 +485,7 @@ class NLToolExecutor:
         for container_name, errors in sorted(containers_with_errors, key=lambda x: -len(x[1])):
             lines.append(f"\n{container_name} ({len(errors)} errors):")
             for error in errors[:3]:  # Show first 3 per container
-                error_display = error[:100] + "..." if len(error) > 100 else error
+                error_display = sanitize_for_prompt(error, max_length=100)
                 lines.append(f"  - {error_display}")
             if len(errors) > 3:
                 lines.append(f"  ... and {len(errors) - 3} more")

@@ -19,8 +19,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Version is updated manually or via CI
-BOT_VERSION = "0.9.2"
+try:
+    from importlib.metadata import version as _pkg_version
+    BOT_VERSION = _pkg_version("unraid-monitor-bot")
+except Exception:
+    BOT_VERSION = "unknown"
 
 
 def _format_health_uptime(start_time: datetime) -> str:
@@ -67,7 +70,7 @@ def health_command(
 
         # Docker event monitor
         if monitor:
-            status = "✅ Running" if monitor._running else "🔴 Stopped"
+            status = "✅ Running" if monitor.is_running else "🔴 Stopped"
             container_count = len(monitor.state_manager.get_all())
             lines.append(f"  Docker Events: {status} ({container_count} containers)")
         else:
@@ -75,23 +78,23 @@ def health_command(
 
         # Log watcher
         if log_watcher:
-            status = "✅ Running" if log_watcher._running else "🔴 Stopped"
+            status = "✅ Running" if log_watcher.is_running else "🔴 Stopped"
             watched = len(log_watcher.containers)
-            drop_info = f", {log_watcher._total_drops} dropped" if log_watcher._total_drops else ""
+            drop_info = f", {log_watcher.total_drops} dropped" if log_watcher.total_drops else ""
             lines.append(f"  Log Watcher: {status} ({watched} containers{drop_info})")
         else:
             lines.append("  Log Watcher: ⚪ Not configured")
 
         # Resource monitor
         if resource_monitor:
-            status = "✅ Running" if resource_monitor._running else "🔴 Stopped"
+            status = "✅ Running" if resource_monitor.is_running else "🔴 Stopped"
             lines.append(f"  Resources: {status}")
         else:
             lines.append("  Resources: ⚪ Disabled")
 
         # Memory monitor
         if memory_monitor:
-            status = "✅ Running" if memory_monitor._running else "🔴 Stopped"
+            status = "✅ Running" if memory_monitor.is_running else "🔴 Stopped"
             lines.append(f"  Memory: {status}")
         else:
             lines.append("  Memory: ⚪ Disabled")
@@ -101,33 +104,28 @@ def health_command(
             connected = "✅ Connected" if unraid_client.is_connected else "🔴 Disconnected"
             lines.append(f"  Unraid: {connected}")
             if unraid_system_monitor:
-                status = "✅" if unraid_system_monitor._running else "🔴"
+                status = "✅" if unraid_system_monitor.is_running else "🔴"
                 lines.append(f"    System: {status}")
             if unraid_array_monitor:
-                status = "✅" if unraid_array_monitor._running else "🔴"
+                status = "✅" if unraid_array_monitor.is_running else "🔴"
                 lines.append(f"    Array: {status}")
         else:
             lines.append("  Unraid: ⚪ Not configured")
 
         # Alert queue depth
-        if alert_manager and hasattr(alert_manager, "_queued_alerts"):
-            queued = len(alert_manager._queued_alerts)
+        if alert_manager and hasattr(alert_manager, "queued_count"):
+            queued = alert_manager.queued_count
             if queued > 0:
                 lines.append(f"  Alert Queue: {queued} pending")
 
         # Crash tracker stats
         if monitor:
-            tracker = monitor._crash_tracker
-            active_loops = []
-            for name, crashes in tracker._crashes.items():
-                count = tracker.get_crash_count(name)
-                if count >= 3:
-                    active_loops.append(f"{name} ({count}x)")
+            active_loops = monitor.crash_tracker.get_active_crash_loops()
             if active_loops:
                 lines.append("")
                 lines.append("*Recent Crashes:*")
-                for item in active_loops:
-                    lines.append(f"  ⚠️ {item}")
+                for name, count in active_loops:
+                    lines.append(f"  ⚠️ {name} ({count}x)")
 
         await safe_reply(message, "\n".join(lines))
 

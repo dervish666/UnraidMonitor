@@ -38,6 +38,10 @@ class ArrayMonitor:
         self._task: asyncio.Task[None] | None = None
         self._alerted_disks: set[str] = set()  # Track disks that have been alerted
 
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
     async def start(self) -> None:
         """Start the monitoring loop."""
         if self._running:

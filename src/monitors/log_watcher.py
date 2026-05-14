@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Awaitable, TYPE_CHECKING
 
 import docker
@@ -18,28 +19,30 @@ logger = logging.getLogger(__name__)
 _SELF_LOG_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - (?:src\.|__main__)")
 
 
+_PATTERN_CACHE: dict[tuple[tuple[str, ...], tuple[str, ...]], tuple[list[str], list[str]]] = {}
+_PATTERN_CACHE_MAX = 64
+
+
 def matches_error_pattern(
     line: str,
     error_patterns: list[str],
     ignore_patterns: list[str],
-    *,
-    _cache: dict[tuple[tuple[str, ...], tuple[str, ...]], tuple[list[str], list[str]]] = {},
 ) -> bool:
     """Check if a log line matches any error pattern and no ignore pattern."""
-    # Skip the bot's own Python log output to prevent self-monitoring loops
     if _SELF_LOG_RE.match(line):
         return False
 
     line_lower = line.lower()
 
-    # Cache lowercased patterns (keyed by id of the original lists)
     cache_key = (tuple(error_patterns), tuple(ignore_patterns))
-    if cache_key not in _cache:
-        _cache[cache_key] = (
+    if cache_key not in _PATTERN_CACHE:
+        if len(_PATTERN_CACHE) >= _PATTERN_CACHE_MAX:
+            _PATTERN_CACHE.clear()
+        _PATTERN_CACHE[cache_key] = (
             [p.lower() for p in error_patterns],
             [p.lower() for p in ignore_patterns],
         )
-    error_lower, ignore_lower = _cache[cache_key]
+    error_lower, ignore_lower = _PATTERN_CACHE[cache_key]
 
     # Check ignore patterns first
     for pattern in ignore_lower:
@@ -108,6 +111,18 @@ class LogWatcher:
         self._running = False
         self._tasks: list[asyncio.Task[None]] = []
         self._total_drops: int = 0
+        self._thread_pool = ThreadPoolExecutor(
+            max_workers=max(len(containers), 4),
+            thread_name_prefix="logwatch",
+        )
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def total_drops(self) -> int:
+        return self._total_drops
 
     def connect(self) -> None:
         """Connect to Docker socket."""
@@ -134,6 +149,7 @@ class LogWatcher:
     def stop(self) -> None:
         """Stop watching logs."""
         self._running = False
+        self._thread_pool.shutdown(wait=False)
         for task in self._tasks:
             task.cancel()
         logger.info("LogWatcher stopped")
@@ -214,13 +230,12 @@ class LogWatcher:
                         loop.call_soon_threadsafe(_safe_put, None)
                         break
                     except asyncio.QueueFull:
-                        import time
                         time.sleep(0.1)
                     except RuntimeError:
                         break  # Event loop closed during shutdown
 
-        # Start the blocking stream in a thread
-        stream_task = asyncio.create_task(asyncio.to_thread(stream_to_queue))
+        stream_future = loop.run_in_executor(self._thread_pool, stream_to_queue)
+        stream_task = asyncio.ensure_future(stream_future)
 
         try:
             # Process lines from queue as they arrive

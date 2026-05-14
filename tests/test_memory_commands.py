@@ -17,7 +17,7 @@ def mock_message():
 @pytest.fixture
 def mock_memory_monitor():
     monitor = MagicMock()
-    monitor.cancel_pending_kill = MagicMock(return_value=True)
+    monitor.cancel_pending_kill = AsyncMock(return_value=True)
     monitor.get_pending_kill = MagicMock(return_value="bitmagnet")
     return monitor
 
@@ -39,7 +39,7 @@ class TestCancelKillCommand:
         from src.bot.memory_commands import cancel_kill_command
 
         monitor = MagicMock()
-        monitor.cancel_pending_kill = MagicMock(return_value=False)
+        monitor.cancel_pending_kill = AsyncMock(return_value=False)
         monitor.get_pending_kill = MagicMock(return_value=None)
 
         handler = cancel_kill_command(monitor)

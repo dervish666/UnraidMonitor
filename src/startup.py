@@ -82,24 +82,35 @@ async def _build_provider_registry(
             base_url=f"{ai_config.ollama_host}/v1",
             api_key="ollama",
         )
+
+    async def _discover_ollama() -> list[Any]:
+        if not ai_config.ollama_host:
+            return []
         try:
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                ollama_models = await OllamaProvider.discover_models(
+                return await OllamaProvider.discover_models(
                     host=ai_config.ollama_host, session=session,
                 )
         except Exception as e:
             logger.warning(f"Failed to discover Ollama models: {e}")
+            return []
 
-    # Discover available Anthropic models so family names resolve to the latest
-    discovered_anthropic: list[str] = []
-    if anthropic_client is not None:
+    async def _discover_anthropic() -> list[str]:
+        if anthropic_client is None:
+            return []
         try:
             models_page = await anthropic_client.models.list(limit=100)
-            discovered_anthropic = [m.id for m in models_page.data]
-            logger.info("Discovered %d Anthropic models", len(discovered_anthropic))
+            models = [m.id for m in models_page.data]
+            logger.info("Discovered %d Anthropic models", len(models))
+            return models
         except Exception as e:
             logger.info("Could not list Anthropic models (using defaults): %s", e)
+            return []
+
+    ollama_models, discovered_anthropic = await asyncio.gather(
+        _discover_ollama(), _discover_anthropic(),
+    )
 
     feature_models_raw = {
         "nl_processor": ai_config.nl_processor_model,
@@ -182,6 +193,91 @@ def _init_unraid(
     return uc
 
 
+def _init_alert_infrastructure(
+    config: AppConfig,
+    bot: Bot,
+    chat_id_store: ChatIdStore,
+) -> tuple[RateLimiter, IgnoreManager, RecentErrorsBuffer, MuteManager, AlertManagerProxy]:
+    log_watching_config = config.log_watching
+    bot_config = config.bot
+
+    rate_limiter = RateLimiter(cooldown_seconds=log_watching_config["cooldown_seconds"])
+    ignore_manager = IgnoreManager(
+        config_ignores=log_watching_config.get("container_ignores", {}),
+        json_path="data/ignored_errors.json",
+    )
+    recent_errors_buffer = RecentErrorsBuffer(
+        max_age_seconds=log_watching_config.get("cooldown_seconds", 900),
+    )
+    mute_manager = MuteManager(json_path="data/mutes.json")
+    alert_manager = AlertManagerProxy(
+        bot, chat_id_store, error_display_max_chars=bot_config.error_display_max_chars,
+    )
+    return rate_limiter, ignore_manager, recent_errors_buffer, mute_manager, alert_manager
+
+
+def _init_nl_processor(
+    registry: Any,
+    state: ContainerStateManager,
+    monitor: DockerEventMonitor,
+    resource_monitor: ResourceMonitor | None,
+    recent_errors_buffer: RecentErrorsBuffer,
+    uc: _UnraidComponents,
+    ai_config: AIConfig,
+    bot_config: Any,
+    config: AppConfig,
+) -> Any:
+    has_nl_provider = registry.get_provider("nl_processor") is not None
+    if not has_nl_provider or not monitor.shared_client:
+        return None
+
+    from src.services.nl_processor import NLProcessor
+    from src.services.nl_tools import NLToolExecutor
+
+    nl_executor = NLToolExecutor(
+        state=state,
+        docker_client=monitor.shared_client,  # type: ignore[arg-type]
+        protected_containers=config.protected_containers,
+        controller=None,
+        resource_monitor=resource_monitor,
+        recent_errors_buffer=recent_errors_buffer,
+        unraid_system_monitor=uc.system_monitor,
+        log_max_chars=bot_config.nl_log_max_chars,
+    )
+    return NLProcessor(
+        registry=registry,
+        feature="nl_processor",
+        tool_executor=nl_executor,
+        max_tokens=ai_config.nl_processor_max_tokens,
+        max_tool_iterations=ai_config.nl_max_tool_iterations,
+        max_conversation_exchanges=ai_config.nl_max_conversation_exchanges,
+    )
+
+
+async def _send_startup_notification(
+    bot: Bot,
+    chat_id_store: ChatIdStore,
+    state: ContainerStateManager,
+    log_watching_config: dict[str, Any],
+    uc: _UnraidComponents,
+) -> None:
+    for cid in chat_id_store.get_all_chat_ids():
+        container_count = len(state.get_all())
+        watched_count = len(log_watching_config.get("containers", []))
+        unraid_status = "connected" if (uc.client and uc.client.is_connected) else "disabled"
+        startup_msg = (
+            f"🟢 *Bot started*\n"
+            f"Tracking {container_count} containers, watching logs for {watched_count}\n"
+            f"Unraid: {unraid_status}"
+        )
+        try:
+            await send_with_retry(
+                bot.send_message, chat_id=cid, text=startup_msg, parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send startup notification: {e}")
+
+
 async def _start_background_monitors(
     bg: _BackgroundTasks,
     resource_monitor: ResourceMonitor | None,
@@ -236,6 +332,7 @@ async def start_monitoring(
     ai_config = config.ai
     bot_config = config.bot
     docker_config = config.docker
+    log_watching_config = config.log_watching
 
     registry = await _build_provider_registry(config, settings, ai_config)
 
@@ -248,17 +345,9 @@ async def start_monitoring(
 
     state = ContainerStateManager()
 
-    log_watching_config = config.log_watching
-    rate_limiter = RateLimiter(cooldown_seconds=log_watching_config["cooldown_seconds"])
-    ignore_manager = IgnoreManager(
-        config_ignores=log_watching_config.get("container_ignores", {}),
-        json_path="data/ignored_errors.json",
+    rate_limiter, ignore_manager, recent_errors_buffer, mute_manager, alert_manager = (
+        _init_alert_infrastructure(config, bot, chat_id_store)
     )
-    recent_errors_buffer = RecentErrorsBuffer(
-        max_age_seconds=log_watching_config.get("cooldown_seconds", 900),
-    )
-    mute_manager = MuteManager(json_path="data/mutes.json")
-    alert_manager = AlertManagerProxy(bot, chat_id_store, error_display_max_chars=bot_config.error_display_max_chars)
 
     uc = _init_unraid(config, settings, chat_id_store, bot)
 
@@ -337,30 +426,10 @@ async def start_monitoring(
 
     bg.memory_monitor = memory_monitor
 
-    nl_processor = None
-    has_nl_provider = registry.get_provider("nl_processor") is not None
-    if has_nl_provider and monitor.shared_client:
-        from src.services.nl_processor import NLProcessor
-        from src.services.nl_tools import NLToolExecutor
-
-        nl_executor = NLToolExecutor(
-            state=state,
-            docker_client=monitor.shared_client,  # type: ignore[arg-type]
-            protected_containers=config.protected_containers,
-            controller=None,
-            resource_monitor=resource_monitor,
-            recent_errors_buffer=recent_errors_buffer,
-            unraid_system_monitor=uc.system_monitor,
-            log_max_chars=bot_config.nl_log_max_chars,
-        )
-        nl_processor = NLProcessor(
-            registry=registry,
-            feature="nl_processor",
-            tool_executor=nl_executor,
-            max_tokens=ai_config.nl_processor_max_tokens,
-            max_tool_iterations=ai_config.nl_max_tool_iterations,
-            max_conversation_exchanges=ai_config.nl_max_conversation_exchanges,
-        )
+    nl_processor = _init_nl_processor(
+        registry, state, monitor, resource_monitor, recent_errors_buffer,
+        uc, ai_config, bot_config, config,
+    )
 
     controller, diagnostic_service = register_commands(
         dp,
@@ -386,7 +455,7 @@ async def start_monitoring(
     )
 
     if nl_processor and controller:
-        nl_processor._executor._controller = controller
+        nl_processor.set_controller(controller)
 
     bg.unraid_client = uc.client
     bg.unraid_system_monitor = uc.system_monitor
@@ -427,18 +496,4 @@ async def start_monitoring(
 
     logger.info("All monitors started")
 
-    for cid in chat_id_store.get_all_chat_ids():
-        container_count = len(state.get_all())
-        watched_count = len(log_watching_config.get("containers", []))
-        unraid_status = "connected" if (uc.client and uc.client.is_connected) else "disabled"
-        startup_msg = (
-            f"🟢 *Bot started*\n"
-            f"Tracking {container_count} containers, watching logs for {watched_count}\n"
-            f"Unraid: {unraid_status}"
-        )
-        try:
-            await send_with_retry(
-                bot.send_message, chat_id=cid, text=startup_msg, parse_mode="Markdown"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to send startup notification: {e}")
+    await _send_startup_notification(bot, chat_id_store, state, log_watching_config, uc)

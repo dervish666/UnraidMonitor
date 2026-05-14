@@ -102,6 +102,9 @@ class ProviderRegistry:
         self._ollama_models: list[ModelInfo] = ollama_models or []
         self._ollama_default_model = ollama_default_model
 
+        # Instance copy of model families (avoids mutating module-level dict)
+        self._model_families: dict[str, str] = dict(_MODEL_FAMILIES)
+
         # API-discovered Anthropic model IDs (populated at startup)
         self._discovered_anthropic: set[str] = set(discovered_anthropic_models or [])
         if self._discovered_anthropic:
@@ -113,6 +116,14 @@ class ProviderRegistry:
         # Persistence paths
         self._data_dir = data_dir or "data"
         self._config_path = config_path
+
+        # Provider instance cache keyed by (provider_name, model_name)
+        self._provider_cache: dict[tuple[str, str], LLMProvider] = {}
+
+        # Build Ollama model lookup for O(1) access
+        self._ollama_tool_support: dict[str, bool] = {
+            m.id: m.supports_tools for m in self._ollama_models
+        }
 
         # Determine default model/provider
         self._default_provider_name: str | None = None
@@ -169,6 +180,7 @@ class ProviderRegistry:
         resolved = self._resolve_model(model_name)
         self._default_provider_name = provider_name
         self._default_model_name = resolved
+        self._provider_cache.clear()
         self._persist_selection(provider_name, model_name)
         self._persist_to_config(default_model=model_name, default_provider=provider_name)
 
@@ -176,6 +188,7 @@ class ProviderRegistry:
         """Set a per-feature model override and persist. Returns the resolved ID."""
         resolved = self._resolve_model(model_name)
         self._feature_models[feature] = resolved
+        self._provider_cache.clear()
         self._persist_selection(
             self._default_provider_name or "",
             self._default_model_name or "",
@@ -247,8 +260,8 @@ class ProviderRegistry:
     def _resolve_model(self, model_id: str) -> str:
         """Resolve family names, aliases, and retired models to concrete IDs."""
         # Family names (sonnet, haiku, opus)
-        if model_id in _MODEL_FAMILIES:
-            resolved = _MODEL_FAMILIES[model_id]
+        if model_id in self._model_families:
+            resolved = self._model_families[model_id]
             logger.info("Resolved family '%s' to %s", model_id, resolved)
             return resolved
 
@@ -267,7 +280,7 @@ class ProviderRegistry:
         For each family, finds the latest available model by sorting
         discovered IDs that match the family prefix.
         """
-        for family in list(_MODEL_FAMILIES.keys()):
+        for family in list(self._model_families.keys()):
             prefix = f"claude-{family}-"
             matches = sorted(
                 (m for m in self._discovered_anthropic if m.startswith(prefix)),
@@ -275,15 +288,14 @@ class ProviderRegistry:
                 reverse=True,
             )
             if matches:
-                # Prefer the alias (no date suffix) over dated versions
                 alias = next((m for m in matches if not re.search(r"-\d{8}$", m)), None)
                 best = alias or matches[0]
-                if best != _MODEL_FAMILIES[family]:
+                if best != self._model_families[family]:
                     logger.info(
                         "Updated '%s' family: %s -> %s (from API)",
-                        family, _MODEL_FAMILIES[family], best,
+                        family, self._model_families[family], best,
                     )
-                    _MODEL_FAMILIES[family] = best
+                    self._model_families[family] = best
 
     @staticmethod
     def _model_sort_key(model_id: str) -> tuple[int, int, str]:
@@ -321,7 +333,7 @@ class ProviderRegistry:
         6. None if nothing available
         """
         # Family names
-        if model_name in _MODEL_FAMILIES:
+        if model_name in self._model_families:
             if self._anthropic_client is not None:
                 return "anthropic"
             return None
@@ -365,27 +377,28 @@ class ProviderRegistry:
     def _create_provider(
         self, provider_name: str, model_name: str
     ) -> LLMProvider | None:
-        """Instantiate a provider for the given name and model."""
+        """Return a cached provider or instantiate a new one."""
+        cache_key = (provider_name, model_name)
+        cached = self._provider_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        provider: LLMProvider | None = None
         if provider_name == "anthropic" and self._anthropic_client is not None:
-            return AnthropicProvider(client=self._anthropic_client, model=model_name)
-
-        if provider_name == "openai" and self._openai_client is not None:
-            return OpenAIProvider(client=self._openai_client, model=model_name)
-
-        if provider_name == "ollama" and self._ollama_client is not None:
-            # Determine tool support from discovered models
-            supports_tools = False
-            for m in self._ollama_models:
-                if m.id == model_name:
-                    supports_tools = m.supports_tools
-                    break
-            return OllamaProvider(
+            provider = AnthropicProvider(client=self._anthropic_client, model=model_name)
+        elif provider_name == "openai" and self._openai_client is not None:
+            provider = OpenAIProvider(client=self._openai_client, model=model_name)
+        elif provider_name == "ollama" and self._ollama_client is not None:
+            supports_tools = self._ollama_tool_support.get(model_name, False)
+            provider = OllamaProvider(
                 client=self._ollama_client,
                 model=model_name,
                 supports_tools=supports_tools,
             )
 
-        return None
+        if provider is not None:
+            self._provider_cache[cache_key] = provider
+        return provider
 
     def _has_provider(self, provider_name: str) -> bool:
         """Check if a provider's client is configured."""
@@ -463,10 +476,6 @@ class ProviderRegistry:
         if not self._config_path:
             return
 
-        import os
-        import tempfile
-
-        import yaml
         from src.config import load_yaml_config
 
         path = Path(self._config_path)
@@ -485,19 +494,7 @@ class ProviderRegistry:
                 models = ai.setdefault("models", {})
                 models[feature] = feature_model
 
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=path.parent, suffix=".tmp", prefix=".config_"
-            )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-                os.replace(tmp_path, path)
-            except Exception:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
+            from src.config import atomic_yaml_write
+            atomic_yaml_write(data, path)
         except Exception as exc:
             logger.error("Failed to persist model to config.yaml: %s", exc)

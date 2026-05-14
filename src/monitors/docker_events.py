@@ -32,10 +32,24 @@ class CrashTracker:
     ESCALATION_COOLDOWN_SECONDS = 600  # Don't re-escalate within 10 min
     RECOVERY_COOLDOWN_SECONDS = 300  # Don't spam recovery alerts
 
+    _CLEANUP_INTERVAL = 100
+
     def __init__(self) -> None:
         self._crashes: dict[str, list[datetime]] = {}
         self._last_escalation: dict[str, datetime] = {}
         self._last_recovery_alert: dict[str, datetime] = {}
+        self._record_count = 0
+
+    def _cleanup_stale(self) -> None:
+        """Remove entries for containers with no recent activity."""
+        now = datetime.now()
+        stale_cutoff = now - timedelta(hours=24)
+        for name in list(self._crashes):
+            if not self._crashes[name]:
+                del self._crashes[name]
+        for d in (self._last_escalation, self._last_recovery_alert):
+            for name in [k for k, v in d.items() if v < stale_cutoff]:
+                del d[name]
 
     def record_crash(self, container_name: str) -> None:
         """Record a crash event (called for ALL non-zero exit crashes)."""
@@ -43,11 +57,13 @@ class CrashTracker:
         if container_name not in self._crashes:
             self._crashes[container_name] = []
         self._crashes[container_name].append(now)
-        # Trim events older than the window
         cutoff = now - timedelta(seconds=self.LOOP_WINDOW_SECONDS)
         self._crashes[container_name] = [
             t for t in self._crashes[container_name] if t > cutoff
         ]
+        self._record_count += 1
+        if self._record_count % self._CLEANUP_INTERVAL == 0:
+            self._cleanup_stale()
 
     def check_restart_loop(self, container_name: str) -> tuple[bool, int]:
         """Check if container is in a restart loop.
@@ -101,6 +117,15 @@ class CrashTracker:
         self._last_recovery_alert[container_name] = datetime.now()
         # Clear crash history since the container recovered
         self._crashes.pop(container_name, None)
+
+    def get_active_crash_loops(self, min_count: int = 3) -> list[tuple[str, int]]:
+        """Return containers with crash counts >= min_count."""
+        result: list[tuple[str, int]] = []
+        for name in self._crashes:
+            count = self.get_crash_count(name)
+            if count >= min_count:
+                result.append((name, count))
+        return result
 
 
 def parse_container(container: Container) -> ContainerInfo:
@@ -173,6 +198,14 @@ class DockerEventMonitor:
         self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
         self._crash_tracker = CrashTracker()
         self._unhealthy_alerted: set[str] = set()  # Track containers already alerted as unhealthy
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def crash_tracker(self) -> CrashTracker:
+        return self._crash_tracker
 
     @property
     def shared_client(self) -> SharedDockerClient | None:
@@ -276,6 +309,7 @@ class DockerEventMonitor:
                 self.state_manager.remove(name)
 
         self.load_initial_state(containers=containers)
+        self._unhealthy_alerted.clear()
         logger.info("Docker reconnection successful")
 
     async def _process_alerts(self) -> None:

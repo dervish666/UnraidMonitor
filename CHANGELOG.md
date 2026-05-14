@@ -2,6 +2,38 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.11.0] - 2026-05-14
+
+### Security
+- **Prompt injection defense** — Tool results and error messages fed to LLM now sanitized via `sanitize_for_prompt()` to prevent prompt injection from container logs
+- **MemoryMonitor race condition** — Kill/cancel/confirm operations now use `asyncio.Lock` to prevent TOCTOU races between concurrent button presses
+- **SSRF protection in setup wizard** — Host input validated to block loopback, link-local (cloud metadata), and malformed addresses
+- **File permissions** — Ignore manager files written with `0o644` instead of `0o666`
+- **Mute duration cap** — Container, array, and server mute durations capped at 30 days
+- **API key redaction** — Unraid API key redacted from connection error logs
+
+### Fixed
+- **ChatIdStore atomic writes** — Chat ID persistence now uses tempfile + `os.replace` to prevent corruption on crash
+- **CrashTracker memory leak** — Stale entries evicted every 100 crash records; `_unhealthy_alerted` cleared on reconnect
+- **Pattern cache unbounded growth** — LogWatcher regex cache now bounded to 64 entries
+- **Provider re-instantiation** — LLM providers now cached by `(provider_name, model_name)` key; cache cleared on model switch
+- **Thread pool exhaustion** — LogWatcher uses a dedicated `ThreadPoolExecutor` instead of the shared default pool
+- **Parse duration unbounded** — Mute duration parsing capped at 7 days
+- **NL processor message copying** — Fixed unnecessary list copy on each tool-use iteration
+
+### Changed
+- **`register_commands` refactored** — Split 365-line function into 4 focused helpers (`_register_ignore_commands`, `_register_unraid_commands`, `_register_memory_commands`, `_register_manage_commands`)
+- **`start_monitoring` refactored** — Extracted `_init_alert_infrastructure`, `_init_nl_processor`, `_send_startup_notification` helpers
+- **YAML persistence deduplicated** — Three identical atomic-write blocks replaced with shared `atomic_yaml_write()` in config.py
+- **Threshold picker deduplicated** — Array and server threshold callbacks consolidated into shared `_show_threshold_picker` / `_apply_threshold` helpers
+- **Monitor encapsulation** — All 6 monitors expose `is_running` property; health command no longer accesses private `_running` attributes
+- **Startup parallelized** — Anthropic model discovery and Ollama model discovery now run concurrently via `asyncio.gather`
+- **Private attribute encapsulation** — `NLProcessor.set_controller()` replaces direct `_executor._controller` mutation
+- **Module-level mutable dict safety** — `_MODEL_FAMILIES` copied to instance level in `ProviderRegistry`
+- **Threshold steps centralized** — `CPU_THRESHOLD_STEPS` and `MEMORY_THRESHOLD_STEPS` moved to `constants.py`
+- **Dev dependencies** — Added `pytest-cov`, `anthropic`, and `openai` to `[project.optional-dependencies] dev`
+- **Version detection** — `/health` command reads version from package metadata instead of hardcoded string
+
 ## [0.10.3] - 2026-05-14
 
 ### Fixed

@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -82,13 +84,23 @@ class ChatIdStore:
             logger.warning(f"Failed to load chat IDs from {self._json_path}: {e}")
 
     def _save(self) -> None:
-        """Persist current chat IDs to JSON file."""
+        """Persist current chat IDs to JSON file (atomic write)."""
         if not self._json_path:
             return
         try:
-            Path(self._json_path).parent.mkdir(parents=True, exist_ok=True)
-            with open(self._json_path, "w") as f:
-                json.dump(sorted(self._chat_ids), f)
+            parent = Path(self._json_path).parent
+            parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_path = tempfile.mkstemp(
+                dir=str(parent), prefix=".tmp_chatids_", suffix=".json"
+            )
+            try:
+                os.fchmod(fd, 0o644)
+                with os.fdopen(fd, "w") as f:
+                    json.dump(sorted(self._chat_ids), f)
+                os.replace(temp_path, self._json_path)
+            except Exception:
+                os.unlink(temp_path)
+                raise
         except OSError as e:
             logger.error(f"Failed to save chat IDs to {self._json_path}: {e}")
 

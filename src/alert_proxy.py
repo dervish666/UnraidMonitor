@@ -33,6 +33,10 @@ class AlertManagerProxy:
         self._managers: dict[int, AlertManager] = {}
         self._send_lock = asyncio.Lock()
 
+    @property
+    def queued_count(self) -> int:
+        return len(self._queued_alerts)
+
     def _get_manager(self, chat_id: int) -> AlertManager:
         """Get or create a cached AlertManager for the given chat_id."""
         if chat_id not in self._managers:

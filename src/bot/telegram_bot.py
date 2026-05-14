@@ -126,6 +126,112 @@ def create_dispatcher(allowed_users: list[int], chat_id_store: Any = None) -> Di
     return dp
 
 
+def _register_ignore_commands(
+    dp: Dispatcher,
+    ignore_manager: Any,
+    recent_errors_buffer: Any,
+    pattern_analyzer: Any | None,
+) -> None:
+    """Register /ignore and /ignores commands with selection callbacks."""
+    selection_state = IgnoreSelectionState()
+    dp.message.register(
+        ignore_command(recent_errors_buffer, ignore_manager, selection_state),
+        Command("ignore"),
+    )
+    dp.message.register(ignores_command(ignore_manager), Command("ignores"))
+    dp.callback_query.register(ignore_toggle_callback(selection_state), F.data.startswith("ign_toggle:"))
+    dp.callback_query.register(ignore_all_callback(selection_state), F.data == "ign_all")
+    dp.callback_query.register(
+        ignore_done_callback(ignore_manager, selection_state, pattern_analyzer), F.data == "ign_done",
+    )
+    dp.callback_query.register(ignore_cancel_callback(selection_state), F.data == "ign_cancel")
+    dp.callback_query.register(
+        ignore_similar_callback(ignore_manager, pattern_analyzer, recent_errors_buffer),
+        F.data.startswith("ignore_similar:"),
+    )
+
+
+def _register_unraid_commands(
+    dp: Dispatcher,
+    unraid_system_monitor: Any | None,
+    server_mute_manager: Any | None,
+    array_mute_manager: Any | None,
+    array_monitor: Any | None,
+    unraid_config: Any | None,
+) -> None:
+    """Register Unraid server/array/disk commands and alert button callbacks."""
+    if unraid_system_monitor is not None:
+        dp.message.register(server_command(unraid_system_monitor), Command("server"))
+        dp.message.register(array_command(unraid_system_monitor), Command("array"))
+        dp.message.register(disks_command(unraid_system_monitor), Command("disks"))
+
+    if server_mute_manager is not None:
+        dp.message.register(mute_server_command(server_mute_manager), Command("mute-server"))
+        dp.message.register(unmute_server_command(server_mute_manager), Command("unmute-server"))
+        dp.callback_query.register(server_mute_callback(server_mute_manager), F.data.startswith("srv_mute:"))
+
+    if server_mute_manager is not None and unraid_config is not None:
+        dp.callback_query.register(server_threshold_callback(unraid_config), F.data.startswith("srv_thresh:"))
+        dp.callback_query.register(server_set_threshold_callback(unraid_config), F.data.startswith("srv_set:"))
+
+    if array_mute_manager is not None:
+        dp.message.register(mute_array_command(array_mute_manager), Command("mute-array"))
+        dp.message.register(
+            unmute_array_command(array_mute_manager, array_monitor=array_monitor), Command("unmute-array"),
+        )
+        dp.callback_query.register(array_mute_callback(array_mute_manager), F.data.startswith("arr_mute:"))
+
+    if array_mute_manager is not None and unraid_config is not None:
+        dp.callback_query.register(array_threshold_callback(unraid_config), F.data.startswith("arr_thresh:"))
+        dp.callback_query.register(array_set_threshold_callback(unraid_config), F.data.startswith("arr_set:"))
+
+
+def _register_memory_commands(
+    dp: Dispatcher,
+    memory_monitor: "MemoryMonitor | None",
+    protected_containers: list[str] | None,
+) -> None:
+    """Register memory management commands and kill/restart button callbacks."""
+    dp.message.register(cancel_kill_command(memory_monitor), Command("cancel-kill"))
+    if memory_monitor is not None:
+        dp.callback_query.register(
+            mem_kill_callback(memory_monitor, protected_containers=protected_containers),
+            F.data.startswith("mem_kill:"),
+        )
+        dp.callback_query.register(mem_cancel_kill_callback(memory_monitor), F.data == "mem_cancel_kill")
+        dp.callback_query.register(mem_restart_yes_callback(memory_monitor), F.data.startswith("mem_restart_yes:"))
+        dp.callback_query.register(mem_restart_no_callback(memory_monitor), F.data.startswith("mem_restart_no:"))
+
+
+def _register_manage_commands(
+    dp: Dispatcher,
+    state: ContainerStateManager,
+    ignore_manager: Any,
+    mute_manager: Any,
+    resource_monitor: Any | None,
+    unraid_system_monitor: Any | None,
+    server_mute_manager: Any | None,
+    array_mute_manager: Any | None,
+) -> None:
+    """Register /manage dashboard command and all its sub-callbacks."""
+    dp.message.register(manage_command(unraid_system_monitor), Command("manage"))
+    dp.callback_query.register(manage_back_callback(unraid_system_monitor), F.data == "manage:back")
+    dp.callback_query.register(manage_status_callback(state), F.data == "manage:status")
+    dp.callback_query.register(manage_resources_callback(resource_monitor), F.data == "manage:resources")
+    dp.callback_query.register(manage_server_callback(unraid_system_monitor), F.data == "manage:server")
+    dp.callback_query.register(manage_disks_callback(unraid_system_monitor), F.data == "manage:disks")
+    dp.callback_query.register(manage_ignores_callback(ignore_manager), F.data == "manage:ignores")
+    dp.callback_query.register(manage_ignores_container_callback(ignore_manager), F.data.startswith("manage:ignores:"))
+    dp.callback_query.register(
+        manage_mutes_callback(mute_manager, server_mute_manager, array_mute_manager), F.data == "manage:mutes",
+    )
+    dp.callback_query.register(manage_delete_ignore_callback(ignore_manager), F.data.startswith("mdi:"))
+    dp.callback_query.register(
+        manage_delete_mute_callback(mute_manager, server_mute_manager, array_mute_manager),
+        F.data.startswith("mdm:"),
+    )
+
+
 def register_commands(
     dp: Dispatcher,
     state: ContainerStateManager,
@@ -153,10 +259,7 @@ def register_commands(
     Returns tuple of (ContainerController, DiagnosticService) if docker_client provided.
     """
     dp.message.register(help_command(), Command("help"))
-    dp.callback_query.register(
-        help_section_callback(),
-        F.data.startswith("help:") & (F.data != "help:back"),
-    )
+    dp.callback_query.register(help_section_callback(), F.data.startswith("help:") & (F.data != "help:back"))
     dp.callback_query.register(help_back_callback(), F.data == "help:back")
     dp.message.register(status_command(state, resource_monitor), Command("status"))
 
@@ -166,294 +269,66 @@ def register_commands(
         _diagnose_max_lines = bot_config.diagnose_max_lines if bot_config else 500
 
         dp.message.register(
-            logs_command(state, docker_client, max_lines=_log_max_lines, max_chars=_log_max_chars),
-            Command("logs"),
+            logs_command(state, docker_client, max_lines=_log_max_lines, max_chars=_log_max_chars), Command("logs"),
         )
 
-        # Create controller for control commands
         controller = ContainerController(docker_client, protected_containers or [])
-
-        # Register control commands (no ConfirmationManager needed — uses inline buttons)
         dp.message.register(restart_command(state, controller), Command("restart"))
         dp.message.register(stop_command(state, controller), Command("stop"))
         dp.message.register(start_command(state, controller), Command("start"))
         dp.message.register(pull_command(state, controller), Command("pull"))
-
-        # Register control confirmation/cancel callbacks
-        dp.callback_query.register(
-            create_ctrl_confirm_callback(state, controller),
-            F.data.startswith("ctrl_confirm:"),
-        )
-        dp.callback_query.register(
-            create_ctrl_cancel_callback(),
-            F.data == "ctrl_cancel",
-        )
-
-        # Set up diagnostic service
-        _diag_brief = ai_config.diagnostic_brief_max_tokens if ai_config else 300
-        _diag_detail = ai_config.diagnostic_detail_max_tokens if ai_config else 800
-        _diag_expiry = ai_config.diagnostic_context_expiry_seconds if ai_config else 600
+        dp.callback_query.register(create_ctrl_confirm_callback(state, controller), F.data.startswith("ctrl_confirm:"))
+        dp.callback_query.register(create_ctrl_cancel_callback(), F.data == "ctrl_cancel")
 
         diagnostic_service = DiagnosticService(
             docker_client,
             registry=registry,
             feature="diagnostic",
-            brief_max_tokens=_diag_brief,
-            detail_max_tokens=_diag_detail,
-            context_expiry_seconds=_diag_expiry,
+            brief_max_tokens=ai_config.diagnostic_brief_max_tokens if ai_config else 300,
+            detail_max_tokens=ai_config.diagnostic_detail_max_tokens if ai_config else 800,
+            context_expiry_seconds=ai_config.diagnostic_context_expiry_seconds if ai_config else 600,
         )
+        dp.message.register(diagnose_command(state, diagnostic_service, max_lines=_diagnose_max_lines), Command("diagnose"))
+        dp.callback_query.register(diag_details_callback(diagnostic_service), F.data.startswith("diag_details:"))
 
-        dp.message.register(
-            diagnose_command(state, diagnostic_service, max_lines=_diagnose_max_lines),
-            Command("diagnose"),
-        )
-
-        # Register diagnosis details callback (replaces DetailsFilter text handler)
-        dp.callback_query.register(
-            diag_details_callback(diagnostic_service),
-            F.data.startswith("diag_details:"),
-        )
-
-        # Register /resources command
         if resource_monitor is not None:
-            dp.message.register(
-                resources_command(resource_monitor),
-                Command("resources"),
-            )
+            dp.message.register(resources_command(resource_monitor), Command("resources"))
 
-        # Register /ignore and /ignores commands
         if ignore_manager is not None and recent_errors_buffer is not None:
-            # Create shared state for ignore selections
-            selection_state = IgnoreSelectionState()
+            _register_ignore_commands(dp, ignore_manager, recent_errors_buffer, pattern_analyzer)
 
-            dp.message.register(
-                ignore_command(recent_errors_buffer, ignore_manager, selection_state),
-                Command("ignore"),
-            )
-            dp.message.register(
-                ignores_command(ignore_manager),
-                Command("ignores"),
-            )
-            # Register ignore toggle/select-all/done/cancel callbacks
-            dp.callback_query.register(
-                ignore_toggle_callback(selection_state),
-                F.data.startswith("ign_toggle:"),
-            )
-            dp.callback_query.register(
-                ignore_all_callback(selection_state),
-                F.data == "ign_all",
-            )
-            dp.callback_query.register(
-                ignore_done_callback(ignore_manager, selection_state, pattern_analyzer),
-                F.data == "ign_done",
-            )
-            dp.callback_query.register(
-                ignore_cancel_callback(selection_state),
-                F.data == "ign_cancel",
-            )
-
-            # Register callback handler for ignore similar button
-            dp.callback_query.register(
-                ignore_similar_callback(ignore_manager, pattern_analyzer, recent_errors_buffer),
-                F.data.startswith("ignore_similar:"),
-            )
-
-        # Register alert action button callbacks
-        dp.callback_query.register(
-            restart_callback(state, controller),
-            F.data.startswith("restart:"),
-        )
+        # Alert action button callbacks
+        dp.callback_query.register(restart_callback(state, controller), F.data.startswith("restart:"))
         dp.callback_query.register(
             logs_callback(state, docker_client, max_lines=_log_max_lines, max_chars=_log_max_chars),
             F.data.startswith("logs:"),
         )
-        dp.callback_query.register(
-            diagnose_callback(state, diagnostic_service),
-            F.data.startswith("diagnose:"),
-        )
+        dp.callback_query.register(diagnose_callback(state, diagnostic_service), F.data.startswith("diagnose:"))
         if mute_manager is not None:
-            dp.callback_query.register(
-                mute_callback(state, mute_manager),
-                F.data.startswith("mute:"),
-            )
+            dp.callback_query.register(mute_callback(state, mute_manager), F.data.startswith("mute:"))
 
-        # Register resource threshold adjustment callbacks
         if resource_config is not None:
-            dp.callback_query.register(
-                raise_limit_callback(resource_config),
-                F.data.startswith("res_limit:"),
-            )
-            dp.callback_query.register(
-                set_limit_callback(resource_config),
-                F.data.startswith("res_set:"),
-            )
+            dp.callback_query.register(raise_limit_callback(resource_config), F.data.startswith("res_limit:"))
+            dp.callback_query.register(set_limit_callback(resource_config), F.data.startswith("res_set:"))
 
-        # Register /mute, /mutes, /unmute commands
         if mute_manager is not None:
-            dp.message.register(
-                mute_command(state, mute_manager),
-                Command("mute"),
-            )
-            dp.message.register(
-                mutes_command(mute_manager, server_mute_manager, array_mute_manager),
-                Command("mutes"),
-            )
-            dp.message.register(
-                unmute_command(state, mute_manager),
-                Command("unmute"),
-            )
+            dp.message.register(mute_command(state, mute_manager), Command("mute"))
+            dp.message.register(mutes_command(mute_manager, server_mute_manager, array_mute_manager), Command("mutes"))
+            dp.message.register(unmute_command(state, mute_manager), Command("unmute"))
 
-        # Register Unraid commands
-        if unraid_system_monitor is not None:
-            dp.message.register(
-                server_command(unraid_system_monitor),
-                Command("server"),
-            )
-            dp.message.register(
-                array_command(unraid_system_monitor),
-                Command("array"),
-            )
-            dp.message.register(
-                disks_command(unraid_system_monitor),
-                Command("disks"),
-            )
+        _register_unraid_commands(dp, unraid_system_monitor, server_mute_manager, array_mute_manager, array_monitor, unraid_config)
+        _register_memory_commands(dp, memory_monitor, protected_containers)
 
-        if server_mute_manager is not None:
-            dp.message.register(
-                mute_server_command(server_mute_manager),
-                Command("mute-server"),
-            )
-            dp.message.register(
-                unmute_server_command(server_mute_manager),
-                Command("unmute-server"),
-            )
-
-        if array_mute_manager is not None:
-            dp.message.register(
-                mute_array_command(array_mute_manager),
-                Command("mute-array"),
-            )
-            dp.message.register(
-                unmute_array_command(array_mute_manager, array_monitor=array_monitor),
-                Command("unmute-array"),
-            )
-
-            # Register array alert button callbacks
-            dp.callback_query.register(
-                array_mute_callback(array_mute_manager),
-                F.data.startswith("arr_mute:"),
-            )
-
-        if array_mute_manager is not None and unraid_config is not None:
-            dp.callback_query.register(
-                array_threshold_callback(unraid_config),
-                F.data.startswith("arr_thresh:"),
-            )
-            dp.callback_query.register(
-                array_set_threshold_callback(unraid_config),
-                F.data.startswith("arr_set:"),
-            )
-
-        # Register server alert button callbacks
-        if server_mute_manager is not None:
-            dp.callback_query.register(
-                server_mute_callback(server_mute_manager),
-                F.data.startswith("srv_mute:"),
-            )
-
-        if server_mute_manager is not None and unraid_config is not None:
-            dp.callback_query.register(
-                server_threshold_callback(unraid_config),
-                F.data.startswith("srv_thresh:"),
-            )
-            dp.callback_query.register(
-                server_set_threshold_callback(unraid_config),
-                F.data.startswith("srv_set:"),
-            )
-
-        # Register memory commands
-        dp.message.register(
-            cancel_kill_command(memory_monitor),
-            Command("cancel-kill"),
-        )
-
-        # Register memory kill button callbacks
-        if memory_monitor is not None:
-            dp.callback_query.register(
-                mem_kill_callback(memory_monitor, protected_containers=protected_containers),
-                F.data.startswith("mem_kill:"),
-            )
-            dp.callback_query.register(
-                mem_cancel_kill_callback(memory_monitor),
-                F.data == "mem_cancel_kill",
-            )
-            dp.callback_query.register(
-                mem_restart_yes_callback(memory_monitor),
-                F.data.startswith("mem_restart_yes:"),
-            )
-            dp.callback_query.register(
-                mem_restart_no_callback(memory_monitor),
-                F.data.startswith("mem_restart_no:"),
-            )
-
-        # Register /manage command and callbacks
         if ignore_manager is not None and mute_manager is not None:
-            dp.message.register(
-                manage_command(unraid_system_monitor),
-                Command("manage"),
+            _register_manage_commands(
+                dp, state, ignore_manager, mute_manager,
+                resource_monitor, unraid_system_monitor, server_mute_manager, array_mute_manager,
             )
 
-            # Manage callbacks
-            dp.callback_query.register(
-                manage_back_callback(unraid_system_monitor),
-                F.data == "manage:back",
-            )
-            dp.callback_query.register(
-                manage_status_callback(state),
-                F.data == "manage:status",
-            )
-            dp.callback_query.register(
-                manage_resources_callback(resource_monitor),
-                F.data == "manage:resources",
-            )
-            dp.callback_query.register(
-                manage_server_callback(unraid_system_monitor),
-                F.data == "manage:server",
-            )
-            dp.callback_query.register(
-                manage_disks_callback(unraid_system_monitor),
-                F.data == "manage:disks",
-            )
-            dp.callback_query.register(
-                manage_ignores_callback(ignore_manager),
-                F.data == "manage:ignores",
-            )
-            dp.callback_query.register(
-                manage_ignores_container_callback(ignore_manager),
-                F.data.startswith("manage:ignores:"),
-            )
-            dp.callback_query.register(
-                manage_mutes_callback(mute_manager, server_mute_manager, array_mute_manager),
-                F.data == "manage:mutes",
-            )
-            dp.callback_query.register(
-                manage_delete_ignore_callback(ignore_manager),
-                F.data.startswith("mdi:"),
-            )
-            dp.callback_query.register(
-                manage_delete_mute_callback(mute_manager, server_mute_manager, array_mute_manager),
-                F.data.startswith("mdm:"),
-            )
-
-        # Register /model command for runtime LLM provider switching
         if registry is not None:
             from src.bot.model_command import (
-                model_command as _model_command,
-                model_provider_callback,
-                model_select_callback,
-                model_back_callback,
+                model_command as _model_command, model_provider_callback, model_select_callback, model_back_callback,
             )
-
             dp.message.register(_model_command(registry), Command("model"))
             dp.callback_query.register(
                 model_provider_callback(registry),
@@ -462,25 +337,12 @@ def register_commands(
             dp.callback_query.register(model_back_callback(registry), F.data == "model:back")
             dp.callback_query.register(model_select_callback(registry), F.data.startswith("model_select:"))
 
-        # Register natural language handler (must be last - catches all non-commands)
+        # NL handler must be last — catches all non-command text
         if nl_processor is not None and controller is not None:
             from src.bot.nl_handler import NLFilter, create_nl_handler, create_nl_confirm_callback, create_nl_cancel_callback
-
-            # Register NL confirmation callbacks
-            dp.callback_query.register(
-                create_nl_confirm_callback(nl_processor, controller),
-                F.data.startswith("nl_confirm:"),
-            )
-            dp.callback_query.register(
-                create_nl_cancel_callback(nl_processor),
-                F.data == "nl_cancel",
-            )
-
-            # Register NL message handler (catches all non-command text)
-            dp.message.register(
-                create_nl_handler(nl_processor),
-                NLFilter(),
-            )
+            dp.callback_query.register(create_nl_confirm_callback(nl_processor, controller), F.data.startswith("nl_confirm:"))
+            dp.callback_query.register(create_nl_cancel_callback(nl_processor), F.data == "nl_cancel")
+            dp.message.register(create_nl_handler(nl_processor), NLFilter())
 
         return controller, diagnostic_service
 
