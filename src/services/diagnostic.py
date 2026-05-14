@@ -65,12 +65,16 @@ class DiagnosticService:
         self,
         docker_client: docker.DockerClient,
         provider: Any = None,
+        registry: Any = None,
+        feature: str = "diagnostic",
         brief_max_tokens: int = 300,
         detail_max_tokens: int = 800,
         context_expiry_seconds: int = 600,
     ):
         self._docker = docker_client
         self._provider = provider
+        self._registry = registry
+        self._feature = feature
         self._brief_max_tokens = brief_max_tokens
         self._detail_max_tokens = detail_max_tokens
         self._context_expiry_seconds = context_expiry_seconds
@@ -128,6 +132,12 @@ class DiagnosticService:
             restart_count=restart_count,
         )
 
+    def _resolve_provider(self) -> Any:
+        """Resolve the current LLM provider, preferring registry for runtime changes."""
+        if self._registry is not None:
+            return self._registry.get_provider(self._feature)
+        return self._provider
+
     async def analyze(self, context: DiagnosticContext) -> str:
         """Analyze container issue using Claude API.
 
@@ -137,7 +147,8 @@ class DiagnosticService:
         Returns:
             Brief analysis summary.
         """
-        if not self._provider:
+        provider = self._resolve_provider()
+        if not provider:
             return "❌ AI provider not configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_HOST in .env"
 
         uptime_str = format_uptime(context.uptime_seconds) if context.uptime_seconds else "unknown"
@@ -163,7 +174,7 @@ Last log lines:
 Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. Be specific and actionable. If you see a clear command to run, include it."""
 
         try:
-            response = await self._provider.chat(
+            response = await provider.chat(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=self._brief_max_tokens,
             )
@@ -231,7 +242,8 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
 
         context = self._pending.pop(user_id)
 
-        if not self._provider:
+        provider = self._resolve_provider()
+        if not provider:
             return "❌ AI provider not configured."
 
         # Sanitize user-controlled inputs to prevent prompt injection
@@ -257,7 +269,7 @@ Provide:
 Be specific and actionable."""
 
         try:
-            response = await self._provider.chat(
+            response = await provider.chat(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=self._detail_max_tokens,
             )

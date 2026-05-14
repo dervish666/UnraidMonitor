@@ -29,8 +29,14 @@ _MODEL_FAMILIES: dict[str, str] = {
 _FAMILY_PREFIX = re.compile(r"^claude-(\w+)-")
 
 _MODEL_ALIASES: dict[str, str] = {
-    "claude-sonnet-4-5": "claude-sonnet-4-6",
-    "claude-sonnet-4-5-20250929": "claude-sonnet-4-6",
+    "claude-sonnet-4-5": "sonnet",
+    "claude-sonnet-4-5-20250929": "sonnet",
+}
+
+_FEATURE_DEFAULTS: dict[str, str] = {
+    "nl_processor": "sonnet",
+    "diagnostic": "haiku",
+    "pattern_analyzer": "haiku",
 }
 
 # ---------------------------------------------------------------------------
@@ -85,6 +91,7 @@ class ProviderRegistry:
         default_model: str | None = None,
         feature_models: dict[str, str] | None = None,
         data_dir: str | None = None,
+        config_path: str | None = None,
         ollama_default_model: str = "qwen2.5:7b",
         discovered_anthropic_models: list[str] | None = None,
     ) -> None:
@@ -103,8 +110,9 @@ class ProviderRegistry:
         # Per-feature model overrides (feature_name -> model_id)
         self._feature_models: dict[str, str] = dict(feature_models or {})
 
-        # Persistence path
+        # Persistence paths
         self._data_dir = data_dir or "data"
+        self._config_path = config_path
 
         # Determine default model/provider
         self._default_provider_name: str | None = None
@@ -162,6 +170,7 @@ class ProviderRegistry:
         self._default_provider_name = provider_name
         self._default_model_name = resolved
         self._persist_selection(provider_name, model_name)
+        self._persist_to_config(default_model=model_name, default_provider=provider_name)
 
     def set_feature_model(self, feature: str, model_name: str) -> str:
         """Set a per-feature model override and persist. Returns the resolved ID."""
@@ -171,6 +180,7 @@ class ProviderRegistry:
             self._default_provider_name or "",
             self._default_model_name or "",
         )
+        self._persist_to_config(feature=feature, feature_model=model_name)
         return resolved
 
     def clear_feature_model(self, feature: str) -> bool:
@@ -181,6 +191,9 @@ class ProviderRegistry:
                 self._default_provider_name or "",
                 self._default_model_name or "",
             )
+            default = _FEATURE_DEFAULTS.get(feature)
+            if default:
+                self._persist_to_config(feature=feature, feature_model=default)
             return True
         return False
 
@@ -436,3 +449,54 @@ class ProviderRegistry:
                 json.dump(data, f, indent=2)
         except OSError as exc:
             logger.error("Failed to persist model selection: %s", exc)
+
+    def _persist_to_config(
+        self,
+        *,
+        default_model: str | None = None,
+        default_provider: str | None = None,
+        feature: str | None = None,
+        feature_model: str | None = None,
+    ) -> None:
+        """Write model changes back to config.yaml so the file stays in sync."""
+        if not self._config_path:
+            return
+
+        import os
+        import tempfile
+
+        import yaml
+        from src.config import load_yaml_config
+
+        path = Path(self._config_path)
+        if not path.exists():
+            return
+
+        try:
+            data = load_yaml_config(str(path))
+            ai = data.setdefault("ai", {})
+
+            if default_model is not None:
+                ai["default_model"] = default_model
+            if default_provider is not None:
+                ai["default_provider"] = default_provider
+            if feature is not None and feature_model is not None:
+                models = ai.setdefault("models", {})
+                models[feature] = feature_model
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=path.parent, suffix=".tmp", prefix=".config_"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+                os.replace(tmp_path, path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except Exception as exc:
+            logger.error("Failed to persist model to config.yaml: %s", exc)

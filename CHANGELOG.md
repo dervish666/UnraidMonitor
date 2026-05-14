@@ -2,6 +2,13 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.10.1] - 2026-05-14
+
+### Fixed
+- **Chat "invalid request" error** — NL processor and diagnostic service now resolve their LLM provider dynamically from the registry on each call, so `/model` changes take effect immediately without restart
+- **`/model` not updating config.yaml** — Model changes via `/model` now persist to both `model_selection.json` (runtime) and `config.yaml` (permanent), keeping the config file in sync
+- **Retired model aliases** — Aliases now chain through family names (e.g. `claude-sonnet-4-5` → `sonnet` → latest) so they benefit from API-discovered model resolution
+
 ## [0.10.0] - 2026-05-14
 
 ### Added

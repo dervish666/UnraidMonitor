@@ -194,10 +194,10 @@ def register_commands(
         _diag_detail = ai_config.diagnostic_detail_max_tokens if ai_config else 800
         _diag_expiry = ai_config.diagnostic_context_expiry_seconds if ai_config else 600
 
-        diag_provider = registry.get_provider("diagnostic") if registry else None
         diagnostic_service = DiagnosticService(
             docker_client,
-            provider=diag_provider,
+            registry=registry,
+            feature="diagnostic",
             brief_max_tokens=_diag_brief,
             detail_max_tokens=_diag_detail,
             context_expiry_seconds=_diag_expiry,

@@ -135,6 +135,8 @@ class NLProcessor:
     def __init__(
         self,
         provider: Any | None = None,
+        registry: Any | None = None,
+        feature: str = "nl_processor",
         tool_executor: Any = None,
         max_tokens: int = 1024,
         max_tool_iterations: int = 10,
@@ -148,6 +150,8 @@ class NLProcessor:
 
         Args:
             provider: LLMProvider for AI API calls, or None if not configured.
+            registry: ProviderRegistry for dynamic provider resolution.
+            feature: Registry feature key (default "nl_processor").
             tool_executor: Executor for tool calls (NLToolExecutor instance).
             max_tokens: Maximum tokens for API responses.
             max_tool_iterations: Maximum tool use loop iterations.
@@ -156,8 +160,9 @@ class NLProcessor:
             rate_limit_per_hour: Max NL requests per user per hour.
             anthropic_client: Deprecated. Use provider instead.
         """
-        # Support legacy anthropic_client kwarg for backward compatibility
         self._provider = provider if provider is not None else anthropic_client
+        self._registry = registry
+        self._feature = feature
         self._executor = tool_executor
         self._max_tokens = max_tokens
         self._max_tool_iterations = max_tool_iterations
@@ -169,6 +174,12 @@ class NLProcessor:
         self._cached_tools: list[dict[str, Any]] | None = None
         self._user_locks: dict[int, asyncio.Lock] = {}
 
+    def _resolve_provider(self) -> Any:
+        """Resolve the current LLM provider, preferring registry for runtime changes."""
+        if self._registry is not None:
+            return self._registry.get_provider(self._feature)
+        return self._provider
+
     async def process(self, user_id: int, message: str) -> ProcessResult:
         """Process a natural language message and return a response.
 
@@ -179,7 +190,8 @@ class NLProcessor:
         Returns:
             ProcessResult with response text and optional pending_action.
         """
-        if self._provider is None:
+        provider = self._resolve_provider()
+        if provider is None:
             return ProcessResult(
                 response="Sorry, natural language processing is not configured. Please use /commands instead."
             )
@@ -218,7 +230,7 @@ class NLProcessor:
             messages.append({"role": "user", "content": message})
 
             try:
-                response_text, pending_action = await self._call_llm(messages)
+                response_text, pending_action = await self._call_llm(provider, messages)
 
                 # Store the exchange
                 memory.add_exchange(message, response_text)
@@ -242,28 +254,26 @@ class NLProcessor:
             self._cached_tools = get_tool_definitions()
         return self._cached_tools
 
-    async def _call_llm(self, messages: list[dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:
+    async def _call_llm(self, provider: Any, messages: list[dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:
         """Call the LLM provider with tool support.
 
         Args:
+            provider: The resolved LLM provider to use.
             messages: List of message dicts for the conversation.
 
         Returns:
             Tuple of (response_text, pending_action).
         """
-        assert self._provider is not None  # Caller ensures this via process() check
-        tools = self._get_cached_tools() if self._provider.supports_tools else None
+        tools = self._get_cached_tools() if provider.supports_tools else None
         pending_action = None
 
-        # Initial API call — provider handles system prompt caching internally
-        response = await self._provider.chat(
+        response = await provider.chat(
             messages=messages,
             system=SYSTEM_PROMPT,
             max_tokens=self._max_tokens,
             tools=tools,
         )
 
-        # Handle tool use loop with max iterations guard
         iterations = 0
         while response.stop_reason == "tool_use" and iterations < self._max_tool_iterations:
             iterations += 1
@@ -271,12 +281,10 @@ class NLProcessor:
             if not response.tool_calls:
                 break
 
-            # Execute each tool call
             tool_results = []
             for tc in response.tool_calls:
                 result = await self._executor.execute(tc.name, tc.input)
 
-                # Check for confirmation needed
                 if result.startswith("CONFIRMATION_NEEDED:"):
                     _, action, container = result.split(":", 2)
                     pending_action = {"action": action, "container": container}
@@ -288,7 +296,6 @@ class NLProcessor:
                     "content": result,
                 })
 
-            # Continue conversation with tool results
             messages = messages + [
                 {
                     "role": "assistant",
@@ -301,7 +308,7 @@ class NLProcessor:
                 *tool_results,
             ]
 
-            response = await self._provider.chat(
+            response = await provider.chat(
                 messages=messages,
                 system=SYSTEM_PROMPT,
                 max_tokens=self._max_tokens,
@@ -311,8 +318,7 @@ class NLProcessor:
         if iterations >= self._max_tool_iterations:
             logger.warning("Max tool iterations reached")
 
-        # Graceful degradation for non-tool-supporting providers
-        if not self._provider.supports_tools:
+        if not provider.supports_tools:
             note = "\n\n_(Tool actions unavailable with this model — use /commands for container control)_"
             return (response.text or "I couldn't generate a response.") + note, None
 

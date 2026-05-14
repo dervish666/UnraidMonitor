@@ -115,6 +115,7 @@ async def _build_provider_registry(
         ollama_models=ollama_models,
         default_model=ai_config.default_model,
         feature_models=feature_models,
+        config_path=settings.config_path,
         ollama_default_model=ai_config.ollama_default_model,
         discovered_anthropic_models=discovered_anthropic or None,
     )
@@ -337,8 +338,8 @@ async def start_monitoring(
     bg.memory_monitor = memory_monitor
 
     nl_processor = None
-    nl_provider = registry.get_provider("nl_processor")
-    if nl_provider and monitor.shared_client:
+    has_nl_provider = registry.get_provider("nl_processor") is not None
+    if has_nl_provider and monitor.shared_client:
         from src.services.nl_processor import NLProcessor
         from src.services.nl_tools import NLToolExecutor
 
@@ -353,7 +354,8 @@ async def start_monitoring(
             log_max_chars=bot_config.nl_log_max_chars,
         )
         nl_processor = NLProcessor(
-            provider=nl_provider,
+            registry=registry,
+            feature="nl_processor",
             tool_executor=nl_executor,
             max_tokens=ai_config.nl_processor_max_tokens,
             max_tool_iterations=ai_config.nl_max_tool_iterations,
