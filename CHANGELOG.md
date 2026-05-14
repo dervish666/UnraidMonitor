@@ -2,10 +2,15 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.10.3] - 2026-05-14
+
+### Fixed
+- **Tool-calling chat messages rejected by API** — Assistant messages with tool calls used a normalized `tool_calls` key that the Anthropic API rejects (`Extra inputs are not permitted`). `_translate_messages` now converts these to proper Anthropic `tool_use` content blocks. This only affected messages that triggered tool use (e.g. "What containers are running?"); direct-answer messages (e.g. "What can you do?") were unaffected.
+
 ## [0.10.2] - 2026-05-14
 
 ### Fixed
-- **"Invalid request to AI service" on chat** — Retired model aliases (e.g. `claude-sonnet-4-5-20250929`) resolved to the family name `"sonnet"` but stopped there, sending an invalid model name to the API. `_resolve_model` now recursively chains aliases through families to concrete IDs (`claude-sonnet-4-5-20250929` → `sonnet` → `claude-sonnet-4-6`)
+- **Model alias chain resolution** — Retired model aliases (e.g. `claude-sonnet-4-5-20250929`) resolved to the family name `"sonnet"` but stopped there, sending an invalid model name to the API. `_resolve_model` now recursively chains aliases through families to concrete IDs
 - **Config template** — Default config template now uses family names (`haiku`, `sonnet`) instead of dated model IDs, so new installs are resilient to model retirements
 
 ## [0.10.1] - 2026-05-14

@@ -128,6 +128,19 @@ class AnthropicProvider:
                     result[-1]["content"].append(tool_block)
                 else:
                     result.append({"role": "user", "content": [tool_block]})
+            elif msg.get("role") == "assistant" and "tool_calls" in msg:
+                content: list[dict[str, Any]] = []
+                text = msg.get("content", "")
+                if text:
+                    content.append({"type": "text", "text": text})
+                for tc in msg["tool_calls"]:
+                    content.append({
+                        "type": "tool_use",
+                        "id": tc["id"],
+                        "name": tc["name"],
+                        "input": tc["input"],
+                    })
+                result.append({"role": "assistant", "content": content})
             else:
                 result.append(msg)
 
