@@ -13,7 +13,12 @@ import docker
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from src.config import ResourceConfig, UnraidConfig
-from src.constants import UNRAID_ARRAY_USAGE_THRESHOLD, UNRAID_DISK_TEMP_THRESHOLD
+from src.constants import (
+    UNRAID_ARRAY_USAGE_THRESHOLD,
+    UNRAID_CPU_TEMP_THRESHOLD,
+    UNRAID_CPU_USAGE_THRESHOLD,
+    UNRAID_DISK_TEMP_THRESHOLD,
+)
 from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
@@ -460,6 +465,8 @@ CPU_THRESHOLD_STEPS = [90, 120, 150, 200, 300, 400]
 MEMORY_THRESHOLD_STEPS = [85, 90, 95, 99]
 ARRAY_CAPACITY_STEPS = [80, 85, 90, 95, 98]
 DISK_TEMP_STEPS = [45, 50, 55, 60, 65, 70]
+SERVER_CPU_TEMP_STEPS = [70, 80, 85, 90, 95, 100]
+SERVER_CPU_USAGE_STEPS = [80, 85, 90, 95, 98]
 
 
 def raise_limit_callback(
@@ -759,6 +766,174 @@ def array_set_threshold_callback(
             label = "Disk Temperature"
             unit = "°C"
             actual = unraid_config.disk_temp_threshold
+
+        if value == 0:
+            msg = f"↩️ *{label}* threshold reset to default ({actual}{unit})"
+        else:
+            msg = f"✅ *{label}* threshold set to {actual}{unit}"
+
+        await callback.answer(f"{'Reset' if value == 0 else 'Set'} to {actual}{unit}")
+
+        if isinstance(callback.message, Message):
+            try:
+                await callback.message.edit_text(msg, parse_mode="Markdown")
+            except TelegramBadRequest:
+                await callback.message.answer(msg.replace("*", ""))
+
+    return handler
+
+
+def server_mute_callback(
+    server_mute_manager: Any,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for server mute button callback handler."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        if not callback.data:
+            return
+
+        parts = callback.data.split(":", 1)
+        if len(parts) < 2:
+            await callback.answer("Invalid callback data")
+            return
+
+        try:
+            minutes = int(parts[1])
+        except ValueError:
+            minutes = 60
+
+        server_mute_manager.mute_server(timedelta(minutes=minutes))
+
+        if minutes >= 1440:
+            duration_str = f"{minutes // 1440} day(s)"
+        elif minutes >= 60:
+            duration_str = f"{minutes // 60} hour(s)"
+        else:
+            duration_str = f"{minutes} minute(s)"
+
+        await callback.answer(f"Muted server alerts for {duration_str}")
+
+        if callback.message:
+            try:
+                await callback.message.answer(
+                    f"🔇 *Muted server alerts* for {duration_str}\n"
+                    f"Use `/unmute-server` to unmute early.",
+                    parse_mode="Markdown",
+                )
+            except TelegramBadRequest:
+                await callback.message.answer(
+                    f"🔇 Muted server alerts for {duration_str}\n"
+                    f"Use /unmute-server to unmute early."
+                )
+
+    return handler
+
+
+def server_threshold_callback(
+    unraid_config: UnraidConfig,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for server threshold adjustment button — shows options."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        if not callback.data:
+            return
+
+        parts = callback.data.split(":")
+        if len(parts) < 3:
+            await callback.answer("Invalid callback data")
+            return
+
+        metric = parts[1]
+        try:
+            current = int(parts[2])
+        except ValueError:
+            current = 0
+
+        await callback.answer()
+
+        if metric == "cpu_temp":
+            steps = SERVER_CPU_TEMP_STEPS
+            unit = "°C"
+            label = "CPU Temperature"
+            default = UNRAID_CPU_TEMP_THRESHOLD
+        elif metric == "cpu_usage":
+            steps = SERVER_CPU_USAGE_STEPS
+            unit = "%"
+            label = "CPU Usage"
+            default = UNRAID_CPU_USAGE_THRESHOLD
+        else:
+            await callback.answer("Unknown metric")
+            return
+
+        options = [v for v in steps if v > current]
+        if not options:
+            options = [steps[-1]]
+
+        buttons: list[list[InlineKeyboardButton]] = []
+        row: list[InlineKeyboardButton] = []
+        for value in options:
+            row.append(InlineKeyboardButton(
+                text=f"{value}{unit}",
+                callback_data=f"srv_set:{metric}:{value}",
+            ))
+        buttons.append(row)
+
+        buttons.append([InlineKeyboardButton(
+            text=f"↩️ Reset to default ({default}{unit})",
+            callback_data=f"srv_set:{metric}:0",
+        )])
+
+        if callback.message:
+            try:
+                await callback.message.answer(
+                    f"⚙️ Set *{label}* threshold\nCurrent: {current}{unit}",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                )
+            except TelegramBadRequest:
+                await callback.message.answer(
+                    f"Set {label} threshold\nCurrent: {current}{unit}",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                )
+
+    return handler
+
+
+def server_set_threshold_callback(
+    unraid_config: UnraidConfig,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for applying a selected server threshold."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        if not callback.data:
+            return
+
+        parts = callback.data.split(":")
+        if len(parts) < 3:
+            await callback.answer("Invalid callback data")
+            return
+
+        metric = parts[1]
+        if metric not in ("cpu_temp", "cpu_usage"):
+            await callback.answer("Invalid metric")
+            return
+
+        try:
+            value = int(parts[2])
+        except ValueError:
+            await callback.answer("Invalid threshold value")
+            return
+
+        unraid_config.set_threshold(metric, value)
+
+        if metric == "cpu_temp":
+            label = "CPU Temperature"
+            unit = "°C"
+            actual = unraid_config.cpu_temp_threshold
+        else:
+            label = "CPU Usage"
+            unit = "%"
+            actual = unraid_config.cpu_usage_threshold
 
         if value == 0:
             msg = f"↩️ *{label}* threshold reset to default ({actual}{unit})"

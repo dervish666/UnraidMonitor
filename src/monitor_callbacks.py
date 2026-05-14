@@ -54,6 +54,7 @@ def make_server_alert_handler(
     escape_markdown_fn: Callable[[str], str],
     resource_monitor_ref: list[ResourceMonitor | None],
     array_mute_manager: Any = None,
+    server_mute_manager: Any = None,
     unraid_config: Any = None,
 ) -> Callable[[str, str, str], Awaitable[None]]:
     async def on_server_alert(title: str, message: str, alert_type: str) -> None:
@@ -117,6 +118,29 @@ def make_server_alert_handler(
                         callback_data=f"arr_thresh:disk_temp:{current}",
                     )])
             keyboard = InlineKeyboardMarkup(inline_keyboard=arr_buttons)
+
+        # Add mute and threshold buttons to CPU server alerts
+        if alert_type == "server" and title != "Memory Critical" and keyboard is None:
+            srv_buttons: list[list[InlineKeyboardButton]] = [
+                [
+                    InlineKeyboardButton(text="🔇 Mute 1h", callback_data="srv_mute:60"),
+                    InlineKeyboardButton(text="🔇 Mute 24h", callback_data="srv_mute:1440"),
+                ],
+            ]
+            if unraid_config is not None:
+                if "Temperature" in title:
+                    current = unraid_config.cpu_temp_threshold
+                    srv_buttons.append([InlineKeyboardButton(
+                        text=f"⚙️ Adjust Threshold ({current}°C)",
+                        callback_data=f"srv_thresh:cpu_temp:{current}",
+                    )])
+                elif "CPU Usage" in title:
+                    current = unraid_config.cpu_usage_threshold
+                    srv_buttons.append([InlineKeyboardButton(
+                        text=f"⚙️ Adjust Threshold ({current}%)",
+                        callback_data=f"srv_thresh:cpu_usage:{current}",
+                    )])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=srv_buttons)
 
         for cid in chat_ids:
             try:
@@ -212,6 +236,30 @@ def make_ask_restart_handler(
     return on_ask_restart
 
 
+def _remute_keyboard(
+    mgr: Any, key: str,
+) -> InlineKeyboardMarkup | None:
+    """Build re-mute buttons appropriate to the manager type."""
+    from src.alerts.array_mute_manager import ArrayMuteManager
+    from src.alerts.server_mute_manager import ServerMuteManager
+
+    if isinstance(mgr, ArrayMuteManager):
+        prefix = "arr_mute"
+    elif isinstance(mgr, ServerMuteManager):
+        prefix = "srv_mute"
+    else:
+        prefix = f"mute:{key}"
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔇 Re-mute 1h", callback_data=f"{prefix}:3600"),
+            InlineKeyboardButton(text="🔇 Re-mute 24h", callback_data=f"{prefix}:86400"),
+        ]])
+
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔇 Re-mute 1h", callback_data=f"{prefix}:60"),
+        InlineKeyboardButton(text="🔇 Re-mute 24h", callback_data=f"{prefix}:1440"),
+    ]])
+
+
 def make_mute_maintenance_loop(
     mute_managers: list[Any],
     alert_manager: AlertManagerProxy,
@@ -228,6 +276,7 @@ def make_mute_maintenance_loop(
                     expired = mgr.drain_expired()
                     if expired and alert_manager:
                         for key in expired:
+                            keyboard = _remute_keyboard(mgr, key)
                             for cid in chat_id_store.get_all_chat_ids():
                                 try:
                                     await send_with_retry(
@@ -235,6 +284,7 @@ def make_mute_maintenance_loop(
                                         chat_id=cid,
                                         text=f"\U0001f514 Mute expired for *{escape_markdown_fn(key)}*",
                                         parse_mode="Markdown",
+                                        reply_markup=keyboard,
                                     )
                                 except Exception as e:
                                     logger.error(f"Failed to send mute expiry notification: {e}")

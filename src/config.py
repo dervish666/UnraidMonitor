@@ -367,10 +367,10 @@ class UnraidConfig:
         )
 
     def set_threshold(self, metric: str, value: int) -> None:
-        """Set an array threshold and persist to config.yaml.
+        """Set a threshold and persist to config.yaml.
 
         Args:
-            metric: "array_usage" or "disk_temp".
+            metric: "array_usage", "disk_temp", "cpu_temp", or "cpu_usage".
             value: New threshold value, or 0 to reset to default.
         """
         if metric == "array_usage":
@@ -381,6 +381,14 @@ class UnraidConfig:
             if value == 0:
                 value = UNRAID_DISK_TEMP_THRESHOLD
             self.disk_temp_threshold = max(20, min(value, 100))
+        elif metric == "cpu_temp":
+            if value == 0:
+                value = UNRAID_CPU_TEMP_THRESHOLD
+            self.cpu_temp_threshold = max(20, min(value, 120))
+        elif metric == "cpu_usage":
+            if value == 0:
+                value = UNRAID_CPU_USAGE_THRESHOLD
+            self.cpu_usage_threshold = max(1, min(value, 100))
         else:
             return
         self._persist()
@@ -401,6 +409,8 @@ class UnraidConfig:
         thresholds = unraid.setdefault("thresholds", {})
         thresholds["array_usage"] = self.array_usage_threshold
         thresholds["disk_temp"] = self.disk_temp_threshold
+        thresholds["cpu_temp"] = self.cpu_temp_threshold
+        thresholds["cpu_usage"] = self.cpu_usage_threshold
 
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(

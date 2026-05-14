@@ -136,11 +136,11 @@ def test_aiconfig_default_provider_defaults_to_anthropic():
 
 
 def test_aiconfig_default_model_defaults_to_haiku():
-    """AIConfig.default_model defaults to 'claude-haiku-4-5-20251001'."""
+    """AIConfig.default_model defaults to 'haiku' family name."""
     from src.config import AIConfig
 
     ai = AIConfig.from_dict({})
-    assert ai.default_model == "claude-haiku-4-5-20251001"
+    assert ai.default_model == "haiku"
 
 
 def test_aiconfig_anthropic_prompt_caching_defaults_to_true():
@@ -245,10 +245,10 @@ def test_aiconfig_existing_fields_unchanged():
 
     ai = AIConfig.from_dict({})
 
-    # Existing model defaults
-    assert ai.pattern_analyzer_model == "claude-haiku-4-5-20251001"
-    assert ai.nl_processor_model == "claude-sonnet-4-5-20250929"
-    assert ai.diagnostic_model == "claude-haiku-4-5-20251001"
+    # Existing model defaults (family names)
+    assert ai.pattern_analyzer_model == "haiku"
+    assert ai.nl_processor_model == "sonnet"
+    assert ai.diagnostic_model == "haiku"
 
     # Existing token defaults
     assert ai.pattern_analyzer_max_tokens == 500
@@ -324,6 +324,6 @@ ai:
         config = AppConfig(settings)
 
         assert config.ai.default_provider == "anthropic"
-        assert config.ai.default_model == "claude-haiku-4-5-20251001"
+        assert config.ai.default_model == "haiku"
         assert config.ai.anthropic_prompt_caching is True
         assert config.ai.ollama_host == "http://localhost:11434"

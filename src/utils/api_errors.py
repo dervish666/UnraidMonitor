@@ -46,6 +46,18 @@ def handle_llm_error(error: Exception) -> APIErrorResult:
                 log_level=logging.ERROR,
             )
 
+        if isinstance(error, anthropic.NotFoundError):
+            logger.error(f"Anthropic model not found: {error}")
+            return APIErrorResult(
+                user_message=(
+                    "The configured AI model is no longer available. "
+                    "Use /model to switch to a different model, "
+                    "or update the model family (sonnet, haiku, opus) in your config."
+                ),
+                is_retryable=False,
+                log_level=logging.ERROR,
+            )
+
         if isinstance(error, anthropic.BadRequestError):
             logger.error(f"Anthropic bad request: {error}")
             return APIErrorResult(

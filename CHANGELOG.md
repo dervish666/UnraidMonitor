@@ -2,6 +2,20 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.10.0] - 2026-05-14
+
+### Added
+- **Server alert action buttons** — CPU temperature and CPU usage alerts now include Mute (1h/24h) and Adjust Threshold buttons with `srv_mute:`, `srv_thresh:`, `srv_set:` callback patterns
+- **Mute expiry re-mute buttons** — Mute expiry notifications now include Re-mute 1h/24h buttons, adapting callback data to the mute type (container, array, or server)
+- **Model family system** — Config and `/model` accept family names (`sonnet`, `haiku`, `opus`) instead of exact model IDs; resolved to latest available via `client.models.list()` at startup with hardcoded fallbacks
+- **Per-feature model switching** — `/model chat sonnet`, `/model diagnose haiku`, `/model analyze opus` set models per AI feature; `/model <feature> default` resets to global; persisted to `model_selection.json`
+- **Retired model aliases** — Automatically maps discontinued model IDs (e.g. `claude-sonnet-4-5`) to current replacements with a logged warning
+
+### Changed
+- **Default model constants** — Defaults now use family names (`haiku`, `sonnet`) instead of dated model IDs, making config resilient to model retirements
+- **`/model` command** — Shows per-feature model status, supports quick-set syntax (`/model sonnet`), and displays family names in provider picker
+- **UnraidConfig.set_threshold** — Extended to persist `cpu_temp` and `cpu_usage` thresholds in addition to array thresholds
+
 ## [0.9.7] - 2026-05-13
 
 ### Added

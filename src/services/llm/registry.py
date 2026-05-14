@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,12 +17,30 @@ from src.services.llm.provider import LLMProvider, ModelInfo
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Well-known models per provider
+# Model families — user-facing shorthand resolved to concrete IDs
 # ---------------------------------------------------------------------------
 
-_ANTHROPIC_MODELS: list[ModelInfo] = [
-    ModelInfo(id="claude-sonnet-4-5", name="Claude Sonnet 4.5", provider="anthropic"),
-    ModelInfo(id="claude-haiku-4-5", name="Claude Haiku 4.5", provider="anthropic"),
+_MODEL_FAMILIES: dict[str, str] = {
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5-20251001",
+    "opus": "claude-opus-4-6",
+}
+
+_FAMILY_PREFIX = re.compile(r"^claude-(\w+)-")
+
+_MODEL_ALIASES: dict[str, str] = {
+    "claude-sonnet-4-5": "claude-sonnet-4-6",
+    "claude-sonnet-4-5-20250929": "claude-sonnet-4-6",
+}
+
+# ---------------------------------------------------------------------------
+# Well-known models per provider (shown in /model UI)
+# ---------------------------------------------------------------------------
+
+_ANTHROPIC_FAMILY_MODELS: list[ModelInfo] = [
+    ModelInfo(id="sonnet", name="Claude Sonnet (latest)", provider="anthropic"),
+    ModelInfo(id="haiku", name="Claude Haiku (latest)", provider="anthropic"),
+    ModelInfo(id="opus", name="Claude Opus (latest)", provider="anthropic"),
 ]
 
 _OPENAI_MODELS: list[ModelInfo] = [
@@ -51,9 +70,9 @@ class ProviderRegistry:
     use.  AI consumers call ``get_provider(feature=...)`` and receive a ready-to-use
     ``LLMProvider`` instance.
 
-    Constructor accepts optional clients for each provider, plus a default model
-    and per-feature override map.  On startup, loads any persisted model selection
-    from ``data/model_selection.json`` (overrides the constructor default).
+    Supports model **family names** (``"sonnet"``, ``"haiku"``, ``"opus"``) in
+    addition to full model IDs.  Family names are resolved to concrete model IDs
+    using API-discovered models when available, falling back to hardcoded defaults.
     """
 
     def __init__(
@@ -67,6 +86,7 @@ class ProviderRegistry:
         feature_models: dict[str, str] | None = None,
         data_dir: str | None = None,
         ollama_default_model: str = "qwen2.5:7b",
+        discovered_anthropic_models: list[str] | None = None,
     ) -> None:
         # Store raw clients
         self._anthropic_client = anthropic_client
@@ -75,8 +95,13 @@ class ProviderRegistry:
         self._ollama_models: list[ModelInfo] = ollama_models or []
         self._ollama_default_model = ollama_default_model
 
+        # API-discovered Anthropic model IDs (populated at startup)
+        self._discovered_anthropic: set[str] = set(discovered_anthropic_models or [])
+        if self._discovered_anthropic:
+            self._update_families_from_discovered()
+
         # Per-feature model overrides (feature_name -> model_id)
-        self._feature_models: dict[str, str] = feature_models or {}
+        self._feature_models: dict[str, str] = dict(feature_models or {})
 
         # Persistence path
         self._data_dir = data_dir or "data"
@@ -85,21 +110,20 @@ class ProviderRegistry:
         self._default_provider_name: str | None = None
         self._default_model_name: str | None = None
 
-        # Try to load persisted selection first
+        # Try to load persisted selection first (may also merge feature overrides)
         persisted = self._load_persisted_selection()
         if persisted and self._has_provider(persisted[0]):
             self._default_provider_name = persisted[0]
-            self._default_model_name = persisted[1]
+            self._default_model_name = self._resolve_model(persisted[1])
         elif default_model:
-            provider_name = self._detect_provider(default_model)
+            resolved = self._resolve_model(default_model)
+            provider_name = self._detect_provider(resolved)
             if provider_name:
                 self._default_provider_name = provider_name
-                self._default_model_name = default_model
+                self._default_model_name = resolved
             else:
-                # default_model can't be served by any configured provider; auto-select
                 self._auto_select_provider()
         else:
-            # No default_model specified; auto-select the first available provider
             self._auto_select_provider()
 
     # ------------------------------------------------------------------
@@ -114,13 +138,12 @@ class ProviderRegistry:
         """
         # Check feature override
         if feature != "default" and feature in self._feature_models:
-            override_model = self._feature_models[feature]
+            override_model = self._resolve_model(self._feature_models[feature])
             override_provider_name = self._detect_provider(override_model)
             if override_provider_name:
                 provider = self._create_provider(override_provider_name, override_model)
                 if provider is not None:
                     return provider
-            # Fall through to default if override can't be fulfilled
 
         # Global default
         if self._default_provider_name and self._default_model_name:
@@ -133,13 +156,37 @@ class ProviderRegistry:
     def set_model(self, provider_name: str, model_name: str) -> None:
         """Switch the global default model and persist to disk.
 
-        Args:
-            provider_name: One of ``"anthropic"``, ``"openai"``, ``"ollama"``.
-            model_name: The model ID (e.g. ``"gpt-4o"``, ``"claude-sonnet-4-5"``).
+        Accepts family names (``"sonnet"``) or full IDs (``"claude-sonnet-4-6"``).
         """
+        resolved = self._resolve_model(model_name)
         self._default_provider_name = provider_name
-        self._default_model_name = model_name
+        self._default_model_name = resolved
         self._persist_selection(provider_name, model_name)
+
+    def set_feature_model(self, feature: str, model_name: str) -> str:
+        """Set a per-feature model override and persist. Returns the resolved ID."""
+        resolved = self._resolve_model(model_name)
+        self._feature_models[feature] = resolved
+        self._persist_selection(
+            self._default_provider_name or "",
+            self._default_model_name or "",
+        )
+        return resolved
+
+    def clear_feature_model(self, feature: str) -> bool:
+        """Remove a per-feature override so it falls back to the global default."""
+        if feature in self._feature_models:
+            del self._feature_models[feature]
+            self._persist_selection(
+                self._default_provider_name or "",
+                self._default_model_name or "",
+            )
+            return True
+        return False
+
+    def get_feature_models(self) -> dict[str, str]:
+        """Return a copy of the current per-feature model overrides."""
+        return dict(self._feature_models)
 
     def get_available_providers(self) -> list[ProviderInfo]:
         """Return info about all configured providers and their models."""
@@ -150,7 +197,7 @@ class ProviderRegistry:
                 ProviderInfo(
                     name="anthropic",
                     display_name="Anthropic",
-                    available_models=list(_ANTHROPIC_MODELS),
+                    available_models=list(_ANTHROPIC_FAMILY_MODELS),
                 )
             )
 
@@ -181,22 +228,66 @@ class ProviderRegistry:
         return None
 
     # ------------------------------------------------------------------
+    # Model family resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_model(self, model_id: str) -> str:
+        """Resolve family names, aliases, and retired models to concrete IDs."""
+        # Family names (sonnet, haiku, opus)
+        if model_id in _MODEL_FAMILIES:
+            resolved = _MODEL_FAMILIES[model_id]
+            logger.info("Resolved family '%s' to %s", model_id, resolved)
+            return resolved
+
+        # Retired model aliases
+        replacement = _MODEL_ALIASES.get(model_id)
+        if replacement:
+            logger.warning("Model %s is retired, using %s instead", model_id, replacement)
+            return replacement
+
+        return model_id
+
+    def _update_families_from_discovered(self) -> None:
+        """Update family defaults using API-discovered models.
+
+        For each family, finds the latest available model by sorting
+        discovered IDs that match the family prefix.
+        """
+        for family in list(_MODEL_FAMILIES.keys()):
+            prefix = f"claude-{family}-"
+            matches = sorted(
+                (m for m in self._discovered_anthropic if m.startswith(prefix)),
+                key=self._model_sort_key,
+                reverse=True,
+            )
+            if matches:
+                # Prefer the alias (no date suffix) over dated versions
+                alias = next((m for m in matches if not re.search(r"-\d{8}$", m)), None)
+                best = alias or matches[0]
+                if best != _MODEL_FAMILIES[family]:
+                    logger.info(
+                        "Updated '%s' family: %s -> %s (from API)",
+                        family, _MODEL_FAMILIES[family], best,
+                    )
+                    _MODEL_FAMILIES[family] = best
+
+    @staticmethod
+    def _model_sort_key(model_id: str) -> tuple[int, int, str]:
+        """Extract (major, minor, full_id) for sorting model versions."""
+        m = re.search(r"-(\d+)-(\d+)", model_id)
+        if m:
+            return (int(m.group(1)), int(m.group(2)), model_id)
+        return (0, 0, model_id)
+
+    # ------------------------------------------------------------------
     # Provider auto-detection
     # ------------------------------------------------------------------
 
     def _auto_select_provider(self) -> None:
-        """Pick the first available provider in priority order: anthropic > openai > ollama.
-
-        For Anthropic and OpenAI, selects the first well-known model for that provider.
-        For Ollama, uses ``self._ollama_default_model`` rather than the first
-        arbitrarily-ordered discovered model.
-
-        Modifies ``_default_provider_name`` and ``_default_model_name`` in place.
-        If no provider is available both attributes remain ``None``.
-        """
+        """Pick the first available provider: anthropic > openai > ollama."""
         if self._anthropic_client is not None:
             self._default_provider_name = "anthropic"
-            self._default_model_name = _ANTHROPIC_MODELS[0].id
+            self._default_model_name = self._resolve_model("sonnet")
         elif self._openai_client is not None:
             self._default_provider_name = "openai"
             self._default_model_name = _OPENAI_MODELS[0].id
@@ -208,12 +299,19 @@ class ProviderRegistry:
         """Detect which provider should serve *model_name*.
 
         Rules:
-        1. ``claude-*`` -> anthropic
-        2. ``gpt-*``, ``o1*``, ``o3*``, ``o4*`` -> openai
-        3. Known ollama model -> ollama
-        4. Unknown -> ollama (if available), else anthropic (if available)
-        5. None if nothing available
+        1. Family names (sonnet, haiku, opus) -> anthropic
+        2. ``claude-*`` -> anthropic
+        3. ``gpt-*``, ``o1*``, ``o3*``, ``o4*`` -> openai
+        4. Known ollama model -> ollama
+        5. Unknown -> ollama (if available), else anthropic (if available)
+        6. None if nothing available
         """
+        # Family names
+        if model_name in _MODEL_FAMILIES:
+            if self._anthropic_client is not None:
+                return "anthropic"
+            return None
+
         # Anthropic models
         if model_name.startswith("claude-"):
             if self._anthropic_client is not None:
@@ -293,7 +391,10 @@ class ProviderRegistry:
         return Path(self._data_dir) / _PERSISTENCE_FILENAME
 
     def _load_persisted_selection(self) -> tuple[str, str] | None:
-        """Load ``(provider, model)`` from JSON, or ``None`` if unavailable."""
+        """Load ``(provider, model)`` from JSON, or ``None`` if unavailable.
+
+        Also merges any persisted per-feature overrides into ``_feature_models``.
+        """
         path = self._persistence_path()
         if not path.exists():
             return None
@@ -301,6 +402,14 @@ class ProviderRegistry:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
+
+            # Merge persisted per-feature overrides (take precedence over config)
+            features = data.get("features")
+            if isinstance(features, dict):
+                for feat, model in features.items():
+                    if isinstance(feat, str) and isinstance(model, str):
+                        self._feature_models[feat] = model
+
             provider = data.get("provider")
             model = data.get("model")
             if isinstance(provider, str) and isinstance(model, str):
@@ -311,11 +420,17 @@ class ProviderRegistry:
         return None
 
     def _persist_selection(self, provider_name: str, model_name: str) -> None:
-        """Write model selection to ``data/model_selection.json``."""
+        """Write model selection and per-feature overrides to JSON."""
         path = self._persistence_path()
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        data = {"provider": provider_name, "model": model_name}
+        data: dict[str, Any] = {
+            "provider": provider_name,
+            "model": model_name,
+        }
+        if self._feature_models:
+            data["features"] = dict(self._feature_models)
+
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)

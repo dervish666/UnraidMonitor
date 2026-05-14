@@ -74,7 +74,7 @@ MAX_CONTAINER_NAME_LENGTH = 256
 # ---------------------------------------------------------------------------
 # Default AI model names
 # ---------------------------------------------------------------------------
-DEFAULT_HAIKU_MODEL = "claude-haiku-4-5-20251001"
-DEFAULT_SONNET_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_HAIKU_MODEL = "haiku"
+DEFAULT_SONNET_MODEL = "sonnet"
 DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"

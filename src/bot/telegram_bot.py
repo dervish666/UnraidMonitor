@@ -41,6 +41,9 @@ from src.bot.alert_callbacks import (
     array_mute_callback,
     array_threshold_callback,
     array_set_threshold_callback,
+    server_mute_callback,
+    server_threshold_callback,
+    server_set_threshold_callback,
 )
 from src.bot.memory_commands import cancel_kill_command
 from src.bot.mute_command import mute_command, mutes_command, unmute_command
@@ -349,6 +352,23 @@ def register_commands(
             dp.callback_query.register(
                 array_set_threshold_callback(unraid_config),
                 F.data.startswith("arr_set:"),
+            )
+
+        # Register server alert button callbacks
+        if server_mute_manager is not None:
+            dp.callback_query.register(
+                server_mute_callback(server_mute_manager),
+                F.data.startswith("srv_mute:"),
+            )
+
+        if server_mute_manager is not None and unraid_config is not None:
+            dp.callback_query.register(
+                server_threshold_callback(unraid_config),
+                F.data.startswith("srv_thresh:"),
+            )
+            dp.callback_query.register(
+                server_set_threshold_callback(unraid_config),
+                F.data.startswith("srv_set:"),
             )
 
         # Register memory commands

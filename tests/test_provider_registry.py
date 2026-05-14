@@ -47,12 +47,12 @@ class TestRegistryConstruction:
     def test_anthropic_only(self):
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
         )
         provider = reg.get_provider()
         assert provider is not None
         assert provider.provider_name == "anthropic"
-        assert provider.model_name == "claude-sonnet-4-5"
+        assert provider.model_name == "claude-sonnet-4-6"
 
     def test_openai_only(self):
         reg = ProviderRegistry(
@@ -155,7 +155,7 @@ class TestFeatureOverrides:
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
             openai_client=_make_openai_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             feature_models={"diagnostic": "gpt-4o"},
         )
         default = reg.get_provider()
@@ -171,7 +171,7 @@ class TestFeatureOverrides:
     def test_feature_override_falls_back_to_default(self):
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             feature_models={"diagnostic": "gpt-4o"},  # no openai client
         )
         # "nl_chat" has no override → falls back to default
@@ -184,7 +184,7 @@ class TestFeatureOverrides:
             anthropic_client=_make_anthropic_client(),
             ollama_client=_make_ollama_client(),
             ollama_models=_sample_ollama_models(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             feature_models={"diagnostic": "llama3.1:8b"},
         )
         diag = reg.get_provider(feature="diagnostic")
@@ -196,7 +196,7 @@ class TestFeatureOverrides:
         """If a feature override references an unavailable model, return None for that model."""
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             feature_models={"diagnostic": "gpt-4o"},  # no openai client
         )
         # diagnostic wants gpt-4o but no openai client → should fall back to default
@@ -220,7 +220,7 @@ class TestGetAvailableProviders:
         assert len(providers) == 1
         assert providers[0].name == "anthropic"
         assert providers[0].display_name == "Anthropic"
-        assert any(m.id == "claude-sonnet-4-5" for m in providers[0].available_models)
+        assert any(m.id == "sonnet" for m in providers[0].available_models)
 
     def test_openai_only(self):
         reg = ProviderRegistry(openai_client=_make_openai_client())
@@ -260,7 +260,7 @@ class TestSetModel:
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
             openai_client=_make_openai_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             data_dir=str(tmp_path),
         )
         assert reg.get_provider().provider_name == "anthropic"
@@ -275,7 +275,7 @@ class TestSetModel:
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
             openai_client=_make_openai_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             data_dir=str(tmp_path),
         )
         reg.set_model("openai", "gpt-4o")
@@ -290,7 +290,7 @@ class TestSetModel:
             anthropic_client=_make_anthropic_client(),
             ollama_client=_make_ollama_client(),
             ollama_models=_sample_ollama_models(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             data_dir=str(tmp_path),
         )
         reg.set_model("ollama", "llama3.1:8b")
@@ -311,16 +311,16 @@ class TestGetCurrentModel:
     def test_returns_tuple(self):
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
         )
         result = reg.get_current_model()
-        assert result == ("anthropic", "claude-sonnet-4-5")
+        assert result == ("anthropic", "claude-sonnet-4-6")
 
     def test_reflects_set_model(self, tmp_path: Path):
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
             openai_client=_make_openai_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             data_dir=str(tmp_path),
         )
         reg.set_model("openai", "gpt-4o-mini")
@@ -336,7 +336,7 @@ class TestAutoDetection:
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
             openai_client=_make_openai_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
         )
         assert reg.get_provider().provider_name == "anthropic"
 
@@ -410,7 +410,7 @@ class TestPersistence:
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
             openai_client=_make_openai_client(),
-            default_model="claude-sonnet-4-5",  # would be the default
+            default_model="claude-sonnet-4-6",  # would be the default
             data_dir=str(tmp_path),
         )
         # Persisted selection should override the constructor default
@@ -425,7 +425,7 @@ class TestPersistence:
 
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             data_dir=str(tmp_path),
         )
         # Should fall back to constructor default
@@ -438,7 +438,7 @@ class TestPersistence:
 
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             data_dir=str(tmp_path),
             # No openai_client!
         )
@@ -451,7 +451,7 @@ class TestPersistence:
         data_dir = tmp_path / "subdir" / "data"
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             data_dir=str(data_dir),
         )
         reg.set_model("anthropic", "claude-haiku-4-5")
@@ -467,7 +467,7 @@ class TestRuntimeSwitching:
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
             openai_client=_make_openai_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             data_dir=str(tmp_path),
         )
         assert reg.get_provider().provider_name == "anthropic"
@@ -494,7 +494,7 @@ class TestRuntimeSwitching:
         reg = ProviderRegistry(
             anthropic_client=_make_anthropic_client(),
             openai_client=_make_openai_client(),
-            default_model="claude-sonnet-4-5",
+            default_model="claude-sonnet-4-6",
             feature_models={"diagnostic": "gpt-4o"},
             data_dir=str(tmp_path),
         )
@@ -517,8 +517,9 @@ class TestWellKnownModels:
         providers = reg.get_available_providers()
         anthropic_info = next(p for p in providers if p.name == "anthropic")
         model_ids = {m.id for m in anthropic_info.available_models}
-        assert "claude-sonnet-4-5" in model_ids
-        assert "claude-haiku-4-5" in model_ids
+        assert "sonnet" in model_ids
+        assert "haiku" in model_ids
+        assert "opus" in model_ids
 
     def test_openai_well_known_models(self):
         reg = ProviderRegistry(openai_client=_make_openai_client())

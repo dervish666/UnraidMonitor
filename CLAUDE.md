@@ -88,7 +88,7 @@ src/utils/telegram_retry.py - Telegram API retry logic for rate limit handling
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.9.7) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.10.0) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 ## Commands
 
@@ -186,6 +186,9 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `arr_mute:minutes` (mute array alerts, e.g., `arr_mute:60`)
 - `arr_thresh:metric:current` (show array threshold options, e.g., `arr_thresh:capacity:85`)
 - `arr_set:metric:value` (apply array threshold, e.g., `arr_set:array_usage:90`, 0 = reset to default)
+- `srv_mute:minutes` (mute server alerts, e.g., `srv_mute:60`)
+- `srv_thresh:metric:current` (show server threshold options, e.g., `srv_thresh:cpu_temp:80`)
+- `srv_set:metric:value` (apply server threshold, e.g., `srv_set:cpu_temp:90`, 0 = reset to default)
 - `model:provider_name`, `model_select:provider:model`, `model:back`
 - `setup:confirm`, `setup:toggle:container_name`, `setup:adjust:category`
 
@@ -211,8 +214,9 @@ Messages use Markdown parse mode. Use `safe_reply()` and `safe_edit()` from `src
 - **Tool call translation** — Anthropic uses `input_schema`/content blocks; OpenAI uses `function`/`parameters`; normalized via `ToolCall` dataclass
 - **Model discovery** — Ollama models discovered at startup via `/api/tags` endpoint
 - **Per-feature overrides** — `feature_models` dict in config allows different models per AI feature (e.g., cheap model for pattern analysis, capable model for NL chat)
-- **Runtime switching** — `/model` command changes the global default; persisted to `data/model_selection.json`
-- **Auto-selection priority** — When no default is set: anthropic → openai → ollama (first available)
+- **Model families** — Config and `/model` accept family names (`sonnet`, `haiku`, `opus`) resolved to latest available model at startup via `client.models.list()` (hardcoded fallback if API unavailable)
+- **Runtime switching** — `/model` sets global default; `/model <feature> <model>` sets per-feature override (features: `chat`, `diagnose`, `analyze`); `/model <feature> default` resets to global. Persisted to `data/model_selection.json`
+- **Auto-selection priority** — When no default is set: anthropic (sonnet) → openai (gpt-4o) → ollama (first available)
 
 ### Patterns
 

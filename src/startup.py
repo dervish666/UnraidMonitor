@@ -91,6 +91,16 @@ async def _build_provider_registry(
         except Exception as e:
             logger.warning(f"Failed to discover Ollama models: {e}")
 
+    # Discover available Anthropic models so family names resolve to the latest
+    discovered_anthropic: list[str] = []
+    if anthropic_client is not None:
+        try:
+            models_page = await anthropic_client.models.list(limit=100)
+            discovered_anthropic = [m.id for m in models_page.data]
+            logger.info("Discovered %d Anthropic models", len(discovered_anthropic))
+        except Exception as e:
+            logger.info("Could not list Anthropic models (using defaults): %s", e)
+
     feature_models_raw = {
         "nl_processor": ai_config.nl_processor_model,
         "diagnostic": ai_config.diagnostic_model,
@@ -106,6 +116,7 @@ async def _build_provider_registry(
         default_model=ai_config.default_model,
         feature_models=feature_models,
         ollama_default_model=ai_config.ollama_default_model,
+        discovered_anthropic_models=discovered_anthropic or None,
     )
 
     providers = registry.get_available_providers()
@@ -144,6 +155,7 @@ def _init_unraid(
         on_server_alert = make_server_alert_handler(
             chat_id_store, bot, config, escape_markdown, uc.resource_monitor_ref,
             array_mute_manager=uc.array_mute_manager,
+            server_mute_manager=uc.server_mute_manager,
             unraid_config=config.unraid,
         )
 
