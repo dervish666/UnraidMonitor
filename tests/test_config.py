@@ -344,8 +344,8 @@ def test_generated_config_loads_all_sections(tmp_path):
 
         # Verify all sections load without errors
         ai = config.ai
-        assert ai.pattern_analyzer_model == "claude-haiku-4-5-20251001"
-        assert ai.nl_processor_model == "claude-sonnet-4-5-20250929"
+        assert ai.pattern_analyzer_model == "haiku"
+        assert ai.nl_processor_model == "sonnet"
 
         bot = config.bot
         assert bot.log_max_lines == 100

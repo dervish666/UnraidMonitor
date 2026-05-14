@@ -2,12 +2,17 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.10.2] - 2026-05-14
+
+### Fixed
+- **"Invalid request to AI service" on chat** — Retired model aliases (e.g. `claude-sonnet-4-5-20250929`) resolved to the family name `"sonnet"` but stopped there, sending an invalid model name to the API. `_resolve_model` now recursively chains aliases through families to concrete IDs (`claude-sonnet-4-5-20250929` → `sonnet` → `claude-sonnet-4-6`)
+- **Config template** — Default config template now uses family names (`haiku`, `sonnet`) instead of dated model IDs, so new installs are resilient to model retirements
+
 ## [0.10.1] - 2026-05-14
 
 ### Fixed
-- **Chat "invalid request" error** — NL processor and diagnostic service now resolve their LLM provider dynamically from the registry on each call, so `/model` changes take effect immediately without restart
+- **Dynamic provider resolution** — NL processor and diagnostic service now resolve their LLM provider dynamically from the registry on each call, so `/model` changes take effect immediately without restart
 - **`/model` not updating config.yaml** — Model changes via `/model` now persist to both `model_selection.json` (runtime) and `config.yaml` (permanent), keeping the config file in sync
-- **Retired model aliases** — Aliases now chain through family names (e.g. `claude-sonnet-4-5` → `sonnet` → latest) so they benefit from API-discovered model resolution
 
 ## [0.10.0] - 2026-05-14
 

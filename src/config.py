@@ -824,9 +824,9 @@ DEFAULT_CONFIG_TEMPLATE = '''# Unraid Monitor Bot Configuration
 # AI / Claude API configuration
 ai:
   models:
-    pattern_analyzer: "claude-haiku-4-5-20251001"
-    nl_processor: "claude-sonnet-4-5-20250929"
-    diagnostic: "claude-haiku-4-5-20251001"
+    pattern_analyzer: "haiku"
+    nl_processor: "sonnet"
+    diagnostic: "haiku"
   max_tokens:
     pattern_analyzer: 500
     nl_processor: 1024

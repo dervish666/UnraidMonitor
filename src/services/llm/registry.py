@@ -252,11 +252,12 @@ class ProviderRegistry:
             logger.info("Resolved family '%s' to %s", model_id, resolved)
             return resolved
 
-        # Retired model aliases
+        # Retired model aliases — recurse to resolve the replacement (which may
+        # itself be a family name like "sonnet")
         replacement = _MODEL_ALIASES.get(model_id)
         if replacement:
             logger.warning("Model %s is retired, using %s instead", model_id, replacement)
-            return replacement
+            return self._resolve_model(replacement)
 
         return model_id
 

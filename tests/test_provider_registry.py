@@ -511,6 +511,39 @@ class TestRuntimeSwitching:
 # Well-known models
 # ---------------------------------------------------------------------------
 
+class TestAliasResolution:
+    """Retired model IDs must chain through family names to concrete IDs."""
+
+    def test_retired_alias_resolves_to_concrete_id(self):
+        reg = ProviderRegistry(anthropic_client=_make_anthropic_client())
+        provider = reg.get_provider("default")
+        assert provider is not None
+        # Simulate what happens when config has an old model ID
+        resolved = reg._resolve_model("claude-sonnet-4-5-20250929")
+        # Must be a concrete model ID, NOT the family name "sonnet"
+        assert resolved != "sonnet"
+        assert resolved.startswith("claude-sonnet-")
+
+    def test_retired_alias_chains_through_family(self):
+        reg = ProviderRegistry(anthropic_client=_make_anthropic_client())
+        # alias → family → concrete
+        resolved = reg._resolve_model("claude-sonnet-4-5")
+        assert resolved != "sonnet"
+        assert resolved.startswith("claude-sonnet-")
+
+    def test_feature_with_retired_model_gets_valid_provider(self, tmp_path: Path):
+        reg = ProviderRegistry(
+            anthropic_client=_make_anthropic_client(),
+            feature_models={"nl_processor": "claude-sonnet-4-5-20250929"},
+            data_dir=str(tmp_path),
+        )
+        provider = reg.get_provider("nl_processor")
+        assert provider is not None
+        assert provider.provider_name == "anthropic"
+        # Model name must be a concrete ID, not "sonnet"
+        assert provider.model_name.startswith("claude-sonnet-")
+
+
 class TestWellKnownModels:
     def test_anthropic_well_known_models(self):
         reg = ProviderRegistry(anthropic_client=_make_anthropic_client())
