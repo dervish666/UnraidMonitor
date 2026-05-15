@@ -170,8 +170,8 @@ To add a new command: (1) create the factory in the appropriate `src/bot/*.py` f
 ### Callback Data Conventions
 
 Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to handle container names containing colons:
-- `restart:container_name`, `logs:container_name`, `diagnose:container_name`
-- `mute:container_name:duration` (e.g., `mute:plex:3600`)
+- `restart:container_name`, `logs:container_name:line_count` (e.g., `logs:plex:50`), `diagnose:container_name`
+- `mute:container_name:duration` (e.g., `mute:plex:60`)
 - `ignore_similar:container_name`
 - `ctrl_confirm:action:container_name`, `ctrl_cancel`
 - `diag_details:container_name`
@@ -180,9 +180,9 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `help:section_key`, `help:back`
 - `res_limit:container_name:metric:threshold` (show threshold options)
 - `res_set:container_name:metric:value` (apply threshold, 0 = reset to default)
-- `mem_kill:container_name`, `mem_restart_yes:container_name`
-- `nl_confirm:action_id`, `nl_cancel`
-- `manage:section` (e.g., `manage:status`, `manage:ignores`, `manage:back`)
+- `mem_kill:container_name`, `mem_restart_yes:container_name`, `mem_restart_no:container_name`, `mem_cancel_kill:container_name`
+- `nl_confirm:action:container` (e.g., `nl_confirm:restart:plex`), `nl_cancel`
+- `manage:section` (e.g., `manage:status`, `manage:resources`, `manage:server`, `manage:disks`, `manage:ignores`, `manage:mutes`, `manage:back`)
 - `arr_mute:minutes` (mute array alerts, e.g., `arr_mute:60`)
 - `arr_thresh:metric:current` (show array threshold options, e.g., `arr_thresh:capacity:85`)
 - `arr_set:metric:value` (apply array threshold, e.g., `arr_set:array_usage:90`, 0 = reset to default)
@@ -190,7 +190,7 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `srv_thresh:metric:current` (show server threshold options, e.g., `srv_thresh:cpu_temp:80`)
 - `srv_set:metric:value` (apply server threshold, e.g., `srv_set:cpu_temp:90`, 0 = reset to default)
 - `model:provider_name`, `model_select:provider:model`, `model:back`
-- `setup:confirm`, `setup:toggle:container_name`, `setup:adjust:category`
+- `setup:confirm`, `setup:toggle:category:container_name` (e.g., `setup:toggle:watched:plex`), `setup:adjust:category`, `setup:adjust_done`
 
 Callback handlers are registered with `F.data.startswith("prefix:")` filters in `register_commands()`.
 
@@ -223,10 +223,10 @@ Messages use Markdown parse mode. Use `safe_reply()` and `safe_edit()` from `src
 - **All async** - Every component uses async/await. Tests use `pytest-asyncio` with `asyncio_mode = "auto"`
 - **Partial name matching** - Container commands accept partial names (e.g., `/logs rad` matches `radarr`)
 - **Graceful degradation** - Bot works without any LLM API keys; AI features just disable. Models without tool support get a note appended to NL responses
-- **JSON persistence** - Mutes and ignores stored in `data/*.json` files with `batch_updates()` context manager to defer saves
+- **JSON persistence** - Mutes and ignores stored in `data/*.json` files (IgnoreManager uses `batch_updates()` context manager to defer saves)
 - **Protected containers** - Listed in `config.yaml`, cannot be controlled via Telegram
 - **Confirmation prompts** - Destructive actions (restart, stop, start, pull) require inline button confirmation (✅ Confirm / ❌ Cancel)
-- **Europe/London timezone** - All displayed timestamps use this timezone
+- **Europe/London timezone** - Default timezone for displayed timestamps (configurable via `TZ` env var)
 - **Prompt caching** - Anthropic API calls use `cache_control` on system prompts and tool definitions for cost savings
 
 ### Testing Conventions
@@ -252,7 +252,10 @@ DEFAULT_MODEL=                # Optional - override default AI model (e.g. qwen2
 UNRAID_API_KEY=               # Optional - enables /server, /array, /disks commands
 CONFIG_PATH=                  # Optional - defaults to config/config.yaml
 LOG_LEVEL=                    # Optional - defaults to INFO
+TZ=                           # Optional - timezone for timestamps (default: Europe/London)
 ```
+
+Environment variables can also be set via `config/.env` (loaded by pydantic-settings).
 
 ## Configuration
 
@@ -264,7 +267,7 @@ LOG_LEVEL=                    # Optional - defaults to INFO
 - `memory_management` - System memory pressure thresholds and kill policy
 - `resource_monitoring` - Per-container CPU/memory alert thresholds
 
-Data files in `data/`: `muted_containers.json`, `server_mutes.json`, `array_mutes.json`, `ignore_patterns.json`, `model_selection.json` (runtime LLM choice)
+Data files in `data/`: `mutes.json`, `server_mutes.json`, `array_mutes.json`, `ignored_errors.json`, `model_selection.json` (runtime LLM choice), `chat_ids.json` (persistent Telegram chat IDs for alert delivery)
 
 ## Design Context
 

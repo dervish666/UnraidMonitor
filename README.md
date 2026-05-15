@@ -19,14 +19,12 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Interactive Dashboard** - `/manage` hub for status, resources, ignores, and mutes
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
 
-## What's New in v0.9.6
+## What's New in v0.11.0
 
-- **In-app threshold adjustment** - Resource alerts include a ⚙️ Raise Limit button to adjust CPU/memory thresholds per container directly from Telegram, no config editing or restart needed
-- **CPU thresholds above 100%** - Linux reports CPU per-core, so multi-threaded apps like Plex can exceed 100%. Thresholds now support values like 200% or 400%
-- **Persistent chat IDs** - Alerts now survive bot restarts without needing to send `/start` again
-- **Multi-provider LLM** - Switch between Anthropic Claude, OpenAI GPT, or local Ollama models at runtime with `/model`
-- **DEFAULT_MODEL env var** - Override the default AI model without editing config
-- **Interactive setup wizard** - `/setup` guides you through Unraid connection and container classification with AI-assisted categorization
+- **Server alert action buttons** (v0.10.0) - CPU temperature and usage alerts now include Mute and Adjust Threshold buttons, matching the UX of container and array alerts
+- **Model family system** (v0.10.0) - Use family names like `sonnet`, `haiku`, `opus` instead of dated model IDs; per-feature model switching with `/model chat sonnet`, `/model diagnose haiku`
+- **Dynamic provider resolution** (v0.10.1-0.10.3) - `/model` changes take effect immediately, config persistence fixes, and tool-call translation fixes for Anthropic API
+- **Security hardening** (v0.11.0) - Prompt injection defense for LLM inputs, SSRF protection in setup wizard, race condition fixes in memory monitor, crash tracker memory leak fix, and tighter file permissions
 
 See the [changelog](CHANGELOG.md) for full details.
 
@@ -121,7 +119,7 @@ Go to **Docker** → **Add Container** and configure:
 | Field | Value |
 |-------|-------|
 | Name | `unraid-monitor-bot` |
-| Repository | `ghcr.io/dervish666/unraidmonitor:latest` |
+| Repository | `dervish/unraidmonitorbot:latest` |
 | Network Type | `bridge` or your preferred network |
 
 **Add these paths:**
@@ -143,11 +141,52 @@ Go to **Docker** → **Add Container** and configure:
 | `OLLAMA_HOST` | (optional) Ollama URL, e.g., `http://192.168.1.100:11434` |
 | `DEFAULT_MODEL` | (optional) Override default model, e.g., `qwen2.5:7b` |
 | `UNRAID_API_KEY` | (optional) Unraid server monitoring |
+| `PUID` | (optional) Runtime user ID for file ownership (default: `99` — Unraid's `nobody`) |
+| `PGID` | (optional) Runtime group ID for file ownership (default: `100` — Unraid's `users`) |
 | `TZ` | Your timezone (e.g., `Europe/London`) |
 
 #### Step 4: Start and verify
 
 Start the container and check the logs for any errors. Message your bot on Telegram with `/start` to begin the interactive setup wizard.
+
+---
+
+### Docker on Other Systems
+
+For non-Unraid Docker hosts (Ubuntu, Debian, Synology, etc.), use `docker-compose`:
+
+1. **Clone the repository** and create your environment file:
+
+   ```bash
+   git clone https://github.com/dervish666/UnraidMonitor.git
+   cd UnraidMonitor
+   cp config/.env.example config/.env
+   # Edit config/.env with your TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS, etc.
+   ```
+
+2. **Adjust docker-compose.yml** volume paths to suit your system (the defaults point to Unraid appdata paths). For example:
+
+   ```yaml
+   volumes:
+     - /var/run/docker.sock:/var/run/docker.sock:ro
+     - ./config:/app/config
+     - ./data:/app/data
+   ```
+
+3. **Check your Docker socket GID** and set it if it differs from the default (281):
+
+   ```bash
+   ls -ln /var/run/docker.sock   # look at the 4th column
+   echo "DOCKER_GID=999" >> .env  # adjust to match
+   ```
+
+4. **Build and start:**
+
+   ```bash
+   docker-compose up -d
+   ```
+
+5. Message your bot on Telegram with `/start` to begin the setup wizard.
 
 ---
 
@@ -499,7 +538,7 @@ This means the container can't access the Docker socket.
    docker-compose up -d
    ```
 
-4. **Last resort:** Edit `docker-compose.yml` and uncomment `user: root`
+4. **Last resort:** Add `user: root` to the service in `docker-compose.yml` to bypass permission issues (not recommended for production)
 
 ### AI features not working
 
@@ -550,7 +589,8 @@ data/
 ├── mutes.json            # Container mutes
 ├── server_mutes.json     # Server mutes
 ├── array_mutes.json      # Array mutes
-└── model_selection.json  # Active LLM provider/model choice
+├── model_selection.json  # Active LLM provider/model choice
+└── chat_ids.json         # Persistent Telegram chat IDs for alert delivery across restarts
 ```
 
 ---
