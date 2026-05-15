@@ -16,4 +16,4 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: dervish/unraidmonitorbot
-          short-description: "Telegram bot for monitoring Unraid servers with AI-powered diagnostics, container control, and natural language interaction"
+          short-description: "Telegram bot for monitoring Unraid servers with AI diagnostics and container control"
