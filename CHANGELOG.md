@@ -2,6 +2,14 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.11.1] - 2026-05-17
+
+### Changed
+- **Dependencies upgraded** — aiogram 3.26→3.28, aiohttp 3.13.3→3.13.5, anthropic 0.85→0.102, openai 2.29→2.37, pydantic 2.12→2.13, mypy 1.20→2.1
+- **Removed unused `unraid-api` dependency** — project uses direct GraphQL via aiohttp; removes unnecessary transitive deps
+- **Tightened openai constraint** — lower bound raised from >=1.50.0 to >=2.0.0 to prevent accidental v1 downgrades
+- **Added mypy to dev dependencies** — was previously installed but undeclared in pyproject.toml
+
 ## [0.11.0] - 2026-05-14
 
 ### Security
