@@ -141,7 +141,11 @@ class UnraidSystemMonitor:
     async def _rate_limited_alert(self, key: str, **kwargs: Any) -> None:
         """Send an alert only if cooldown has elapsed for this key."""
         now = time.monotonic()
-        last = self._last_alert_times.get(key, 0)
+        # Default to -inf (not 0) so the first alert always fires: on a
+        # freshly-booted host time.monotonic() can be < _ALERT_COOLDOWN, and a
+        # sentinel of 0 would wrongly suppress the very first alert within the
+        # first few minutes of uptime.
+        last = self._last_alert_times.get(key, float("-inf"))
         if now - last < _ALERT_COOLDOWN:
             logger.debug(f"Suppressing duplicate {key} alert (cooldown)")
             return
