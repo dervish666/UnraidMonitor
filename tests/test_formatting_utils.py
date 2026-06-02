@@ -227,12 +227,17 @@ class TestFormatMuteExpiry:
     """Tests for format_mute_expiry."""
 
     def test_same_day(self):
+        from unittest.mock import patch
         from zoneinfo import ZoneInfo
 
         tz = ZoneInfo("Europe/London")
-        now = datetime.now(tz)
-        expiry = now + timedelta(hours=1)
-        result = format_mute_expiry(expiry)
+        # Pin "now" to midday so expiry (+1h) cannot roll into tomorrow.
+        # Using the real clock made this flaky in the last hour before midnight.
+        fixed_now = datetime(2026, 6, 2, 12, 0, tzinfo=tz)
+        with patch("src.utils.formatting.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            expiry = fixed_now + timedelta(hours=1)
+            result = format_mute_expiry(expiry)
         assert result.startswith("until ")
         assert "tomorrow" not in result
 
