@@ -52,6 +52,10 @@ class AlertSender(Protocol):
 
     async def send_recovery_alert(self, container_name: str) -> None: ...
 
+    async def send_update_alert(self, updates: list[tuple[str, str]]) -> None: ...
+
+    async def send_autoheal_alert(self, container_name: str, attempt: int, max_attempts: int, gave_up: bool) -> None: ...
+
 
 class ChatIdStore:
     """Persistent storage for alert chat IDs (supports multiple users).
@@ -358,6 +362,26 @@ Exceeded for: {duration_str}
             logger.info(f"Sent health alert for {container_name}")
         except Exception as e:
             logger.error(f"Failed to send health alert: {e}")
+
+    async def send_autoheal_alert(self, container_name: str, attempt: int, max_attempts: int, gave_up: bool) -> None:
+        """Notify that an unhealthy container was auto-restarted (or that we gave up)."""
+        safe_name = escape_markdown(container_name)
+        if gave_up:
+            text = (f"⚠️ *Auto-heal gave up:* {safe_name}\n\n"
+                    f"Restarted {attempt} times but it's still unhealthy. Manual attention needed.")
+        else:
+            text = (f"🔧 *Auto-restarted:* {safe_name}\n\n"
+                    f"Container was unhealthy - auto-restarted (attempt {attempt}/{max_attempts}).")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📋 Logs", callback_data=truncate_callback_data("logs:", f"{container_name}:50")),
+            InlineKeyboardButton(text="🔍 Diagnose", callback_data=truncate_callback_data("diagnose:", container_name)),
+        ]])
+        try:
+            await send_with_retry(self.bot.send_message, chat_id=self.chat_id, text=text,
+                                  parse_mode="Markdown", reply_markup=keyboard)
+            logger.info(f"Sent autoheal alert for {container_name} (gave_up={gave_up})")
+        except Exception as e:
+            logger.error(f"Failed to send autoheal alert: {e}")
 
     async def send_recovery_alert(self, container_name: str) -> None:
         """Send a brief recovery notification when a crashed container starts."""

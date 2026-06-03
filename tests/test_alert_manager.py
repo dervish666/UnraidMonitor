@@ -343,3 +343,22 @@ async def test_alert_manager_sends_recovery_alert():
     assert "radarr" in text
     assert "recovered" in text
     assert "✅" in text
+
+
+async def test_send_autoheal_alert_restarted():
+    from src.alerts.manager import AlertManager
+    bot = MagicMock(); bot.send_message = AsyncMock()
+    mgr = AlertManager(bot=bot, chat_id=123)
+    await mgr.send_autoheal_alert(container_name="radarr", attempt=1, max_attempts=3, gave_up=False)
+    bot.send_message.assert_awaited_once()
+    text = bot.send_message.call_args.kwargs["text"]
+    assert "Auto-restarted" in text and "radarr" in text
+
+
+async def test_send_autoheal_alert_gave_up():
+    from src.alerts.manager import AlertManager
+    bot = MagicMock(); bot.send_message = AsyncMock()
+    mgr = AlertManager(bot=bot, chat_id=123)
+    await mgr.send_autoheal_alert(container_name="radarr", attempt=3, max_attempts=3, gave_up=True)
+    text = bot.send_message.call_args.kwargs["text"]
+    assert "gave up" in text.lower()
