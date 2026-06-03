@@ -84,3 +84,22 @@ DEFAULT_HAIKU_MODEL = "haiku"
 DEFAULT_SONNET_MODEL = "sonnet"
 DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+
+# Image-update detection defaults
+IMAGE_UPDATE_POLL_INTERVAL_HOURS = 24
+IMAGE_UPDATE_MAX_SHOWN = 10  # cap Pull buttons per digest message
+
+# Auto-heal defaults
+AUTOHEAL_MAX_RESTARTS = 3
+AUTOHEAL_WINDOW_MINUTES = 60
+
+# Startup "What's new" - curated user-facing one-liners per version.
+# Shown once when BOT_VERSION first differs from data/announced_version.json.
+ANNOUNCED_VERSION_PATH = "data/announced_version.json"
+WHATS_NEW: dict[str, list[str]] = {
+    "0.12.0": [
+        "Image-update detection - notified when a newer image is available (opt-in: image_updates.enabled)",
+        "Auto-heal - auto-restart unhealthy containers (opt-in: auto_heal.containers)",
+        "Tests now run in CI on every change",
+    ],
+}
