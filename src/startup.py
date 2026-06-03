@@ -294,6 +294,9 @@ async def _start_background_monitors(
     if bg.memory_monitor is not None:
         bg.add_task(asyncio.create_task(bg.memory_monitor.start()))
 
+    if bg.image_update_monitor is not None:
+        bg.add_task(asyncio.create_task(bg.image_update_monitor.start()))
+
     if uc.client:
         try:
             await uc.client.connect()
@@ -425,6 +428,18 @@ async def start_monitoring(
         logger.info("Memory monitoring enabled")
 
     bg.memory_monitor = memory_monitor
+
+    image_update_monitor = None
+    if config.image_updates.enabled:
+        from src.monitors.image_update_monitor import ImageUpdateMonitor
+        image_update_monitor = ImageUpdateMonitor(
+            docker_client=monitor.shared_client,  # type: ignore[arg-type]
+            config=config.image_updates,
+            alert_manager=alert_manager,
+            ignored_containers=config.ignored_containers,
+        )
+        logger.info("Image-update detection enabled")
+    bg.image_update_monitor = image_update_monitor
 
     nl_processor = _init_nl_processor(
         registry, state, monitor, resource_monitor, recent_errors_buffer,

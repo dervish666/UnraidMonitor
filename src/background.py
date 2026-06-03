@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from src.monitors.docker_events import DockerEventMonitor
+from src.monitors.image_update_monitor import ImageUpdateMonitor
 from src.monitors.log_watcher import LogWatcher
 from src.monitors.memory_monitor import MemoryMonitor
 from src.monitors.resource_monitor import ResourceMonitor
@@ -24,6 +25,7 @@ class _BackgroundTasks:
         self.log_watcher: LogWatcher | None = None
         self.resource_monitor: ResourceMonitor | None = None
         self.memory_monitor: MemoryMonitor | None = None
+        self.image_update_monitor: ImageUpdateMonitor | None = None
         self.unraid_client: UnraidClientWrapper | None = None
         self.unraid_system_monitor: UnraidSystemMonitor | None = None
         self.unraid_array_monitor: ArrayMonitor | None = None
@@ -43,6 +45,8 @@ class _BackgroundTasks:
             self.resource_monitor.stop()
         if self.memory_monitor is not None:
             self.memory_monitor.stop()
+        if self.image_update_monitor is not None:
+            self.image_update_monitor.stop()
         if self.unraid_system_monitor:
             await self.unraid_system_monitor.stop()
         if self.unraid_array_monitor:
