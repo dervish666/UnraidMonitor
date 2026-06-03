@@ -10,6 +10,8 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.constants import (
+    AUTOHEAL_MAX_RESTARTS,
+    AUTOHEAL_WINDOW_MINUTES,
     CONFIRMATION_TIMEOUT_SECONDS,
     DEFAULT_COOLDOWN_SECONDS,
     DEFAULT_CPU_PERCENT,
@@ -23,6 +25,7 @@ from src.constants import (
     DIAGNOSTIC_DETAIL_MAX_TOKENS,
     DIAGNOSE_MAX_LINES,
     ERROR_DISPLAY_MAX_CHARS,
+    IMAGE_UPDATE_POLL_INTERVAL_HOURS,
     LOG_MAX_CHARS,
     LOG_MAX_LINES,
     MEMORY_CRITICAL_THRESHOLD,
@@ -331,6 +334,40 @@ class MemoryConfig:
 
 
 @dataclass
+class ImageUpdatesConfig:
+    """Configuration for proactive image-update detection."""
+
+    enabled: bool = False
+    poll_interval_hours: int = IMAGE_UPDATE_POLL_INTERVAL_HOURS
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ImageUpdatesConfig":
+        return cls(
+            enabled=data.get("enabled", False),
+            poll_interval_hours=max(data.get("poll_interval_hours", IMAGE_UPDATE_POLL_INTERVAL_HOURS), 1),
+        )
+
+
+@dataclass
+class AutoHealConfig:
+    """Configuration for auto-restarting unhealthy containers."""
+
+    enabled: bool = True
+    containers: list[str] = field(default_factory=list)
+    max_restarts: int = AUTOHEAL_MAX_RESTARTS
+    window_minutes: int = AUTOHEAL_WINDOW_MINUTES
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AutoHealConfig":
+        return cls(
+            enabled=data.get("enabled", True),
+            containers=data.get("containers", []) or [],
+            max_restarts=max(data.get("max_restarts", AUTOHEAL_MAX_RESTARTS), 1),
+            window_minutes=max(data.get("window_minutes", AUTOHEAL_WINDOW_MINUTES), 1),
+        )
+
+
+@dataclass
 class UnraidConfig:
     """Configuration for Unraid server monitoring."""
 
@@ -508,6 +545,8 @@ class AppConfig:
         self._memory_management = MemoryConfig.from_dict(
             self._yaml_config.get("memory_management", {})
         )
+        self._image_updates = ImageUpdatesConfig.from_dict(self._yaml_config.get("image_updates", {}))
+        self._auto_heal = AutoHealConfig.from_dict(self._yaml_config.get("auto_heal", {}))
 
     @property
     def ignored_containers(self) -> list[str]:
@@ -592,6 +631,16 @@ class AppConfig:
     def memory_management(self) -> MemoryConfig:
         """Get memory management configuration."""
         return self._memory_management
+
+    @property
+    def image_updates(self) -> ImageUpdatesConfig:
+        """Get image-update detection configuration."""
+        return self._image_updates
+
+    @property
+    def auto_heal(self) -> AutoHealConfig:
+        """Get auto-heal configuration."""
+        return self._auto_heal
 
 
 class ConfigWriter:

@@ -227,3 +227,33 @@ ai:
                 app_config = AppConfig(settings)
 
                 assert app_config.ai.ollama_host == "http://192.168.1.50:11434"
+
+
+def test_image_updates_config_defaults():
+    from src.config import ImageUpdatesConfig
+    c = ImageUpdatesConfig.from_dict({})
+    assert c.enabled is False
+    assert c.poll_interval_hours == 24
+
+
+def test_image_updates_config_clamps_interval():
+    from src.config import ImageUpdatesConfig
+    c = ImageUpdatesConfig.from_dict({"enabled": True, "poll_interval_hours": 0})
+    assert c.enabled is True
+    assert c.poll_interval_hours == 1
+
+
+def test_auto_heal_config_defaults():
+    from src.config import AutoHealConfig
+    c = AutoHealConfig.from_dict({})
+    assert c.enabled is True
+    assert c.containers == []
+    assert c.max_restarts == 3
+    assert c.window_minutes == 60
+
+
+def test_auto_heal_config_parses_list():
+    from src.config import AutoHealConfig
+    c = AutoHealConfig.from_dict({"containers": ["radarr", "sonarr"], "max_restarts": 5})
+    assert c.containers == ["radarr", "sonarr"]
+    assert c.max_restarts == 5
