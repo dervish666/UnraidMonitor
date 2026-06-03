@@ -883,6 +883,7 @@ def pull_callback(
             return
         container_name = parts[1]
         if not validate_container_name(container_name):
+            logger.warning(f"Invalid container name in callback: {container_name[:50]}")
             await callback.answer("Invalid container name")
             return
         matches = state.find_by_name(container_name)
@@ -896,8 +897,8 @@ def pull_callback(
         await callback.answer()
         info = state.get(actual_name)
         status = info.status if info else "unknown"
-        from src.bot.control_commands import _build_confirmation
-        text, keyboard = _build_confirmation("pull", actual_name, status)
+        from src.bot.control_commands import build_confirmation
+        text, keyboard = build_confirmation("pull", actual_name, status)
         if callback.message:
             await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
 

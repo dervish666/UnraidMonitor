@@ -35,7 +35,7 @@ def _find_container(state: ContainerStateManager, query: str) -> tuple[str | Non
     return matches[0].name, None
 
 
-def _build_confirmation(action: str, container_name: str, status: str) -> tuple[str, InlineKeyboardMarkup]:
+def build_confirmation(action: str, container_name: str, status: str) -> tuple[str, InlineKeyboardMarkup]:
     """Build confirmation message and inline keyboard."""
     emoji = ACTION_EMOJI.get(action, "⚠️")
 
@@ -89,7 +89,7 @@ def _control_command(
         container_info = state.get(container_name)
         status = container_info.status if container_info else "unknown"
 
-        confirm_msg, keyboard = _build_confirmation(action, container_name, status)
+        confirm_msg, keyboard = build_confirmation(action, container_name, status)
         await safe_reply(message, confirm_msg, reply_markup=keyboard)
 
     return handler
