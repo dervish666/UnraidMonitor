@@ -35,5 +35,5 @@ def write_announced_version(path: str, version: str) -> None:
         except Exception:
             os.unlink(tmp)
             raise
-    except OSError as e:
+    except Exception as e:
         logger.error(f"Failed to write announced version to {path}: {e}")

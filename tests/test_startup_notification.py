@@ -42,3 +42,18 @@ async def test_whats_new_hidden_on_same_version(tmp_path, monkeypatch):
     text = bot.send_message.call_args.kwargs["text"]
     assert "What's new" not in text
     assert "Bot started" in text
+
+
+async def test_whats_new_hidden_for_dev_version(tmp_path, monkeypatch):
+    bot, chat_store, state, uc = _ctx()
+    path = str(tmp_path / "announced_version.json")
+    monkeypatch.setattr(startup_mod, "BOT_VERSION", "0.99.0")
+    monkeypatch.setattr(startup_mod, "ANNOUNCED_VERSION_PATH", path)
+    await startup_mod._send_startup_notification(
+        bot, chat_store, state, {"containers": []}, uc,
+        image_update_monitor=None, auto_heal_config=AutoHealConfig(),
+        resource_monitor=None, memory_monitor=None, log_watcher=None, monitor=None,
+    )
+    text = bot.send_message.call_args.kwargs["text"]
+    assert "What's new" not in text
+    assert "Bot started" in text
