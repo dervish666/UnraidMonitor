@@ -12,6 +12,8 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Smart Ignore Patterns** - AI-generated patterns to filter known errors, with interactive toggle selection
 - **Multi-Provider LLM** - Switch between Anthropic Claude, OpenAI GPT, or local Ollama models at runtime
 - **Container Control** - Start, stop, restart, and pull containers with inline confirmation buttons
+- **Image-Update Detection** - Opt-in daily digest of containers with newer images available, with Pull buttons
+- **Auto-Heal** - Opt-in automatic restart of unhealthy containers (HEALTHCHECK failures) with storm guard
 - **Unraid Server Monitoring** - CPU/memory, temperatures, UPS status, and array health
 - **Memory Pressure Management** - Automatic container priority handling during high memory
 - **Mute System** - Temporarily silence alerts per container, server, or array
@@ -19,12 +21,12 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Interactive Dashboard** - `/manage` hub for status, resources, ignores, and mutes
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
 
-## What's New in v0.11.0
+## What's New in v0.12.0
 
-- **Server alert action buttons** (v0.10.0) - CPU temperature and usage alerts now include Mute and Adjust Threshold buttons, matching the UX of container and array alerts
-- **Model family system** (v0.10.0) - Use family names like `sonnet`, `haiku`, `opus` instead of dated model IDs; per-feature model switching with `/model chat sonnet`, `/model diagnose haiku`
-- **Dynamic provider resolution** (v0.10.1-0.10.3) - `/model` changes take effect immediately, config persistence fixes, and tool-call translation fixes for Anthropic API
-- **Security hardening** (v0.11.0) - Prompt injection defense for LLM inputs, SSRF protection in setup wizard, race condition fixes in memory monitor, crash tracker memory leak fix, and tighter file permissions
+- **Image-update detection** - Opt-in daily digest of containers with newer images available, with per-container Pull buttons (`image_updates.enabled: true`)
+- **Auto-heal** - Opt-in automatic restart of containers that fail their Docker HEALTHCHECK, with a storm guard that gives up after configurable retries (`auto_heal.containers: [...]`)
+- **Richer startup message** - On first boot after an upgrade, shows a "What's new" summary so you always know what changed
+- **CI test pipeline** - Tests, lint, and type-check now run automatically on every push and pull request
 
 See the [changelog](CHANGELOG.md) for full details.
 
@@ -348,6 +350,30 @@ unraid:
     disk_temp: 50        # Alert above this temp (C)
     array_usage: 85      # Alert above this %
     ups_battery: 30      # Alert below this %
+```
+
+### Image-Update Detection
+
+Checks once per day (configurable) whether a newer image is available for watched containers. Sends a single batched digest message with Pull buttons. Disabled by default — opt in per-deployment.
+
+```yaml
+image_updates:
+  enabled: false             # Set true to enable daily image-update checks
+  poll_interval_hours: 24    # How often to check (minimum 1)
+```
+
+### Auto-Heal
+
+Automatically restarts containers that report a Docker HEALTHCHECK `unhealthy` status. A per-container storm guard gives up after `max_restarts` within `window_minutes` and sends an escalation alert. Protected containers are never touched regardless of this setting.
+
+```yaml
+auto_heal:
+  enabled: true              # Master switch
+  containers:                # List of container names to auto-heal (opt-in)
+    - radarr
+    - sonarr
+  max_restarts: 3            # Give up after this many restarts in the window
+  window_minutes: 60         # Rolling window for the restart count
 ```
 
 ---

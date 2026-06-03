@@ -65,6 +65,7 @@ src/monitors/docker_events.py - DockerEventMonitor with CrashTracker for contain
 src/monitors/log_watcher.py - LogWatcher for streaming container logs, error detection
 src/monitors/resource_monitor.py - ResourceMonitor for per-container CPU/memory polling
 src/monitors/memory_monitor.py - MemoryMonitor for system memory pressure management
+src/monitors/image_update_monitor.py - ImageUpdateMonitor for daily image digest polling and batched update alerts
 
 # Services
 src/services/docker_client.py - SharedDockerClient wrapper for reconnectable Docker access
@@ -73,6 +74,7 @@ src/services/nl_tools.py - Tool definitions and executor for Claude tool use
 src/services/container_control.py - ContainerController for safe restart/stop/start
 src/services/container_classifier.py - ContainerClassifier using patterns and AI for roles
 src/services/diagnostic.py - DiagnosticService for AI container log analysis
+src/services/auto_healer.py - AutoHealer for opt-in auto-restart of unhealthy containers with storm guard
 
 # Unraid
 src/unraid/client.py - UnraidClientWrapper with direct GraphQL API access
@@ -85,10 +87,11 @@ src/utils/formatting.py - Bytes/uptime formatting, safe_reply/safe_edit, format_
 src/utils/rate_limiter.py - PerUserRateLimiter for per-user API rate limiting
 src/utils/sanitize.py - Prompt injection prevention, sensitive data redaction
 src/utils/telegram_retry.py - Telegram API retry logic for rate limit handling
+src/utils/version_store.py - read/write data/announced_version.json for startup What's new gate (atomic)
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.11.1) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.12.0) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 ## Commands
 
@@ -191,6 +194,7 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `srv_set:metric:value` (apply server threshold, e.g., `srv_set:cpu_temp:90`, 0 = reset to default)
 - `model:provider_name`, `model_select:provider:model`, `model:back`
 - `setup:confirm`, `setup:toggle:category:container_name` (e.g., `setup:toggle:watched:plex`), `setup:adjust:category`, `setup:adjust_done`
+- `pull:container_name` (image-update digest -> shows pull confirmation)
 
 Callback handlers are registered with `F.data.startswith("prefix:")` filters in `register_commands()`.
 
@@ -266,8 +270,10 @@ Environment variables can also be set via `config/.env` (loaded by pydantic-sett
 - `protected_containers` / `ignored_containers` - Safety and visibility controls
 - `memory_management` - System memory pressure thresholds and kill policy
 - `resource_monitoring` - Per-container CPU/memory alert thresholds
+- `image_updates` - Opt-in daily digest of containers with newer images (enabled, poll_interval_hours)
+- `auto_heal` - Opt-in auto-restart of unhealthy containers (enabled, containers, max_restarts, window_minutes)
 
-Data files in `data/`: `mutes.json`, `server_mutes.json`, `array_mutes.json`, `ignored_errors.json`, `model_selection.json` (runtime LLM choice), `chat_ids.json` (persistent Telegram chat IDs for alert delivery)
+Data files in `data/`: `mutes.json`, `server_mutes.json`, `array_mutes.json`, `ignored_errors.json`, `model_selection.json` (runtime LLM choice), `chat_ids.json` (persistent Telegram chat IDs for alert delivery), `announced_version.json` (last-announced bot version for startup What's new gate)
 
 ## Design Context
 

@@ -199,3 +199,25 @@ files:
         items: [format_uptime]
       - from: src.utils.sanitize
         items: [sanitize_container_name, sanitize_logs]
+
+  auto_healer.py:
+    description: Auto-restarts opted-in containers that report HEALTHCHECK unhealthy, with per-container time-windowed storm guard
+    exports:
+      - name: AutoHealer
+        kind: class
+        description: Checks opt-in list and protected containers, tracks restart counts in a rolling window, restarts or escalates
+        methods:
+          - name: is_enabled
+            params: [{name: container_name, type: str}]
+            returns: bool
+          - name: heal
+            params: [{name: container_name, type: str}]
+            returns: Awaitable[None]
+
+    imports:
+      - from: src.config
+        items: [AutoHealConfig]
+      - from: src.services.container_control
+        items: [ContainerController]
+      - from: src.alerts.manager
+        items: [AlertSender]

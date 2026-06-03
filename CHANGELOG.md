@@ -2,6 +2,14 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.12.0] - 2026-06-03
+
+### Added
+- **Image-update detection** (opt-in: `image_updates.enabled`) — polls registries every 24 hours (configurable via `image_updates.poll_interval_hours`), sends a batched digest alert when newer images are available, with per-container Pull buttons
+- **Auto-heal** (opt-in: `auto_heal.containers`) — automatically restarts opted-in containers that report a Docker HEALTHCHECK `unhealthy` status; storm guard prevents restart loops (configurable `max_restarts` / `window_minutes`); protected containers are never touched
+- **Richer startup message** — on first boot after a version upgrade, shows a "What's new" section with user-facing highlights; persists last-announced version to `data/announced_version.json`
+- **CI test pipeline** — GitHub Actions workflow runs tests, ruff lint, and mypy type-check on every push and pull request
+
 ## [0.11.1] - 2026-05-17
 
 ### Changed

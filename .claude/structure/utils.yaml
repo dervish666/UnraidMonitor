@@ -151,3 +151,24 @@ files:
         items: [TypeVar, Callable, Awaitable, ParamSpec]
       - from: aiogram.exceptions
         items: [TelegramRetryAfter, TelegramAPIError]
+
+  version_store.py:
+    description: Read/write data/announced_version.json atomically to persist the last-announced bot version for the startup What's new gate.
+    exports:
+      - name: read_announced_version
+        kind: function
+        description: Return the last-announced bot version string, or None if unset or unreadable
+        params: [{name: path, type: str}]
+        returns: str | None
+      - name: write_announced_version
+        kind: function
+        description: Atomically persist the given version string to the announced_version file
+        params: [{name: path, type: str}, {name: version, type: str}]
+        returns: None
+    imports:
+      - from: json
+        items: [json]
+      - from: pathlib
+        items: [Path]
+      - from: tempfile
+        items: [tempfile]
