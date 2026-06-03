@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 
 
@@ -338,3 +338,27 @@ async def test_handle_recovery_event_ignored_container():
     await monitor._handle_recovery_event(event)
 
     mock_alert_manager.send_recovery_alert.assert_not_called()
+
+
+async def test_unhealthy_opted_in_calls_healer_and_skips_alert():
+    from src.monitors.docker_events import DockerEventMonitor
+    from src.state import ContainerStateManager
+    alert = MagicMock(); alert.send_health_alert = AsyncMock()
+    mon = DockerEventMonitor(state_manager=ContainerStateManager(), alert_manager=alert)
+    healer = MagicMock(); healer.is_enabled.return_value = True; healer.heal = AsyncMock()
+    mon.set_auto_healer(healer)
+    await mon._handle_health_event({"Actor": {"Attributes": {"name": "radarr"}}, "_alert_type": "health"})
+    healer.heal.assert_awaited_once_with("radarr")
+    alert.send_health_alert.assert_not_awaited()
+
+
+async def test_unhealthy_not_opted_in_sends_alert():
+    from src.monitors.docker_events import DockerEventMonitor
+    from src.state import ContainerStateManager
+    alert = MagicMock(); alert.send_health_alert = AsyncMock()
+    mon = DockerEventMonitor(state_manager=ContainerStateManager(), alert_manager=alert)
+    healer = MagicMock(); healer.is_enabled.return_value = False; healer.heal = AsyncMock()
+    mon.set_auto_healer(healer)
+    await mon._handle_health_event({"Actor": {"Attributes": {"name": "plex"}}, "_alert_type": "health"})
+    healer.heal.assert_not_awaited()
+    alert.send_health_alert.assert_awaited_once()

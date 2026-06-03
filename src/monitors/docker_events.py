@@ -198,6 +198,7 @@ class DockerEventMonitor:
         self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
         self._crash_tracker = CrashTracker()
         self._unhealthy_alerted: set[str] = set()  # Track containers already alerted as unhealthy
+        self._auto_healer: Any | None = None
 
     @property
     def is_running(self) -> bool:
@@ -211,6 +212,10 @@ class DockerEventMonitor:
     def shared_client(self) -> SharedDockerClient | None:
         """Get the shared Docker client wrapper for passing to other components."""
         return self._shared_client
+
+    def set_auto_healer(self, auto_healer: Any) -> None:
+        """Late-bind the AutoHealer (created after the ContainerController exists)."""
+        self._auto_healer = auto_healer
 
     def connect(self) -> None:
         """Connect to Docker socket."""
@@ -560,6 +565,9 @@ class DockerEventMonitor:
             return
 
         logger.info(f"Container {container_name} is unhealthy")
+        if self._auto_healer is not None and self._auto_healer.is_enabled(container_name):
+            await self._auto_healer.heal(container_name)
+            return
         await self.alert_manager.send_health_alert(
             container_name=container_name,
             health_status="unhealthy",
