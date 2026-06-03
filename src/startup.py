@@ -457,6 +457,15 @@ async def start_monitoring(
     if nl_processor and controller:
         nl_processor.set_controller(controller)
 
+    if controller is not None:
+        from src.services.auto_healer import AutoHealer
+        auto_healer = AutoHealer(config=config.auto_heal, controller=controller, alert_manager=alert_manager)
+        monitor.set_auto_healer(auto_healer)
+        logger.info(
+            f"Auto-heal {'enabled' if config.auto_heal.enabled else 'disabled'} "
+            f"for {len(config.auto_heal.containers)} container(s)"
+        )
+
     bg.unraid_client = uc.client
     bg.unraid_system_monitor = uc.system_monitor
     bg.unraid_array_monitor = uc.array_monitor
