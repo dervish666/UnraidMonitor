@@ -141,3 +141,21 @@ class TestHealthCommand:
         text = message.answer.call_args[0][0]
         assert "plex" in text
         assert "5x" in text
+
+
+def test_build_status_lines_includes_new_monitors():
+    from src.bot.health_command import build_status_lines
+    from src.config import AutoHealConfig
+    monitor = MagicMock(); monitor.is_running = True
+    monitor.state_manager.get_all.return_value = [1, 2, 3]
+    image_mon = MagicMock(); image_mon.is_running = True
+    lines = build_status_lines(
+        monitor=monitor, log_watcher=None, resource_monitor=None, memory_monitor=None,
+        unraid_client=None, unraid_system_monitor=None, unraid_array_monitor=None,
+        image_update_monitor=image_mon,
+        auto_heal_config=AutoHealConfig(enabled=True, containers=["radarr"], max_restarts=3, window_minutes=60),
+    )
+    blob = "\n".join(lines)
+    assert "Image updates" in blob
+    assert "Auto-heal" in blob
+    assert "1 container" in blob

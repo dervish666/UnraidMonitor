@@ -507,6 +507,8 @@ async def start_monitoring(
             unraid_system_monitor=uc.system_monitor,
             unraid_array_monitor=uc.array_monitor,
             alert_manager=alert_manager,
+            image_update_monitor=image_update_monitor,
+            auto_heal_config=config.auto_heal,
         ),
         AiogramCommand("health"),
     )

@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timezone
-from typing import Callable, Awaitable, TYPE_CHECKING
+from typing import Any, Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message
 
@@ -43,6 +43,56 @@ def _format_health_uptime(start_time: datetime) -> str:
     return " ".join(parts)
 
 
+def build_status_lines(
+    monitor: "DockerEventMonitor | None" = None,
+    log_watcher: "LogWatcher | None" = None,
+    resource_monitor: "ResourceMonitor | None" = None,
+    memory_monitor: "MemoryMonitor | None" = None,
+    unraid_client: Any = None,
+    unraid_system_monitor: "UnraidSystemMonitor | None" = None,
+    unraid_array_monitor: "ArrayMonitor | None" = None,
+    image_update_monitor: Any = None,
+    auto_heal_config: Any = None,
+) -> list[str]:
+    lines: list[str] = ["*Monitors:*"]
+    if monitor:
+        status = "✅ Running" if monitor.is_running else "🔴 Stopped"
+        lines.append(f"  Docker Events: {status} ({len(monitor.state_manager.get_all())} containers)")
+    else:
+        lines.append("  Docker Events: ⚪ Not configured")
+    if log_watcher:
+        status = "✅ Running" if log_watcher.is_running else "🔴 Stopped"
+        drop_info = f", {log_watcher.total_drops} dropped" if log_watcher.total_drops else ""
+        lines.append(f"  Log Watcher: {status} ({len(log_watcher.containers)} containers{drop_info})")
+    else:
+        lines.append("  Log Watcher: ⚪ Not configured")
+    if resource_monitor:
+        lines.append(f"  Resources: {'✅ Running' if resource_monitor.is_running else '🔴 Stopped'}")
+    else:
+        lines.append("  Resources: ⚪ Disabled")
+    if memory_monitor:
+        lines.append(f"  Memory: {'✅ Running' if memory_monitor.is_running else '🔴 Stopped'}")
+    else:
+        lines.append("  Memory: ⚪ Disabled")
+    if image_update_monitor:
+        lines.append(f"  Image updates: {'✅ Running' if image_update_monitor.is_running else '🔴 Stopped'}")
+    else:
+        lines.append("  Image updates: ⚪ Disabled")
+    if auto_heal_config is not None and auto_heal_config.enabled and auto_heal_config.containers:
+        lines.append(f"  Auto-heal: ✅ {len(auto_heal_config.containers)} container(s)")
+    else:
+        lines.append("  Auto-heal: ⚪ Disabled")
+    if unraid_client:
+        lines.append(f"  Unraid: {'✅ Connected' if unraid_client.is_connected else '🔴 Disconnected'}")
+        if unraid_system_monitor:
+            lines.append(f"    System: {'✅' if unraid_system_monitor.is_running else '🔴'}")
+        if unraid_array_monitor:
+            lines.append(f"    Array: {'✅' if unraid_array_monitor.is_running else '🔴'}")
+    else:
+        lines.append("  Unraid: ⚪ Not configured")
+    return lines
+
+
 def health_command(
     start_time: datetime,
     monitor: "DockerEventMonitor | None" = None,
@@ -53,6 +103,8 @@ def health_command(
     unraid_system_monitor: "UnraidSystemMonitor | None" = None,
     unraid_array_monitor: "ArrayMonitor | None" = None,
     alert_manager: object | None = None,
+    image_update_monitor: Any = None,
+    auto_heal_config: Any = None,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /health command handler."""
 
@@ -65,52 +117,19 @@ def health_command(
             f"*Version:* {BOT_VERSION}",
             f"*Uptime:* {uptime}",
             "",
-            "*Monitors:*",
         ]
 
-        # Docker event monitor
-        if monitor:
-            status = "✅ Running" if monitor.is_running else "🔴 Stopped"
-            container_count = len(monitor.state_manager.get_all())
-            lines.append(f"  Docker Events: {status} ({container_count} containers)")
-        else:
-            lines.append("  Docker Events: ⚪ Not configured")
-
-        # Log watcher
-        if log_watcher:
-            status = "✅ Running" if log_watcher.is_running else "🔴 Stopped"
-            watched = len(log_watcher.containers)
-            drop_info = f", {log_watcher.total_drops} dropped" if log_watcher.total_drops else ""
-            lines.append(f"  Log Watcher: {status} ({watched} containers{drop_info})")
-        else:
-            lines.append("  Log Watcher: ⚪ Not configured")
-
-        # Resource monitor
-        if resource_monitor:
-            status = "✅ Running" if resource_monitor.is_running else "🔴 Stopped"
-            lines.append(f"  Resources: {status}")
-        else:
-            lines.append("  Resources: ⚪ Disabled")
-
-        # Memory monitor
-        if memory_monitor:
-            status = "✅ Running" if memory_monitor.is_running else "🔴 Stopped"
-            lines.append(f"  Memory: {status}")
-        else:
-            lines.append("  Memory: ⚪ Disabled")
-
-        # Unraid
-        if unraid_client:
-            connected = "✅ Connected" if unraid_client.is_connected else "🔴 Disconnected"
-            lines.append(f"  Unraid: {connected}")
-            if unraid_system_monitor:
-                status = "✅" if unraid_system_monitor.is_running else "🔴"
-                lines.append(f"    System: {status}")
-            if unraid_array_monitor:
-                status = "✅" if unraid_array_monitor.is_running else "🔴"
-                lines.append(f"    Array: {status}")
-        else:
-            lines.append("  Unraid: ⚪ Not configured")
+        lines.extend(build_status_lines(
+            monitor=monitor,
+            log_watcher=log_watcher,
+            resource_monitor=resource_monitor,
+            memory_monitor=memory_monitor,
+            unraid_client=unraid_client,
+            unraid_system_monitor=unraid_system_monitor,
+            unraid_array_monitor=unraid_array_monitor,
+            image_update_monitor=image_update_monitor,
+            auto_heal_config=auto_heal_config,
+        ))
 
         # Alert queue depth
         if alert_manager and hasattr(alert_manager, "queued_count"):
