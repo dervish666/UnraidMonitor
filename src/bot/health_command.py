@@ -6,6 +6,7 @@ from typing import Any, Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message
 
+from src import __version__ as _FALLBACK_VERSION
 from src.utils.formatting import safe_reply
 
 if TYPE_CHECKING:
@@ -23,7 +24,7 @@ try:
     from importlib.metadata import version as _pkg_version
     BOT_VERSION = _pkg_version("unraid-monitor-bot")
 except Exception:
-    BOT_VERSION = "unknown"
+    BOT_VERSION = _FALLBACK_VERSION
 
 
 def _format_health_uptime(start_time: datetime) -> str:
