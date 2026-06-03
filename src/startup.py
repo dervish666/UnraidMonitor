@@ -36,6 +36,9 @@ from src.monitor_callbacks import (
     make_ask_restart_handler,
     make_mute_maintenance_loop,
 )
+from src.bot.health_command import BOT_VERSION, build_status_lines
+from src.constants import WHATS_NEW, ANNOUNCED_VERSION_PATH
+from src.utils.version_store import read_announced_version, write_announced_version
 
 
 logger = logging.getLogger(__name__)
@@ -260,22 +263,34 @@ async def _send_startup_notification(
     state: ContainerStateManager,
     log_watching_config: dict[str, Any],
     uc: _UnraidComponents,
+    image_update_monitor: Any = None,
+    auto_heal_config: Any = None,
+    resource_monitor: Any = None,
+    memory_monitor: Any = None,
+    log_watcher: Any = None,
+    monitor: Any = None,
 ) -> None:
+    previous = read_announced_version(ANNOUNCED_VERSION_PATH)
+    show_whats_new = previous != BOT_VERSION and BOT_VERSION in WHATS_NEW
+    status_lines = build_status_lines(
+        monitor=monitor, log_watcher=log_watcher, resource_monitor=resource_monitor,
+        memory_monitor=memory_monitor, unraid_client=uc.client,
+        unraid_system_monitor=uc.system_monitor, unraid_array_monitor=uc.array_monitor,
+        image_update_monitor=image_update_monitor, auto_heal_config=auto_heal_config,
+    )
+    parts = [f"🟢 *Bot started* - v{BOT_VERSION}", "", *status_lines]
+    if show_whats_new:
+        parts.append("")
+        parts.append(f"✨ *What's new in v{BOT_VERSION}*")
+        parts.extend(f"  • {item}" for item in WHATS_NEW[BOT_VERSION])
+    startup_msg = "\n".join(parts)
     for cid in chat_id_store.get_all_chat_ids():
-        container_count = len(state.get_all())
-        watched_count = len(log_watching_config.get("containers", []))
-        unraid_status = "connected" if (uc.client and uc.client.is_connected) else "disabled"
-        startup_msg = (
-            f"🟢 *Bot started*\n"
-            f"Tracking {container_count} containers, watching logs for {watched_count}\n"
-            f"Unraid: {unraid_status}"
-        )
         try:
-            await send_with_retry(
-                bot.send_message, chat_id=cid, text=startup_msg, parse_mode="Markdown"
-            )
+            await send_with_retry(bot.send_message, chat_id=cid, text=startup_msg, parse_mode="Markdown")
         except Exception as e:
             logger.warning(f"Failed to send startup notification: {e}")
+    if show_whats_new:
+        write_announced_version(ANNOUNCED_VERSION_PATH, BOT_VERSION)
 
 
 async def _start_background_monitors(
@@ -522,4 +537,9 @@ async def start_monitoring(
 
     logger.info("All monitors started")
 
-    await _send_startup_notification(bot, chat_id_store, state, log_watching_config, uc)
+    await _send_startup_notification(
+        bot, chat_id_store, state, log_watching_config, uc,
+        image_update_monitor=image_update_monitor, auto_heal_config=config.auto_heal,
+        resource_monitor=resource_monitor, memory_monitor=memory_monitor,
+        log_watcher=log_watcher, monitor=monitor,
+    )
