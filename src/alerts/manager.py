@@ -9,6 +9,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
+from src.constants import IMAGE_UPDATE_MAX_SHOWN
 from src.utils.formatting import format_bytes, format_uptime, strip_log_timestamps, escape_markdown, truncate_callback_data
 from src.utils.telegram_retry import send_with_retry
 
@@ -382,6 +383,25 @@ Exceeded for: {duration_str}
             logger.info(f"Sent autoheal alert for {container_name} (gave_up={gave_up})")
         except Exception as e:
             logger.error(f"Failed to send autoheal alert: {e}")
+
+    async def send_update_alert(self, updates: list[tuple[str, str]]) -> None:
+        """Send a single batched digest of containers with newer images available."""
+        if not updates:
+            return
+        lines = [f"⬇️ *Image updates available* ({len(updates)})", ""]
+        rows: list[list[InlineKeyboardButton]] = []
+        for name, image in updates[:IMAGE_UPDATE_MAX_SHOWN]:
+            lines.append(f"• {escape_markdown(name)} - {escape_markdown(image)}")
+            rows.append([InlineKeyboardButton(text=f"⬇️ Pull {name}", callback_data=truncate_callback_data("pull:", name))])
+        if len(updates) > IMAGE_UPDATE_MAX_SHOWN:
+            lines.append(f"...and {len(updates) - IMAGE_UPDATE_MAX_SHOWN} more")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
+        try:
+            await send_with_retry(self.bot.send_message, chat_id=self.chat_id, text="\n".join(lines),
+                                  parse_mode="Markdown", reply_markup=keyboard)
+            logger.info(f"Sent image-update digest for {len(updates)} container(s)")
+        except Exception as e:
+            logger.error(f"Failed to send update alert: {e}")
 
     async def send_recovery_alert(self, container_name: str) -> None:
         """Send a brief recovery notification when a crashed container starts."""

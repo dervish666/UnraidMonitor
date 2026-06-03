@@ -362,3 +362,24 @@ async def test_send_autoheal_alert_gave_up():
     await mgr.send_autoheal_alert(container_name="radarr", attempt=3, max_attempts=3, gave_up=True)
     text = bot.send_message.call_args.kwargs["text"]
     assert "gave up" in text.lower()
+
+
+async def test_send_update_alert_batches_with_buttons():
+    from src.alerts.manager import AlertManager
+    bot = MagicMock(); bot.send_message = AsyncMock()
+    mgr = AlertManager(bot=bot, chat_id=123)
+    await mgr.send_update_alert([("radarr", "linuxserver/radarr:latest"), ("sonarr", "linuxserver/sonarr:latest")])
+    bot.send_message.assert_awaited_once()
+    text = bot.send_message.call_args.kwargs["text"]
+    kb = bot.send_message.call_args.kwargs["reply_markup"]
+    assert "radarr" in text and "sonarr" in text and "(2)" in text
+    assert len(kb.inline_keyboard) == 2
+    assert kb.inline_keyboard[0][0].callback_data == "pull:radarr"
+
+
+async def test_send_update_alert_empty_noop():
+    from src.alerts.manager import AlertManager
+    bot = MagicMock(); bot.send_message = AsyncMock()
+    mgr = AlertManager(bot=bot, chat_id=123)
+    await mgr.send_update_alert([])
+    bot.send_message.assert_not_awaited()
