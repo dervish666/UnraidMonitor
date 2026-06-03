@@ -866,3 +866,39 @@ def server_set_threshold_callback(
         )
 
     return handler
+
+
+def pull_callback(
+    state: ContainerStateManager,
+    controller: ContainerController,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for the image-update digest 'Pull' button - shows a confirmation."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        if not callback.data:
+            return
+        parts = callback.data.split(":", 1)
+        if len(parts) < 2:
+            await callback.answer("Invalid callback data")
+            return
+        container_name = parts[1]
+        if not validate_container_name(container_name):
+            await callback.answer("Invalid container name")
+            return
+        matches = state.find_by_name(container_name)
+        if not matches:
+            await callback.answer(f"Container '{container_name}' not found")
+            return
+        actual_name = matches[0].name
+        if controller.is_protected(actual_name):
+            await callback.answer(f"{actual_name} is protected", show_alert=True)
+            return
+        await callback.answer()
+        info = state.get(actual_name)
+        status = info.status if info else "unknown"
+        from src.bot.control_commands import _build_confirmation
+        text, keyboard = _build_confirmation("pull", actual_name, status)
+        if callback.message:
+            await callback.message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
+
+    return handler

@@ -647,3 +647,34 @@ class TestSetLimitCallback:
         await handler(mock_callback)
 
         mock_callback.answer.assert_called_once_with("Invalid metric")
+
+
+async def test_pull_callback_shows_confirmation():
+    from src.bot.alert_callbacks import pull_callback
+    from src.state import ContainerStateManager
+    from src.models import ContainerInfo
+    state = ContainerStateManager()
+    state.update(ContainerInfo(name="radarr", status="running", health=None, image="img", started_at=None))
+    controller = MagicMock(); controller.is_protected.return_value = False
+    handler = pull_callback(state, controller)
+    cb = MagicMock(); cb.data = "pull:radarr"; cb.answer = AsyncMock()
+    cb.message = MagicMock(); cb.message.answer = AsyncMock()
+    await handler(cb)
+    cb.message.answer.assert_awaited_once()
+    kb = cb.message.answer.call_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == "ctrl_confirm:pull:radarr"
+
+
+async def test_pull_callback_blocks_protected():
+    from src.bot.alert_callbacks import pull_callback
+    from src.state import ContainerStateManager
+    from src.models import ContainerInfo
+    state = ContainerStateManager()
+    state.update(ContainerInfo(name="mariadb", status="running", health=None, image="img", started_at=None))
+    controller = MagicMock(); controller.is_protected.return_value = True
+    handler = pull_callback(state, controller)
+    cb = MagicMock(); cb.data = "pull:mariadb"; cb.answer = AsyncMock()
+    cb.message = MagicMock(); cb.message.answer = AsyncMock()
+    await handler(cb)
+    cb.message.answer.assert_not_awaited()
+    cb.answer.assert_awaited()

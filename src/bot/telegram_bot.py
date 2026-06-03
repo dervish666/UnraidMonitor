@@ -32,6 +32,7 @@ from src.bot.alert_callbacks import (
     logs_callback,
     diagnose_callback,
     mute_callback,
+    pull_callback,
     raise_limit_callback,
     set_limit_callback,
     mem_kill_callback,
@@ -299,6 +300,7 @@ def register_commands(
 
         # Alert action button callbacks
         dp.callback_query.register(restart_callback(state, controller), F.data.startswith("restart:"))
+        dp.callback_query.register(pull_callback(state, controller), F.data.startswith("pull:"))
         dp.callback_query.register(
             logs_callback(state, docker_client, max_lines=_log_max_lines, max_chars=_log_max_chars),
             F.data.startswith("logs:"),
