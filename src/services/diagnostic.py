@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import docker
@@ -13,6 +14,10 @@ from src.utils.formatting import format_uptime
 from src.utils.sanitize import sanitize_container_name, sanitize_logs
 
 logger = logging.getLogger(__name__)
+
+_SECRET_ENV_PATTERN = re.compile(
+    r"(?i)(key|secret|password|passwd|pwd|token|credential|auth)",
+)
 
 
 def _parse_docker_timestamp(ts: str) -> datetime | None:
@@ -40,6 +45,16 @@ def _parse_docker_timestamp(ts: str) -> datetime | None:
         return None
 
 
+def _filter_env_vars(env_list: list[str]) -> list[str]:
+    """Keep non-secret env vars that are useful for diagnosis."""
+    filtered = []
+    for item in env_list:
+        name = item.split("=", 1)[0] if "=" in item else item
+        if not _SECRET_ENV_PATTERN.search(name):
+            filtered.append(item)
+    return filtered
+
+
 @dataclass
 class DiagnosticContext:
     """Context for a diagnostic request."""
@@ -50,6 +65,16 @@ class DiagnosticContext:
     image: str
     uptime_seconds: int | None
     restart_count: int
+    status: str = "unknown"
+    running: bool = False
+    oom_killed: bool = False
+    state_error: str = ""
+    volumes: list[str] = field(default_factory=list)
+    env_vars: list[str] = field(default_factory=list)
+    ports: list[str] = field(default_factory=list)
+    restart_policy: str = ""
+    health_status: str = ""
+    alert_context: str = ""
     brief_summary: str | None = None
     created_at: datetime | None = None
 
@@ -67,8 +92,8 @@ class DiagnosticService:
         provider: Any = None,
         registry: Any = None,
         feature: str = "diagnostic",
-        brief_max_tokens: int = 300,
-        detail_max_tokens: int = 800,
+        brief_max_tokens: int = 500,
+        detail_max_tokens: int = 1000,
         context_expiry_seconds: int = 600,
     ):
         self._docker = docker_client
@@ -80,12 +105,18 @@ class DiagnosticService:
         self._context_expiry_seconds = context_expiry_seconds
         self._pending: dict[int, DiagnosticContext] = {}
 
-    async def gather_context(self, container_name: str, lines: int = 50) -> DiagnosticContext | None:
+    async def gather_context(
+        self,
+        container_name: str,
+        lines: int = 50,
+        alert_context: str = "",
+    ) -> DiagnosticContext | None:
         """Gather diagnostic context from a container.
 
         Args:
             container_name: Name of the container to diagnose.
             lines: Number of log lines to retrieve.
+            alert_context: Description of what triggered this diagnosis.
 
         Returns:
             DiagnosticContext with container info, or None if container not found.
@@ -103,6 +134,10 @@ class DiagnosticService:
         attrs = container.attrs
         state = attrs.get("State", {})
         exit_code = state.get("ExitCode")
+        status = state.get("Status", "unknown")
+        running = state.get("Running", False)
+        oom_killed = state.get("OOMKilled", False)
+        state_error = state.get("Error", "")
         started_at = _parse_docker_timestamp(state.get("StartedAt", ""))
         restart_count = attrs.get("RestartCount", 0)
 
@@ -123,6 +158,42 @@ class DiagnosticService:
         except Exception:
             image = container.attrs.get("Config", {}).get("Image", "unknown")
 
+        # Docker configuration
+        config = attrs.get("Config", {})
+        host_config = attrs.get("HostConfig", {})
+
+        # Volume mounts
+        mounts = attrs.get("Mounts", [])
+        volumes = [
+            f"{m.get('Source', '?')} -> {m.get('Destination', '?')} ({m.get('Mode') or 'rw'})"
+            for m in mounts
+        ]
+
+        # Env vars (filtered to exclude secrets)
+        env_vars = _filter_env_vars(config.get("Env", []))
+
+        # Port mappings
+        port_bindings = host_config.get("PortBindings") or {}
+        ports = []
+        for container_port, bindings in port_bindings.items():
+            if bindings:
+                for b in bindings:
+                    host_port = b.get("HostPort", "?")
+                    ports.append(f"{host_port}->{container_port}")
+            else:
+                ports.append(container_port)
+
+        # Restart policy
+        restart_pol = host_config.get("RestartPolicy", {})
+        restart_policy = restart_pol.get("Name", "no")
+        max_retry = restart_pol.get("MaximumRetryCount", 0)
+        if max_retry:
+            restart_policy = f"{restart_policy} (max {max_retry})"
+
+        # Health check status
+        health = state.get("Health", {})
+        health_status = health.get("Status", "")
+
         return DiagnosticContext(
             container_name=container_name,
             logs=logs,
@@ -130,6 +201,16 @@ class DiagnosticService:
             image=image,
             uptime_seconds=uptime_seconds,
             restart_count=restart_count,
+            status=status,
+            running=running,
+            oom_killed=oom_killed,
+            state_error=state_error,
+            volumes=volumes,
+            env_vars=env_vars,
+            ports=ports,
+            restart_policy=restart_policy,
+            health_status=health_status,
+            alert_context=alert_context,
         )
 
     def _resolve_provider(self) -> Any:
@@ -138,8 +219,90 @@ class DiagnosticService:
             return self._registry.get_provider(self._feature)
         return self._provider
 
+    def _build_analysis_prompt(self, context: DiagnosticContext) -> str:
+        """Build the analysis prompt from diagnostic context."""
+        safe_name = sanitize_container_name(context.container_name)
+        safe_image = sanitize_container_name(context.image)
+        safe_logs = sanitize_logs(context.logs)
+
+        # Status section — make the actual state very clear
+        if context.running:
+            status_line = "Status: **RUNNING** (container is up and producing errors)"
+            uptime_str = format_uptime(context.uptime_seconds) if context.uptime_seconds else "unknown"
+            status_detail = f"Uptime: {uptime_str}"
+        elif context.status == "exited":
+            uptime_str = format_uptime(context.uptime_seconds) if context.uptime_seconds else "unknown"
+            status_line = f"Status: **EXITED** (exit code {context.exit_code})"
+            status_detail = f"Ran for: {uptime_str} before exiting"
+        elif context.status == "restarting":
+            status_line = "Status: **RESTARTING** (container is in a restart loop)"
+            status_detail = f"Restart count: {context.restart_count}"
+        else:
+            status_line = f"Status: {context.status.upper()}"
+            status_detail = ""
+
+        sections = [
+            f"Container: {safe_name}",
+            f"Image: {safe_image}",
+            status_line,
+        ]
+        if status_detail:
+            sections.append(status_detail)
+        if context.restart_count and context.status != "restarting":
+            sections.append(f"Restart count: {context.restart_count}")
+        if context.oom_killed:
+            sections.append("⚠️ OOM Killed: Yes (ran out of memory)")
+        if context.state_error:
+            sections.append(f"Docker error: {context.state_error}")
+        if context.health_status:
+            sections.append(f"Health check: {context.health_status}")
+        if context.restart_policy:
+            sections.append(f"Restart policy: {context.restart_policy}")
+
+        status_block = "\n".join(sections)
+
+        # Alert context
+        alert_block = ""
+        if context.alert_context:
+            alert_block = f"\nTriggered by: {context.alert_context}\n"
+
+        # Docker configuration
+        config_parts = []
+        if context.volumes:
+            vol_list = "\n".join(f"  {v}" for v in context.volumes)
+            config_parts.append(f"Volume mounts:\n{vol_list}")
+        if context.env_vars:
+            env_list = "\n".join(f"  {e}" for e in context.env_vars[:30])
+            config_parts.append(f"Environment (non-secret):\n{env_list}")
+        if context.ports:
+            config_parts.append(f"Ports: {', '.join(context.ports)}")
+        config_block = "\n".join(config_parts)
+
+        prompt = f"""You are a Docker container diagnostics expert for a home server (Unraid). Analyze this issue precisely.
+
+## Container State
+{status_block}
+{alert_block}
+## Docker Configuration
+{config_block if config_block else "(no configuration data available)"}
+
+## Recent Logs
+```
+{safe_logs}
+```
+
+## Instructions
+- Base your diagnosis on the container's CURRENT STATUS above. If the container is RUNNING, this is an error during operation — do NOT say it shut down or exited.
+- Check the Docker configuration (volumes, env vars, ports) BEFORE suggesting configuration changes. If the user already has the relevant volume mount or env var, do not suggest adding it — instead explain what else might be wrong.
+- Focus on the specific errors in the logs, not generic possibilities.
+- Respond with exactly three sections:
+  **What happened:** 1-2 sentences on what the actual problem is.
+  **Likely cause:** 1-2 sentences on the root cause.
+  **How to fix it:** Specific, actionable steps. Include commands if applicable."""
+        return prompt
+
     async def analyze(self, context: DiagnosticContext) -> str:
-        """Analyze container issue using Claude API.
+        """Analyze container issue using AI.
 
         Args:
             context: DiagnosticContext with container info.
@@ -151,27 +314,7 @@ class DiagnosticService:
         if not provider:
             return "❌ AI provider not configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_HOST in .env"
 
-        uptime_str = format_uptime(context.uptime_seconds) if context.uptime_seconds else "unknown"
-
-        # Sanitize user-controlled inputs to prevent prompt injection
-        safe_name = sanitize_container_name(context.container_name)
-        safe_image = sanitize_container_name(context.image)
-        safe_logs = sanitize_logs(context.logs)
-
-        prompt = f"""You are a Docker container diagnostics assistant. Analyze this container issue and provide a brief, actionable summary.
-
-Container: {safe_name}
-Image: {safe_image}
-Exit Code: {context.exit_code}
-Uptime before exit: {uptime_str}
-Restart Count: {context.restart_count}
-
-Last log lines:
-```
-{safe_logs}
-```
-
-Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. Be specific and actionable. If you see a clear command to run, include it."""
+        prompt = self._build_analysis_prompt(context)
 
         try:
             response = await provider.chat(
@@ -182,7 +325,7 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
             return result
         except Exception as e:
             error_result = handle_llm_error(e)
-            logger.log(error_result.log_level, f"Claude API error in analyze: {e}")
+            logger.log(error_result.log_level, f"LLM API error in analyze: {e}")
             return f"❌ {error_result.user_message}"
 
     def store_context(self, user_id: int, context: DiagnosticContext) -> None:
@@ -251,10 +394,26 @@ Respond with 2-3 sentences: What happened, the likely cause, and how to fix it. 
         safe_logs = sanitize_logs(context.logs)
         safe_summary = sanitize_logs(context.brief_summary or "", max_length=2000)
 
-        prompt = f"""Based on your previous analysis, provide detailed help:
+        # Docker configuration for detailed analysis
+        config_parts = []
+        if context.volumes:
+            vol_list = "\n".join(f"  {v}" for v in context.volumes)
+            config_parts.append(f"Volume mounts:\n{vol_list}")
+        if context.env_vars:
+            env_list = "\n".join(f"  {e}" for e in context.env_vars[:30])
+            config_parts.append(f"Environment (non-secret):\n{env_list}")
+        if context.ports:
+            config_parts.append(f"Ports: {', '.join(context.ports)}")
+        config_block = "\n".join(config_parts)
+
+        prompt = f"""Provide detailed diagnostic help for this container issue.
 
 Container: {safe_name}
-Your brief analysis: {safe_summary}
+Status: {"RUNNING" if context.running else context.status.upper()}
+Brief analysis: {safe_summary}
+
+Docker Configuration:
+{config_block if config_block else "(no configuration data available)"}
 
 Logs:
 ```
@@ -262,11 +421,11 @@ Logs:
 ```
 
 Provide:
-1. Detailed root cause analysis
-2. Step-by-step fix instructions
+1. Detailed root cause analysis — explain exactly what's failing and why
+2. Step-by-step fix instructions — check existing Docker config before suggesting changes
 3. How to prevent this in future
 
-Be specific and actionable."""
+Be specific and actionable. Reference the actual log lines and configuration."""
 
         try:
             response = await provider.chat(

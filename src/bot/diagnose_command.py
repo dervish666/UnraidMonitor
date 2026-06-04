@@ -15,23 +15,23 @@ logger = logging.getLogger(__name__)
 
 # Patterns to extract container name from various alert types
 _ALERT_PATTERNS = [
-    re.compile(r"\*CONTAINER CRASHED:\*\s+([\w.\-]+)"),
-    re.compile(r"\*ERRORS IN:\s+([\w.\-]+)\*"),
-    re.compile(r"\*RESTART LOOP:\s+([\w.\-]+)\*"),
-    re.compile(r"HIGH .+ USAGE[:\s]+([\w.\-]+)", re.IGNORECASE),
+    (re.compile(r"\*CONTAINER CRASHED:\*\s+([\w.\-]+)"), "Container crash alert"),
+    (re.compile(r"\*ERRORS IN:\s+([\w.\-]+)\*"), "Error alert (container still running with errors)"),
+    (re.compile(r"\*RESTART LOOP:\s+([\w.\-]+)\*"), "Restart loop alert"),
+    (re.compile(r"HIGH .+ USAGE[:\s]+([\w.\-]+)", re.IGNORECASE), "High resource usage alert"),
 ]
 
 
-def _extract_container_from_reply(reply_message: Message) -> str | None:
-    """Extract container name from any alert message."""
+def _extract_from_reply(reply_message: Message) -> tuple[str | None, str]:
+    """Extract container name and alert context from an alert message."""
     if not reply_message or not reply_message.text:
-        return None
+        return None, ""
 
-    for pattern in _ALERT_PATTERNS:
+    for pattern, alert_type in _ALERT_PATTERNS:
         match = pattern.search(reply_message.text)
         if match:
-            return match.group(1)
-    return None
+            return match.group(1), alert_type
+    return None, ""
 
 
 def diagnose_command(
@@ -49,6 +49,7 @@ def diagnose_command(
         user_id = message.from_user.id
 
         container_name = None
+        alert_context = ""
         lines = 50
 
         # Check for explicit container name in command
@@ -65,7 +66,7 @@ def diagnose_command(
 
         # If no container name, try to extract from reply
         if not container_name and message.reply_to_message:
-            container_name = _extract_container_from_reply(message.reply_to_message)
+            container_name, alert_context = _extract_from_reply(message.reply_to_message)
 
         # If still no container name, show usage
         if not container_name:
@@ -93,13 +94,15 @@ def diagnose_command(
             await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
         await message.answer(f"Analyzing {actual_name}...")
 
-        # Gather context
-        context = await diagnostic_service.gather_context(actual_name, lines=lines)
+        # Gather context with alert info
+        context = await diagnostic_service.gather_context(
+            actual_name, lines=lines, alert_context=alert_context,
+        )
         if not context:
             await message.answer(f"Could not get container info for '{actual_name}'")
             return
 
-        # Analyze with Claude
+        # Analyze
         analysis = await diagnostic_service.analyze(context)
 
         # Store context for follow-up

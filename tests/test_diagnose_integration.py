@@ -287,4 +287,4 @@ async def test_diagnose_with_custom_line_count():
     await handler(message)
 
     # Should call gather_context with custom line count
-    mock_service.gather_context.assert_called_once_with("app", lines=200)
+    mock_service.gather_context.assert_called_once_with("app", lines=200, alert_context="")

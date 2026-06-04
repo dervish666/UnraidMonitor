@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import timedelta
 from typing import Callable, Awaitable, Any, TYPE_CHECKING
 
@@ -178,6 +179,25 @@ def logs_callback(
     return handler
 
 
+_ALERT_TYPE_PATTERNS = [
+    (re.compile(r"CONTAINER CRASHED", re.IGNORECASE), "Container crash alert"),
+    (re.compile(r"ERRORS IN", re.IGNORECASE), "Error alert (container still running with errors)"),
+    (re.compile(r"RESTART LOOP", re.IGNORECASE), "Restart loop alert"),
+    (re.compile(r"HIGH .+ USAGE", re.IGNORECASE), "High resource usage alert"),
+]
+
+
+def _extract_alert_context(message: Message | None) -> str:
+    """Extract what kind of alert triggered this diagnosis."""
+    if not message or not message.text:
+        return ""
+    text = message.text
+    for pattern, description in _ALERT_TYPE_PATTERNS:
+        if pattern.search(text):
+            return description
+    return ""
+
+
 def diagnose_callback(
     state: ContainerStateManager,
     diagnostic_service: DiagnosticService | None,
@@ -215,6 +235,11 @@ def diagnose_callback(
 
         actual_name = matches[0].name
 
+        # Extract alert context from the parent message (the alert)
+        alert_context = ""
+        if isinstance(callback.message, Message):
+            alert_context = _extract_alert_context(callback.message)
+
         # Acknowledge button press
         await callback.answer(f"Analyzing {actual_name}...")
 
@@ -223,14 +248,16 @@ def diagnose_callback(
                 await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action=ChatAction.TYPING)
             await callback.message.answer(f"Analyzing {actual_name}...")
 
-        # Gather context
-        context = await diagnostic_service.gather_context(actual_name, lines=50)
+        # Gather context with alert info
+        context = await diagnostic_service.gather_context(
+            actual_name, lines=50, alert_context=alert_context,
+        )
         if not context:
             if callback.message:
                 await callback.message.answer(f"Could not get container info for '{actual_name}'")
             return
 
-        # Analyze with Claude
+        # Analyze
         analysis = await diagnostic_service.analyze(context)
 
         # Store context for follow-up

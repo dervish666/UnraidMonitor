@@ -44,15 +44,29 @@ async def test_diagnostic_service_gathers_context():
     """Test gathering container context from Docker."""
     from src.services.diagnostic import DiagnosticService
 
-    # Mock Docker container
+    # Mock Docker container with full attrs
     mock_container = MagicMock()
     mock_container.logs.return_value = b"Error: connection refused\nRetrying..."
     mock_container.attrs = {
         "State": {
             "ExitCode": 1,
+            "Status": "exited",
+            "Running": False,
+            "OOMKilled": False,
+            "Error": "",
             "StartedAt": "2025-01-25T10:00:00Z",
         },
         "RestartCount": 2,
+        "Config": {
+            "Env": ["PUID=99", "PGID=100", "TZ=Europe/London", "API_KEY=secret123"],
+        },
+        "HostConfig": {
+            "PortBindings": {"5055/tcp": [{"HostPort": "5055"}]},
+            "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0},
+        },
+        "Mounts": [
+            {"Source": "/mnt/user/appdata/overseerr", "Destination": "/config", "Mode": "rw"},
+        ],
     }
     mock_container.image.tags = ["linuxserver/overseerr:latest"]
 
@@ -68,6 +82,57 @@ async def test_diagnostic_service_gathers_context():
     assert context.restart_count == 2
     assert "Error: connection refused" in context.logs
     assert context.image == "linuxserver/overseerr:latest"
+    assert context.status == "exited"
+    assert context.running is False
+    assert context.oom_killed is False
+    assert len(context.volumes) == 1
+    assert "/config" in context.volumes[0]
+    # API_KEY should be filtered out
+    assert not any("API_KEY" in e for e in context.env_vars)
+    assert any("PUID=99" in e for e in context.env_vars)
+    assert len(context.ports) == 1
+    assert "5055" in context.ports[0]
+    assert "unless-stopped" in context.restart_policy
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_context_running_container():
+    """Test that running containers are correctly identified."""
+    from src.services.diagnostic import DiagnosticService
+
+    mock_container = MagicMock()
+    mock_container.logs.return_value = b"[eac3] Error decoding audio"
+    mock_container.attrs = {
+        "State": {
+            "ExitCode": 0,
+            "Status": "running",
+            "Running": True,
+            "OOMKilled": False,
+            "Error": "",
+            "StartedAt": "2025-01-25T10:00:00Z",
+        },
+        "RestartCount": 0,
+        "Config": {"Env": ["TZ=Europe/London"]},
+        "HostConfig": {
+            "PortBindings": {},
+            "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0},
+        },
+        "Mounts": [],
+    }
+    mock_container.image.tags = ["plexinc/pms-docker:latest"]
+
+    mock_client = MagicMock()
+    mock_client.containers.get.return_value = mock_container
+
+    service = DiagnosticService(docker_client=mock_client, provider=None)
+
+    context = await service.gather_context(
+        "plex", lines=50, alert_context="Error alert (container still running with errors)",
+    )
+
+    assert context.running is True
+    assert context.status == "running"
+    assert context.alert_context == "Error alert (container still running with errors)"
 
 
 @pytest.mark.asyncio
@@ -150,3 +215,86 @@ async def test_diagnostic_service_stores_and_retrieves_context():
 
     # Context should be cleared after retrieval
     assert service.has_pending(123) is False
+
+
+def test_prompt_running_container_no_exit_framing():
+    """Verify that a running container's prompt says RUNNING, not exit code."""
+    from src.services.diagnostic import DiagnosticService, DiagnosticContext
+
+    service = DiagnosticService(docker_client=MagicMock(), provider=None)
+
+    context = DiagnosticContext(
+        container_name="plex",
+        logs="[eac3] Error decoding audio",
+        exit_code=0,
+        image="plexinc/pms-docker:latest",
+        uptime_seconds=86400,
+        restart_count=0,
+        status="running",
+        running=True,
+        volumes=["/mnt/user/appdata/plex -> /config (rw)", "/tmp/transcode -> /transcode (rw)"],
+        env_vars=["PUID=99", "TZ=Europe/London", "TRANSCODE_DIR=/transcode"],
+        alert_context="Error alert (container still running with errors)",
+    )
+
+    prompt = service._build_analysis_prompt(context)
+
+    assert "**RUNNING**" in prompt
+    assert "EXITED" not in prompt
+    assert "exit code 0" not in prompt.lower()
+    assert "/transcode" in prompt
+    assert "TRANSCODE_DIR" in prompt
+    assert "Error alert" in prompt
+
+
+def test_prompt_exited_container_shows_exit_code():
+    """Verify that an exited container's prompt includes exit code."""
+    from src.services.diagnostic import DiagnosticService, DiagnosticContext
+
+    service = DiagnosticService(docker_client=MagicMock(), provider=None)
+
+    context = DiagnosticContext(
+        container_name="overseerr",
+        logs="Segmentation fault",
+        exit_code=139,
+        image="linuxserver/overseerr:latest",
+        uptime_seconds=120,
+        restart_count=3,
+        status="exited",
+        running=False,
+        oom_killed=True,
+    )
+
+    prompt = service._build_analysis_prompt(context)
+
+    assert "**EXITED**" in prompt
+    assert "exit code 139" in prompt
+    assert "OOM Killed" in prompt
+
+
+def test_filter_env_vars():
+    """Test that secret-containing env vars are filtered out."""
+    from src.services.diagnostic import _filter_env_vars
+
+    env = [
+        "PUID=99",
+        "PGID=100",
+        "TZ=Europe/London",
+        "API_KEY=supersecret",
+        "DB_PASSWORD=hunter2",
+        "TRANSCODE_DIR=/transcode",
+        "PLEX_CLAIM=claim-xyz",
+        "MY_SECRET_THING=abc",
+        "SOME_AUTH_TOKEN=abc",
+    ]
+
+    filtered = _filter_env_vars(env)
+
+    names = [e.split("=")[0] for e in filtered]
+    assert "PUID" in names
+    assert "TZ" in names
+    assert "TRANSCODE_DIR" in names
+    assert "API_KEY" not in names
+    assert "DB_PASSWORD" not in names
+    assert "MY_SECRET_THING" not in names
+    assert "SOME_AUTH_TOKEN" not in names

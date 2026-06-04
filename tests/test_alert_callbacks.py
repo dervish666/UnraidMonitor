@@ -34,6 +34,7 @@ def mock_callback():
     callback = MagicMock()
     callback.answer = AsyncMock()
     callback.message = MagicMock(spec=Message)
+    callback.message.text = None
     callback.message.answer = AsyncMock()
     callback.message.edit_text = AsyncMock()
     callback.message.chat = MagicMock()
@@ -302,7 +303,7 @@ class TestDiagnoseCallback:
         await handler(mock_callback)
 
         mock_callback.answer.assert_called_once_with("Analyzing plex...")
-        diagnostic.gather_context.assert_called_once_with("plex", lines=50)
+        diagnostic.gather_context.assert_called_once_with("plex", lines=50, alert_context="")
         diagnostic.analyze.assert_called_once_with(context)
         diagnostic.store_context.assert_called_once()
 
@@ -355,7 +356,7 @@ class TestDiagnoseCallback:
 
         await handler(mock_callback)
 
-        diagnostic.gather_context.assert_called_once_with("my:container:with:colons", lines=50)
+        diagnostic.gather_context.assert_called_once_with("my:container:with:colons", lines=50, alert_context="")
 
     @pytest.mark.asyncio
     async def test_diagnose_invalid_callback_data(self, state, mock_callback):

@@ -39,7 +39,7 @@ async def test_diagnose_command_with_container_name():
 
     await handler(message)
 
-    mock_service.gather_context.assert_called_once_with("overseerr", lines=50)
+    mock_service.gather_context.assert_called_once_with("overseerr", lines=50, alert_context="")
     mock_service.analyze.assert_called_once()
 
     # Last call should have reply_markup with action buttons
@@ -86,31 +86,34 @@ async def test_diagnose_command_container_not_found():
 @pytest.mark.asyncio
 async def test_diagnose_extracts_from_errors_in_alert():
     """Test /diagnose extracts container from ERRORS IN alert."""
-    from src.bot.diagnose_command import _extract_container_from_reply
+    from src.bot.diagnose_command import _extract_from_reply
 
     reply = MagicMock()
     reply.text = "⚠️ *ERRORS IN: overseerr*\n\nRecent errors detected..."
-    assert _extract_container_from_reply(reply) == "overseerr"
+    name, _ctx = _extract_from_reply(reply)
+    assert name == "overseerr"
 
 
 @pytest.mark.asyncio
 async def test_diagnose_extracts_from_restart_loop_alert():
     """Test /diagnose extracts container from RESTART LOOP alert."""
-    from src.bot.diagnose_command import _extract_container_from_reply
+    from src.bot.diagnose_command import _extract_from_reply
 
     reply = MagicMock()
     reply.text = "🔄 *RESTART LOOP: plex*\n\n3 restarts in 5 minutes"
-    assert _extract_container_from_reply(reply) == "plex"
+    name, _ctx = _extract_from_reply(reply)
+    assert name == "plex"
 
 
 @pytest.mark.asyncio
 async def test_diagnose_extracts_from_crash_alert():
     """Test /diagnose extracts container from CRASHED alert."""
-    from src.bot.diagnose_command import _extract_container_from_reply
+    from src.bot.diagnose_command import _extract_from_reply
 
     reply = MagicMock()
     reply.text = "🔴 *CONTAINER CRASHED:* overseerr\n\nExit code: 1"
-    assert _extract_container_from_reply(reply) == "overseerr"
+    name, _ctx = _extract_from_reply(reply)
+    assert name == "overseerr"
 
 
 @pytest.mark.asyncio
