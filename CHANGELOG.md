@@ -2,6 +2,19 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.13.0] - 2026-06-04
+
+### Added
+- **Alert-context-aware diagnostics** — `/diagnose` and the Diagnose alert button now pass the triggering alert type (crash / errors / restart-loop / high-usage) into the analysis, so the AI grounds its answer in what actually fired
+- **Richer diagnostic context** — `DiagnosticService` now gathers full container state (status, running, OOM-killed, Docker error, health check, volumes, ports, restart policy) and secret-filtered environment variables, producing far more accurate root-cause analysis
+
+### Changed
+- **Status-aware diagnosis prompt** — the prompt states the container's current status (won't claim a running container exited) and instructs the model to check existing volumes/env before suggesting config changes
+- **Diagnostic token limits raised** — brief 300→500, detail 800→1000 to accommodate the richer context
+
+### Security
+- **Env var redaction in diagnostics** — environment variables are filtered against a secret-name pattern (key/secret/password/token/credential/auth) before being shown to the LLM
+
 ## [0.12.0] - 2026-06-03
 
 ### Added

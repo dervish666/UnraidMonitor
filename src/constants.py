@@ -97,6 +97,9 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.13.0": [
+        "Smarter diagnostics - /diagnose now reads full container state (health, volumes, ports, restart policy) and knows which alert triggered it, for more accurate fixes",
+    ],
     "0.12.0": [
         "Image-update detection - notified when a newer image is available (opt-in: image_updates.enabled)",
         "Auto-heal - auto-restart unhealthy containers (opt-in: auto_heal.containers)",
