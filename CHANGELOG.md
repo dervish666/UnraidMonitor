@@ -2,6 +2,11 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.14.4] - 2026-06-05
+
+### Fixed
+- **Startup card no longer shows Unraid System/Array as red when they're actually running** — a timing race in the startup notification. Each monitor sets `is_running` synchronously at the top of its `start()` coroutine, but `asyncio.create_task()` only *schedules* that coroutine. The Unraid system/array monitors are created *after* `await client.connect()` with nothing yielding before the card is built, so their tasks hadn't run yet and rendered 🔴 (they were running fine moments later — `/health` always showed green). Also fixed the latent case where, with Unraid not configured, there's no `connect()` await at all and *every* monitor could show red. `_start_background_monitors` now yields one event-loop turn (`await asyncio.sleep(0)`) before returning, so all monitors report their real state when the card snapshots them.
+
 ## [0.14.3] - 2026-06-05
 
 ### Changed

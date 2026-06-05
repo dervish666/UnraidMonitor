@@ -335,6 +335,15 @@ async def _start_background_monitors(
                 except Exception as send_err:
                     logger.error(f"Failed to send Unraid error to {cid}: {send_err}")
 
+    # Yield once so every task created above runs its synchronous prefix and
+    # flips is_running=True before the startup card snapshots monitor state.
+    # Each monitor's start() sets the flag before its first await, so a single
+    # event-loop turn is enough. Without this the Unraid system/array monitors
+    # (created after the connect() await, with nothing yielding afterwards) — and
+    # all monitors when Unraid is not configured (no connect() await at all) —
+    # would render red on the startup card despite running fine moments later.
+    await asyncio.sleep(0)
+
 
 async def start_monitoring(
     config: AppConfig,
