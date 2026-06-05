@@ -33,8 +33,8 @@ files:
     exports:
       - name: restart_bot
         kind: function
-        description: Stops polling, optionally broadcasts a notice, then re-execs `python -m src.main`.
-        params: [{name: bot, type: Bot}, {name: dp, type: Dispatcher}, {name: chat_id_store, type: ChatIdStore}, {name: notice, type: "str | None"}]
+        description: Optionally broadcasts a notice, then re-execs `python -m src.main`. Does NOT stop polling/close the session (that would race main()'s teardown and cancel execv); os.execv replaces the whole process.
+        params: [{name: bot, type: Bot}, {name: chat_id_store, type: ChatIdStore}, {name: notice, type: "str | None"}]
         returns: Coroutine
     imports:
       - from: src.alerts.manager

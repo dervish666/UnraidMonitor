@@ -83,7 +83,7 @@ async def main() -> None:
             """Called when the wizard saves config.yaml for the first time."""
             logger.info("Setup wizard complete -- restarting to apply config")
             await restart_bot(
-                bot, dp, chat_id_store,
+                bot, chat_id_store,
                 notice="✅ Setup complete! Restarting to apply configuration...",
             )
 
@@ -123,7 +123,7 @@ async def main() -> None:
                 """Called when a /setup re-run saves updated config."""
                 logger.info("Setup wizard re-run complete -- restarting to apply config")
                 await restart_bot(
-                    bot, dp, chat_id_store,
+                    bot, chat_id_store,
                     notice="✅ Configuration updated! Restarting to apply changes...",
                 )
 

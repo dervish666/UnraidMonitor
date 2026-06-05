@@ -463,7 +463,7 @@ async def start_monitoring(
     )
 
     async def _restart_to_apply() -> None:
-        await restart_bot(bot, dp, chat_id_store)
+        await restart_bot(bot, chat_id_store)
 
     controller, diagnostic_service = register_commands(
         dp,

@@ -2,6 +2,11 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.14.1] - 2026-06-05
+
+### Fixed
+- **Restart-to-apply never came back** — enabling image updates (and the setup-wizard restart) called `dp.stop_polling()` before `os.execv`, which unwound `main()`'s polling loop and ran its shutdown `finally`, cancelling the restart coroutine before it re-exec'd. The bot shut down cleanly but never restarted (it only recovered if Docker's restart policy happened to be set). `restart_bot()` now re-execs directly without stopping polling or closing the session — `os.execv` replaces the whole process, and Python's close-on-exec defaults drop the in-flight long-poll so Telegram frees the getUpdates slot for the fresh process.
+
 ## [0.14.0] - 2026-06-05
 
 ### Added

@@ -5,14 +5,13 @@ Used to apply configuration changes that can only take effect at startup
 src.main`` so the supervisor (Docker) sees the same process.
 """
 
-import asyncio
 import logging
 import os
 import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from aiogram import Bot, Dispatcher
+    from aiogram import Bot
     from src.alerts.manager import ChatIdStore
 
 logger = logging.getLogger(__name__)
@@ -20,19 +19,33 @@ logger = logging.getLogger(__name__)
 
 async def restart_bot(
     bot: "Bot",
-    dp: "Dispatcher",
     chat_id_store: "ChatIdStore",
     notice: str | None = None,
 ) -> None:
-    """Stop polling and re-exec the process so new config takes effect.
+    """Replace the running process with a fresh ``python -m src.main``.
 
     Args:
         bot: The aiogram Bot, used to broadcast ``notice`` if provided.
-        dp: The dispatcher to stop polling on.
         chat_id_store: Source of chat IDs for the optional broadcast.
         notice: If set, sent to every known chat before restarting. Callers
             that have already messaged the user (e.g. an inline-button handler
             editing its own message) should pass ``None``.
+
+    We deliberately do NOT call ``dp.stop_polling()`` or ``bot.session.close()``
+    first: either would unwind ``main()``'s polling loop and run its
+    ``finally`` (``bg.shutdown()`` + loop teardown), which cancels this
+    coroutine *before* it reaches ``os.execv`` — the restart then silently
+    degrades to a plain exit that only Docker's restart policy (if any) would
+    recover. ``os.execv`` replaces the whole process image, so polling, tasks
+    and sockets all stop regardless. Python marks file descriptors
+    close-on-exec by default, so the in-flight long-poll connection drops on
+    exec and Telegram frees the getUpdates slot immediately (no 409 conflict
+    for the fresh process).
+
+    The broadcast ``await`` below resolves once Telegram has the message, and
+    there is intentionally no awaitable between it and ``execv`` so nothing can
+    preempt the restart. ``execv`` only returns on failure, in which case the
+    bot keeps running normally.
     """
     logger.info("Restarting bot to apply configuration changes")
     if notice:
@@ -41,6 +54,4 @@ async def restart_bot(
                 await bot.send_message(cid, notice)
             except Exception:
                 pass
-    await dp.stop_polling()
-    await asyncio.sleep(1)
     os.execv(sys.executable, [sys.executable, "-m", "src.main"])
