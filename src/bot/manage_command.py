@@ -1,7 +1,7 @@
 """Manage command for ignores and mutes."""
 
 import logging
-from typing import Callable, Awaitable, TYPE_CHECKING
+from typing import Any, Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -37,6 +37,9 @@ def _build_manage_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="📝 Manage Ignores", callback_data="manage:ignores"),
                 InlineKeyboardButton(text="🔕 Manage Mutes", callback_data="manage:mutes"),
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Features", callback_data="manage:features"),
             ],
         ]
     )
@@ -457,5 +460,251 @@ def manage_delete_mute_callback(
                     await safe_edit(callback.message, text, reply_markup=keyboard)
         else:
             await callback.answer("Failed to unmute")
+
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# Features section — enable/configure optional monitors
+# ---------------------------------------------------------------------------
+
+
+class AutoHealSelectionState:
+    """Per-user container selections while the auto-heal picker is open.
+
+    Mirrors the wizard's in-memory session pattern: selections are seeded from
+    the current config when the picker opens and discarded once saved.
+    """
+
+    def __init__(self) -> None:
+        self._selections: dict[int, set[str]] = {}
+
+    def init(self, user_id: int, containers: list[str]) -> None:
+        self._selections[user_id] = set(containers)
+
+    def get(self, user_id: int) -> set[str]:
+        return self._selections.setdefault(user_id, set())
+
+    def toggle(self, user_id: int, container: str) -> None:
+        selection = self.get(user_id)
+        if container in selection:
+            selection.discard(container)
+        else:
+            selection.add(container)
+
+    def clear(self, user_id: int) -> None:
+        self._selections.pop(user_id, None)
+
+
+def _image_updates_state(image_update_monitor: Any) -> str:
+    """One-word state label for image-update detection."""
+    return "✅ On" if image_update_monitor is not None else "⚪ Off"
+
+
+def _auto_heal_state(auto_heal_config: Any) -> str:
+    """State label for auto-heal, including opted-in container count."""
+    if auto_heal_config is not None and auto_heal_config.enabled and auto_heal_config.containers:
+        return f"✅ {len(auto_heal_config.containers)} container(s)"
+    return "⚪ Off"
+
+
+def _build_features_view(
+    image_update_monitor: Any,
+    auto_heal_config: Any,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the Features panel text and keyboard."""
+    image_on = image_update_monitor is not None
+    text = (
+        "⚙️ *Optional Features*\n\n"
+        f"🔄 *Image updates* — {_image_updates_state(image_update_monitor)}\n"
+        "_Daily check for newer versions of your container images. You'll get a "
+        "digest listing what's outdated, each with a one-tap pull button._\n\n"
+        f"🩹 *Auto-heal* — {_auto_heal_state(auto_heal_config)}\n"
+        "_Automatically restarts a container when it reports an unhealthy "
+        "healthcheck. Opt in per-container; a storm guard stops restart loops._"
+    )
+
+    if image_on:
+        image_button = InlineKeyboardButton(
+            text="⚪ Disable image updates", callback_data="feat:img:off",
+        )
+    else:
+        image_button = InlineKeyboardButton(
+            text="✅ Enable image updates", callback_data="feat:img:on",
+        )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [image_button],
+        [InlineKeyboardButton(text="🩹 Configure auto-heal", callback_data="feat:heal")],
+        _back_button(),
+    ])
+    return text, keyboard
+
+
+def manage_features_callback(
+    image_update_monitor: Any = None,
+    auto_heal_config: Any = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for the Features panel (manage:features)."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        await callback.answer()
+        if callback.message:
+            text, keyboard = _build_features_view(image_update_monitor, auto_heal_config)
+            await safe_edit(callback.message, text, reply_markup=keyboard)
+
+    return handler
+
+
+def feat_image_toggle_callback(
+    image_updates_config: Any,
+    restart_cb: Callable[[], Awaitable[None]] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for the image-update enable/disable button (feat:img:on|off).
+
+    The image-update monitor is only constructed at startup, so the change is
+    persisted and the bot restarts to apply it.
+    """
+
+    async def handler(callback: CallbackQuery) -> None:
+        enable = (callback.data or "").endswith(":on")
+        if image_updates_config is not None:
+            image_updates_config.set_enabled(enable)
+        await callback.answer()
+
+        if restart_cb is not None:
+            if callback.message:
+                verb = "Enabling" if enable else "Disabling"
+                await safe_edit(
+                    callback.message,
+                    f"♻️ {verb} image updates — restarting to apply…",
+                )
+            await restart_cb()
+        elif callback.message:
+            word = "enabled" if enable else "disabled"
+            await safe_edit(
+                callback.message,
+                f"Image updates {word}. Restart the bot to apply.",
+            )
+
+    return handler
+
+
+def _heal_candidates(
+    state: "ContainerStateManager",
+    protected_containers: list[str] | None,
+) -> list[str]:
+    """Controllable container names eligible for auto-heal, sorted."""
+    protected = set(protected_containers or [])
+    names = {c.name for c in state.get_all() if c.name and c.name not in protected}
+    return sorted(names)
+
+
+def _build_heal_picker(
+    candidates: list[str],
+    selected: set[str],
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the auto-heal container picker text and toggle keyboard."""
+    text = (
+        "🩹 *Auto-heal containers*\n\n"
+        "Tap to choose which containers get auto-restarted when they report an "
+        "unhealthy healthcheck. Protected containers are excluded."
+    )
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    if not candidates:
+        text += "\n\n_No controllable containers found._"
+    for name in candidates:
+        mark = "✅" if name in selected else "❌"
+        buttons.append([
+            InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"fh_tog:{name}")
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="💾 Save", callback_data="fh_save"),
+        InlineKeyboardButton(text="⬅️ Back", callback_data="manage:features"),
+    ])
+    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def feat_heal_open_callback(
+    state: "ContainerStateManager",
+    auto_heal_config: Any,
+    selection_state: AutoHealSelectionState,
+    protected_containers: list[str] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory that opens the auto-heal container picker (feat:heal)."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        user_id = callback.from_user.id if callback.from_user else 0
+        current = list(auto_heal_config.containers) if auto_heal_config is not None else []
+        selection_state.init(user_id, current)
+
+        candidates = _heal_candidates(state, protected_containers)
+        text, keyboard = _build_heal_picker(candidates, selection_state.get(user_id))
+
+        await callback.answer()
+        if callback.message:
+            await safe_edit(callback.message, text, reply_markup=keyboard)
+
+    return handler
+
+
+def feat_heal_toggle_callback(
+    state: "ContainerStateManager",
+    selection_state: AutoHealSelectionState,
+    protected_containers: list[str] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for picker toggle buttons (fh_tog:<container>)."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        data = callback.data or ""
+        # split(":", 1) keeps container names that contain colons intact
+        parts = data.split(":", 1)
+        if len(parts) < 2 or not parts[1]:
+            await callback.answer("Invalid selection")
+            return
+        container = parts[1]
+        user_id = callback.from_user.id if callback.from_user else 0
+
+        selection_state.toggle(user_id, container)
+        await callback.answer()
+
+        candidates = _heal_candidates(state, protected_containers)
+        _, keyboard = _build_heal_picker(candidates, selection_state.get(user_id))
+        if isinstance(callback.message, Message):
+            try:
+                await callback.message.edit_reply_markup(reply_markup=keyboard)
+            except Exception:
+                pass
+
+    return handler
+
+
+def feat_heal_save_callback(
+    auto_heal_config: Any,
+    selection_state: AutoHealSelectionState,
+    image_update_monitor: Any = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for the picker Save button (fh_save).
+
+    Auto-heal applies live: the running AutoHealer shares this config object,
+    so no restart is needed.
+    """
+
+    async def handler(callback: CallbackQuery) -> None:
+        user_id = callback.from_user.id if callback.from_user else 0
+        selected = sorted(selection_state.get(user_id))
+        if auto_heal_config is not None:
+            auto_heal_config.set_containers(selected)
+        selection_state.clear(user_id)
+
+        count = len(selected)
+        await callback.answer(
+            f"Auto-heal {'on for ' + str(count) + ' container(s)' if count else 'disabled'}"
+        )
+        if callback.message:
+            text, keyboard = _build_features_view(image_update_monitor, auto_heal_config)
+            await safe_edit(callback.message, text, reply_markup=keyboard)
 
     return handler

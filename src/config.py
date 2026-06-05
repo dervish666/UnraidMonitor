@@ -339,6 +339,7 @@ class ImageUpdatesConfig:
 
     enabled: bool = False
     poll_interval_hours: int = IMAGE_UPDATE_POLL_INTERVAL_HOURS
+    config_path: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ImageUpdatesConfig":
@@ -346,6 +347,30 @@ class ImageUpdatesConfig:
             enabled=data.get("enabled", False),
             poll_interval_hours=max(data.get("poll_interval_hours", IMAGE_UPDATE_POLL_INTERVAL_HOURS), 1),
         )
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Toggle image-update detection and persist to config.yaml.
+
+        Takes effect after a restart (the monitor is only constructed at
+        startup when enabled).
+        """
+        self.enabled = enabled
+        self._persist()
+
+    def _persist(self) -> None:
+        """Write current image-update settings back to config.yaml."""
+        if not self.config_path:
+            return
+        path = Path(self.config_path)
+        if not path.exists():
+            return
+
+        data = load_yaml_config(str(path))
+        section = data.setdefault("image_updates", {})
+        section["enabled"] = self.enabled
+        section["poll_interval_hours"] = self.poll_interval_hours
+
+        atomic_yaml_write(data, path)
 
 
 @dataclass
@@ -356,6 +381,7 @@ class AutoHealConfig:
     containers: list[str] = field(default_factory=list)
     max_restarts: int = AUTOHEAL_MAX_RESTARTS
     window_minutes: int = AUTOHEAL_WINDOW_MINUTES
+    config_path: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AutoHealConfig":
@@ -365,6 +391,35 @@ class AutoHealConfig:
             max_restarts=max(data.get("max_restarts", AUTOHEAL_MAX_RESTARTS), 1),
             window_minutes=max(data.get("window_minutes", AUTOHEAL_WINDOW_MINUTES), 1),
         )
+
+    def set_containers(self, containers: list[str]) -> None:
+        """Set the opted-in container list and persist to config.yaml.
+
+        Auto-heal is considered enabled only while at least one container is
+        opted in, so ``enabled`` tracks whether the list is non-empty. The
+        running AutoHealer holds a reference to this object, so the change
+        applies live without a restart.
+        """
+        self.containers = list(containers)
+        self.enabled = bool(self.containers)
+        self._persist()
+
+    def _persist(self) -> None:
+        """Write current auto-heal settings back to config.yaml."""
+        if not self.config_path:
+            return
+        path = Path(self.config_path)
+        if not path.exists():
+            return
+
+        data = load_yaml_config(str(path))
+        section = data.setdefault("auto_heal", {})
+        section["enabled"] = self.enabled
+        section["containers"] = self.containers
+        section["max_restarts"] = self.max_restarts
+        section["window_minutes"] = self.window_minutes
+
+        atomic_yaml_write(data, path)
 
 
 @dataclass
@@ -546,7 +601,9 @@ class AppConfig:
             self._yaml_config.get("memory_management", {})
         )
         self._image_updates = ImageUpdatesConfig.from_dict(self._yaml_config.get("image_updates", {}))
+        self._image_updates.config_path = settings.config_path
         self._auto_heal = AutoHealConfig.from_dict(self._yaml_config.get("auto_heal", {}))
+        self._auto_heal.config_path = settings.config_path
 
     @property
     def ignored_containers(self) -> list[str]:

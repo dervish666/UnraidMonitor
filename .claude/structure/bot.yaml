@@ -42,7 +42,7 @@ files:
       - from: src.bot.ignore_command
         items: [ignore_command, ignores_command, IgnoreSelectionState, ignore_similar_callback, ignore_toggle_callback, ignore_all_callback, ignore_done_callback, ignore_cancel_callback]
       - from: src.bot.manage_command
-        items: [manage_command, manage_back_callback, manage_status_callback, manage_resources_callback, manage_server_callback, manage_disks_callback, manage_ignores_callback, manage_ignores_container_callback, manage_mutes_callback, manage_delete_ignore_callback, manage_delete_mute_callback]
+        items: [manage_command, manage_back_callback, manage_status_callback, manage_resources_callback, manage_server_callback, manage_disks_callback, manage_ignores_callback, manage_ignores_container_callback, manage_mutes_callback, manage_delete_ignore_callback, manage_delete_mute_callback, manage_features_callback, feat_image_toggle_callback, feat_heal_open_callback, feat_heal_toggle_callback, feat_heal_save_callback, AutoHealSelectionState]
       - from: src.services.container_control
         items: [ContainerController]
       - from: src.services.diagnostic
@@ -342,6 +342,29 @@ files:
         kind: function
         signature: (mute_manager: MuteManager, server_mute_manager: ServerMuteManager | None, array_mute_manager: ArrayMuteManager | None) -> Callable[[CallbackQuery], Awaitable[None]]
         description: Factory for mdm:* callback (unmutes, re-renders list)
+      - name: AutoHealSelectionState
+        kind: class
+        description: Per-user in-memory container selections while the auto-heal picker is open
+      - name: manage_features_callback
+        kind: function
+        signature: (image_update_monitor: Any = None, auto_heal_config: Any = None) -> Callable[[CallbackQuery], Awaitable[None]]
+        description: Factory for manage:features panel (explains + toggles image updates and auto-heal)
+      - name: feat_image_toggle_callback
+        kind: function
+        signature: (image_updates_config: Any, restart_cb: Callable[[], Awaitable[None]] | None = None) -> Callable[[CallbackQuery], Awaitable[None]]
+        description: Factory for feat:img:on|off (persists image-update flag, restarts to apply)
+      - name: feat_heal_open_callback
+        kind: function
+        signature: (state: ContainerStateManager, auto_heal_config: Any, selection_state: AutoHealSelectionState, protected_containers: list[str] | None = None) -> Callable[[CallbackQuery], Awaitable[None]]
+        description: Factory for feat:heal (opens auto-heal container picker, seeds selection from config)
+      - name: feat_heal_toggle_callback
+        kind: function
+        signature: (state: ContainerStateManager, selection_state: AutoHealSelectionState, protected_containers: list[str] | None = None) -> Callable[[CallbackQuery], Awaitable[None]]
+        description: Factory for fh_tog:<container> (toggles a container in the picker)
+      - name: feat_heal_save_callback
+        kind: function
+        signature: (auto_heal_config: Any, selection_state: AutoHealSelectionState, image_update_monitor: Any = None) -> Callable[[CallbackQuery], Awaitable[None]]
+        description: Factory for fh_save (live-applies auto-heal container list, re-renders features)
     imports:
       - from: src.state
         items: [ContainerStateManager]

@@ -23,6 +23,7 @@ from src.alerts.mute_manager import MuteManager
 from src.alerts.server_mute_manager import ServerMuteManager
 from src.alerts.array_mute_manager import ArrayMuteManager
 from src.bot.telegram_bot import register_commands
+from src.restart import restart_bot
 from src.analysis.pattern_analyzer import PatternAnalyzer
 from src.unraid.client import UnraidClientWrapper
 from src.unraid.monitors.system_monitor import UnraidSystemMonitor
@@ -461,6 +462,9 @@ async def start_monitoring(
         uc, ai_config, bot_config, config,
     )
 
+    async def _restart_to_apply() -> None:
+        await restart_bot(bot, dp, chat_id_store)
+
     controller, diagnostic_service = register_commands(
         dp,
         state,
@@ -482,6 +486,10 @@ async def start_monitoring(
         nl_processor=nl_processor,
         ai_config=ai_config,
         bot_config=bot_config,
+        image_update_monitor=image_update_monitor,
+        image_updates_config=config.image_updates,
+        auto_heal_config=config.auto_heal,
+        restart_cb=_restart_to_apply,
     )
 
     if nl_processor and controller:

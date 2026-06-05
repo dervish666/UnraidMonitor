@@ -17,6 +17,7 @@ src/main.py - Entry point, signal handling, wizard setup (delegates to startup.p
 src/startup.py - start_monitoring() orchestrator, provider/monitor initialization
 src/alert_proxy.py - AlertManagerProxy for multi-user alert delivery with queuing
 src/background.py - _BackgroundTasks tracker for graceful shutdown of monitors
+src/restart.py - restart_bot() graceful in-place process restart via os.execv (applies config that needs a fresh start)
 src/monitor_callbacks.py - Factory functions for monitor alert/mute callbacks
 src/constants.py - Named constants for all configuration defaults and thresholds
 src/config.py - Settings, configuration loading, YAML parsing, ConfigWriter
@@ -91,7 +92,7 @@ src/utils/version_store.py - read/write data/announced_version.json for startup 
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.13.0) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.14.0) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 **Version string lives in TWO places** — `pyproject.toml` (`version`) and `src/__init__.py` (`__version__`). Both must be bumped together on release; `tests/test_version.py` guards against drift. `BOT_VERSION` (in `src/bot/health_command.py`) resolves from installed package metadata when available, else falls back to `src.__version__` — the package is not installed in the Docker image, so the `__version__` fallback is what runs in production.
 
@@ -187,7 +188,9 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `res_set:container_name:metric:value` (apply threshold, 0 = reset to default)
 - `mem_kill:container_name`, `mem_restart_yes:container_name`, `mem_restart_no:container_name`, `mem_cancel_kill:container_name`
 - `nl_confirm:action:container` (e.g., `nl_confirm:restart:plex`), `nl_cancel`
-- `manage:section` (e.g., `manage:status`, `manage:resources`, `manage:server`, `manage:disks`, `manage:ignores`, `manage:mutes`, `manage:back`)
+- `manage:section` (e.g., `manage:status`, `manage:resources`, `manage:server`, `manage:disks`, `manage:ignores`, `manage:mutes`, `manage:features`, `manage:back`)
+- `feat:img:on` / `feat:img:off` (enable/disable image updates from /manage → Features; persists + restarts), `feat:heal` (open auto-heal container picker)
+- `fh_tog:container_name` (toggle a container in the auto-heal picker), `fh_save` (live-apply auto-heal container list, no restart)
 - `arr_mute:minutes` (mute array alerts, e.g., `arr_mute:60`)
 - `arr_thresh:metric:current` (show array threshold options, e.g., `arr_thresh:capacity:85`)
 - `arr_set:metric:value` (apply array threshold, e.g., `arr_set:array_usage:90`, 0 = reset to default)

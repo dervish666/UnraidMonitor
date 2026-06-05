@@ -75,11 +75,15 @@ def build_status_lines(
         lines.append(f"  Memory: {'✅ Running' if memory_monitor.is_running else '🔴 Stopped'}")
     else:
         lines.append("  Memory: ⚪ Disabled")
+    image_updates_off = not image_update_monitor
     if image_update_monitor:
         lines.append(f"  Image updates: {'✅ Running' if image_update_monitor.is_running else '🔴 Stopped'}")
     else:
         lines.append("  Image updates: ⚪ Disabled")
-    if auto_heal_config is not None and auto_heal_config.enabled and auto_heal_config.containers:
+    auto_heal_off = not (
+        auto_heal_config is not None and auto_heal_config.enabled and auto_heal_config.containers
+    )
+    if not auto_heal_off:
         lines.append(f"  Auto-heal: ✅ {len(auto_heal_config.containers)} container(s)")
     else:
         lines.append("  Auto-heal: ⚪ Disabled")
@@ -91,6 +95,10 @@ def build_status_lines(
             lines.append(f"    Array: {'✅' if unraid_array_monitor.is_running else '🔴'}")
     else:
         lines.append("  Unraid: ⚪ Not configured")
+
+    if image_updates_off or auto_heal_off:
+        lines.append("")
+        lines.append("💡 Turn these on in /manage → ⚙️ Features")
     return lines
 
 

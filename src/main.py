@@ -16,6 +16,7 @@ from src.alerts.manager import ChatIdStore
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_setup_wizard
 from src.bot.setup_wizard import SetupWizard
 from src.background import _BackgroundTasks
+from src.restart import restart_bot
 from src.startup import start_monitoring
 
 
@@ -81,17 +82,10 @@ async def main() -> None:
         async def on_wizard_complete() -> None:
             """Called when the wizard saves config.yaml for the first time."""
             logger.info("Setup wizard complete -- restarting to apply config")
-            for cid in chat_id_store.get_all_chat_ids():
-                try:
-                    await bot.send_message(
-                        cid,
-                        "✅ Setup complete! Restarting to apply configuration...",
-                    )
-                except Exception:
-                    pass
-            await dp.stop_polling()
-            await asyncio.sleep(1)
-            os.execv(sys.executable, [sys.executable, "-m", "src.main"])
+            await restart_bot(
+                bot, dp, chat_id_store,
+                notice="✅ Setup complete! Restarting to apply configuration...",
+            )
 
         register_setup_wizard(dp, wizard, on_complete=on_wizard_complete)
 
@@ -128,17 +122,10 @@ async def main() -> None:
             async def on_rerun_complete() -> None:
                 """Called when a /setup re-run saves updated config."""
                 logger.info("Setup wizard re-run complete -- restarting to apply config")
-                for cid in chat_id_store.get_all_chat_ids():
-                    try:
-                        await bot.send_message(
-                            cid,
-                            "✅ Configuration updated! Restarting to apply changes...",
-                        )
-                    except Exception:
-                        pass
-                await dp.stop_polling()
-                await asyncio.sleep(1)
-                os.execv(sys.executable, [sys.executable, "-m", "src.main"])
+                await restart_bot(
+                    bot, dp, chat_id_store,
+                    notice="✅ Configuration updated! Restarting to apply changes...",
+                )
 
             register_setup_wizard(dp, wizard, on_complete=on_rerun_complete, register_start=False)
 

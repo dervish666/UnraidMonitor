@@ -4,6 +4,8 @@ import pytest
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+from aiogram.types import Message
+
 from src.bot.manage_command import (
     manage_command,
     manage_back_callback,
@@ -16,11 +18,33 @@ from src.bot.manage_command import (
     manage_mutes_callback,
     manage_delete_ignore_callback,
     manage_delete_mute_callback,
+    manage_features_callback,
+    feat_image_toggle_callback,
+    feat_heal_open_callback,
+    feat_heal_toggle_callback,
+    feat_heal_save_callback,
+    AutoHealSelectionState,
     _build_manage_keyboard,
 )
 from src.alerts.ignore_manager import IgnoreManager
 from src.alerts.mute_manager import MuteManager
+from src.models import ContainerInfo
 from src.state import ContainerStateManager
+
+
+def _container(name: str, *, health: str | None = None) -> ContainerInfo:
+    return ContainerInfo(name=name, status="running", health=health, image="img", started_at=None)
+
+
+def _state_with(*names: str) -> ContainerStateManager:
+    state = ContainerStateManager()
+    for n in names:
+        state.update(_container(n))
+    return state
+
+
+def _flatten(keyboard):
+    return [btn for row in keyboard.inline_keyboard for btn in row]
 
 
 @pytest.fixture
@@ -60,9 +84,10 @@ async def test_manage_command_shows_buttons():
 def test_build_manage_keyboard():
     """Test _build_manage_keyboard helper returns correct structure."""
     keyboard = _build_manage_keyboard()
-    assert len(keyboard.inline_keyboard) == 3
+    assert len(keyboard.inline_keyboard) == 4
     assert keyboard.inline_keyboard[0][0].callback_data == "manage:status"
     assert keyboard.inline_keyboard[2][1].callback_data == "manage:mutes"
+    assert keyboard.inline_keyboard[3][0].callback_data == "manage:features"
 
 
 @pytest.mark.asyncio
@@ -392,3 +417,174 @@ def test_manage_command_in_help():
     from src.bot.commands import _HELP_SECTIONS
     setup_content = _HELP_SECTIONS["setup"][2]
     assert "/manage" in setup_content
+
+
+# ---------------------------------------------------------------------------
+# Features panel + auto-heal picker
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_features_panel_shows_enable_when_off():
+    """Image updates off -> Enable button; auto-heal off -> shows Off."""
+    auto_heal = MagicMock(enabled=False, containers=[])
+    handler = manage_features_callback(image_update_monitor=None, auto_heal_config=auto_heal)
+    callback = AsyncMock()
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    callback.message.edit_text.assert_called_once()
+    call_args = callback.message.edit_text.call_args
+    text = call_args.args[0]
+    assert "Image updates" in text and "Auto-heal" in text
+    callbacks = [b.callback_data for b in _flatten(call_args.kwargs["reply_markup"])]
+    assert "feat:img:on" in callbacks
+    assert "feat:heal" in callbacks
+    assert "manage:back" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_features_panel_shows_disable_when_on():
+    """Image updates running -> Disable button; auto-heal shows count."""
+    monitor = MagicMock(is_running=True)
+    auto_heal = MagicMock(enabled=True, containers=["plex", "sonarr"])
+    handler = manage_features_callback(image_update_monitor=monitor, auto_heal_config=auto_heal)
+    callback = AsyncMock()
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    call_args = callback.message.edit_text.call_args
+    text = call_args.args[0]
+    assert "2 container(s)" in text
+    callbacks = [b.callback_data for b in _flatten(call_args.kwargs["reply_markup"])]
+    assert "feat:img:off" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_feat_image_toggle_enable_persists_and_restarts():
+    image_cfg = MagicMock()
+    restart_cb = AsyncMock()
+    handler = feat_image_toggle_callback(image_cfg, restart_cb)
+    callback = AsyncMock()
+    callback.data = "feat:img:on"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    image_cfg.set_enabled.assert_called_once_with(True)
+    restart_cb.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_feat_image_toggle_disable():
+    image_cfg = MagicMock()
+    restart_cb = AsyncMock()
+    handler = feat_image_toggle_callback(image_cfg, restart_cb)
+    callback = AsyncMock()
+    callback.data = "feat:img:off"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    image_cfg.set_enabled.assert_called_once_with(False)
+    restart_cb.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_feat_image_toggle_without_restart_cb():
+    """No restart capability -> persists and tells the user to restart."""
+    image_cfg = MagicMock()
+    handler = feat_image_toggle_callback(image_cfg, None)
+    callback = AsyncMock()
+    callback.data = "feat:img:on"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    image_cfg.set_enabled.assert_called_once_with(True)
+    text = callback.message.edit_text.call_args.args[0]
+    assert "Restart the bot" in text
+
+
+@pytest.mark.asyncio
+async def test_feat_heal_open_seeds_selection_and_excludes_protected():
+    state = _state_with("plex", "sonarr", "traefik")
+    auto_heal = MagicMock(containers=["plex"])
+    selection = AutoHealSelectionState()
+    handler = feat_heal_open_callback(
+        state, auto_heal, selection, protected_containers=["traefik"],
+    )
+    callback = AsyncMock()
+    callback.from_user.id = 123
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    # Seeded from config
+    assert selection.get(123) == {"plex"}
+    # Keyboard excludes protected, marks selected with a check
+    keyboard = callback.message.edit_text.call_args.kwargs["reply_markup"]
+    toggle_btns = [b for b in _flatten(keyboard) if b.callback_data.startswith("fh_tog:")]
+    names = {b.callback_data.split(":", 1)[1] for b in toggle_btns}
+    assert names == {"plex", "sonarr"}
+    plex_btn = next(b for b in toggle_btns if b.callback_data == "fh_tog:plex")
+    sonarr_btn = next(b for b in toggle_btns if b.callback_data == "fh_tog:sonarr")
+    assert plex_btn.text.startswith("✅")
+    assert sonarr_btn.text.startswith("❌")
+    # Save + Back present
+    cbs = [b.callback_data for b in _flatten(keyboard)]
+    assert "fh_save" in cbs and "manage:features" in cbs
+
+
+@pytest.mark.asyncio
+async def test_feat_heal_toggle_updates_selection():
+    state = _state_with("plex", "sonarr")
+    selection = AutoHealSelectionState()
+    selection.init(123, ["plex"])
+    handler = feat_heal_toggle_callback(state, selection)
+    callback = AsyncMock()
+    callback.data = "fh_tog:sonarr"
+    callback.from_user.id = 123
+    callback.message = AsyncMock(spec=Message)
+
+    await handler(callback)
+
+    assert selection.get(123) == {"plex", "sonarr"}
+    callback.message.edit_reply_markup.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_feat_heal_save_applies_and_rerenders():
+    auto_heal = MagicMock(enabled=True, containers=["plex", "sonarr"])
+    selection = AutoHealSelectionState()
+    selection.init(123, ["sonarr", "plex"])
+    handler = feat_heal_save_callback(auto_heal, selection, image_update_monitor=None)
+    callback = AsyncMock()
+    callback.from_user.id = 123
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    # Persisted as a sorted list (live-applied, no restart)
+    auto_heal.set_containers.assert_called_once_with(["plex", "sonarr"])
+    # Selection cleared and features panel re-rendered
+    assert selection.get(123) == set()
+    callback.message.edit_text.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_feat_heal_save_empty_disables():
+    auto_heal = MagicMock(enabled=False, containers=[])
+    selection = AutoHealSelectionState()
+    selection.init(123, [])
+    handler = feat_heal_save_callback(auto_heal, selection)
+    callback = AsyncMock()
+    callback.from_user.id = 123
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    auto_heal.set_containers.assert_called_once_with([])
+    callback.answer.assert_called_with("Auto-heal disabled")

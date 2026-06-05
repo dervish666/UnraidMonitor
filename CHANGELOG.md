@@ -2,6 +2,18 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.14.0] - 2026-06-05
+
+### Added
+- **Features panel in `/manage`** — a new ⚙️ Features section explains image-update detection and auto-heal, and lets you enable them from Telegram instead of editing `config.yaml`
+- **Enable image updates from Telegram** — one tap persists `image_updates.enabled` and restarts the bot to apply it
+- **Auto-heal container picker** — choose which containers get auto-restarted when unhealthy via a tappable picker (protected containers excluded); applies live with no restart, since the running `AutoHealer` shares the config object
+- **Discoverability hint** — the startup card and `/health` now point to `/manage` → ⚙️ Features whenever image updates or auto-heal is off
+
+### Changed
+- `ImageUpdatesConfig` and `AutoHealConfig` gained runtime persistence (`set_enabled` / `set_containers`) mirroring the existing `ResourceConfig`/`UnraidConfig` pattern
+- Extracted a reusable `restart_bot()` helper (`src/restart.py`); the setup-wizard restart paths now use it
+
 ## [0.13.0] - 2026-06-04
 
 ### Added

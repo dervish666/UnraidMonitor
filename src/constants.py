@@ -97,6 +97,9 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.14.0": [
+        "Turn features on from Telegram - /manage → ⚙️ Features explains and enables image-update alerts and lets you pick auto-heal containers, no config file editing",
+    ],
     "0.13.0": [
         "Smarter diagnostics - /diagnose now reads full container state (health, volumes, ports, restart policy) and knows which alert triggered it, for more accurate fixes",
     ],

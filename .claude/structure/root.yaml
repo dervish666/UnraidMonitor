@@ -23,8 +23,22 @@ files:
         items: [create_bot, create_dispatcher, register_setup_wizard]
       - from: src.background
         items: [_BackgroundTasks]
+      - from: src.restart
+        items: [restart_bot]
       - from: src.startup
         items: [start_monitoring]
+
+  restart.py:
+    description: Graceful in-place process restart via os.execv (applies config changes that need a fresh startup).
+    exports:
+      - name: restart_bot
+        kind: function
+        description: Stops polling, optionally broadcasts a notice, then re-execs `python -m src.main`.
+        params: [{name: bot, type: Bot}, {name: dp, type: Dispatcher}, {name: chat_id_store, type: ChatIdStore}, {name: notice, type: "str | None"}]
+        returns: Coroutine
+    imports:
+      - from: src.alerts.manager
+        items: [ChatIdStore]
 
   alert_proxy.py:
     description: AlertManagerProxy for multi-user alert delivery with queuing.

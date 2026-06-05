@@ -159,3 +159,19 @@ def test_build_status_lines_includes_new_monitors():
     assert "Image updates" in blob
     assert "Auto-heal" in blob
     assert "1 container" in blob
+    # Both features on -> no discoverability hint
+    assert "Features" not in blob
+
+
+def test_build_status_lines_hint_when_features_off():
+    """When image-updates or auto-heal is off, a /manage hint is appended."""
+    from src.bot.health_command import build_status_lines
+    monitor = MagicMock()
+    monitor.is_running = True
+    monitor.state_manager.get_all.return_value = []
+    lines = build_status_lines(
+        monitor=monitor, image_update_monitor=None, auto_heal_config=None,
+    )
+    blob = "\n".join(lines)
+    assert "/manage" in blob
+    assert "Features" in blob

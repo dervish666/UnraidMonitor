@@ -60,6 +60,12 @@ from src.bot.manage_command import (
     manage_mutes_callback,
     manage_delete_ignore_callback,
     manage_delete_mute_callback,
+    manage_features_callback,
+    feat_image_toggle_callback,
+    feat_heal_open_callback,
+    feat_heal_toggle_callback,
+    feat_heal_save_callback,
+    AutoHealSelectionState,
 )
 from src.bot.resources_command import resources_command
 from src.bot.unraid_commands import (
@@ -213,6 +219,11 @@ def _register_manage_commands(
     unraid_system_monitor: Any | None,
     server_mute_manager: Any | None,
     array_mute_manager: Any | None,
+    image_update_monitor: Any | None = None,
+    image_updates_config: Any | None = None,
+    auto_heal_config: Any | None = None,
+    protected_containers: list[str] | None = None,
+    restart_cb: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Register /manage dashboard command and all its sub-callbacks."""
     dp.message.register(manage_command(unraid_system_monitor), Command("manage"))
@@ -230,6 +241,27 @@ def _register_manage_commands(
     dp.callback_query.register(
         manage_delete_mute_callback(mute_manager, server_mute_manager, array_mute_manager),
         F.data.startswith("mdm:"),
+    )
+
+    # Features panel: enable image updates / configure auto-heal
+    heal_selection = AutoHealSelectionState()
+    dp.callback_query.register(
+        manage_features_callback(image_update_monitor, auto_heal_config), F.data == "manage:features",
+    )
+    dp.callback_query.register(
+        feat_image_toggle_callback(image_updates_config, restart_cb), F.data.startswith("feat:img:"),
+    )
+    dp.callback_query.register(
+        feat_heal_open_callback(state, auto_heal_config, heal_selection, protected_containers),
+        F.data == "feat:heal",
+    )
+    dp.callback_query.register(
+        feat_heal_toggle_callback(state, heal_selection, protected_containers),
+        F.data.startswith("fh_tog:"),
+    )
+    dp.callback_query.register(
+        feat_heal_save_callback(auto_heal_config, heal_selection, image_update_monitor),
+        F.data == "fh_save",
     )
 
 
@@ -254,6 +286,10 @@ def register_commands(
     nl_processor: Any | None = None,
     ai_config: Any | None = None,
     bot_config: Any | None = None,
+    image_update_monitor: Any | None = None,
+    image_updates_config: Any | None = None,
+    auto_heal_config: Any | None = None,
+    restart_cb: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[ContainerController | None, DiagnosticService | None]:
     """Register all command handlers.
 
@@ -325,6 +361,11 @@ def register_commands(
             _register_manage_commands(
                 dp, state, ignore_manager, mute_manager,
                 resource_monitor, unraid_system_monitor, server_mute_manager, array_mute_manager,
+                image_update_monitor=image_update_monitor,
+                image_updates_config=image_updates_config,
+                auto_heal_config=auto_heal_config,
+                protected_containers=protected_containers,
+                restart_cb=restart_cb,
             )
 
         if registry is not None:
