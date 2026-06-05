@@ -97,6 +97,9 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.14.3": [
+        "Chattier assistant - ask for the server status as a story, a captain's log, or a haiku and it'll play along with real numbers, while still staying focused on your server",
+    ],
     "0.14.2": [
         "Cleaner AI replies - chat and /diagnose answers now render bold, italics and code properly instead of showing raw ** asterisks",
     ],

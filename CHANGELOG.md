@@ -2,6 +2,11 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.14.3] - 2026-06-05
+
+### Changed
+- **Friendlier natural-language chat** — the NL assistant now plays along with creative, on-topic requests instead of refusing them. "Tell me a story about the server", "status as a captain's log", "roast my containers", "how's it doing in haiku" now get fulfilled by pulling the real stats with tools first, then answering in the requested style (grounded in actual numbers, never invented). It still declines genuinely off-topic asks (e.g. "write my essay") and stays scoped to the server, containers, array, and disks. Tone/personality guidance added to `SYSTEM_PROMPT` in `src/services/nl_processor.py`; action/tool behaviour unchanged.
+
 ## [0.14.2] - 2026-06-05
 
 ### Fixed

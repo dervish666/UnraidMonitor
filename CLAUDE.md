@@ -92,7 +92,7 @@ src/utils/version_store.py - read/write data/announced_version.json for startup 
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.14.2) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.14.3) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 **Version string lives in TWO places** — `pyproject.toml` (`version`) and `src/__init__.py` (`__version__`). Both must be bumped together on release; `tests/test_version.py` guards against drift. `BOT_VERSION` (in `src/bot/health_command.py`) resolves from installed package metadata when available, else falls back to `src.__version__` — the package is not installed in the Docker image, so the `__version__` fallback is what runs in production.
 
