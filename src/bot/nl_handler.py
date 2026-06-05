@@ -6,7 +6,8 @@ from typing import Any, Awaitable, Callable
 from aiogram.filters import BaseFilter
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
-from src.utils.formatting import truncate_message
+from src.utils.formatting import safe_reply, truncate_message
+from src.utils.telegram_format import markdown_to_telegram_html
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,17 @@ def create_nl_handler(processor: Any) -> Callable[[Message], Awaitable[None]]:
                 ]
             ])
 
-        await message.answer(truncate_message(result.response), reply_markup=reply_markup)
+        # The LLM returns CommonMark Markdown; render it as Telegram HTML so
+        # bold/italic/headings display instead of leaking literal '*' characters.
+        # Truncate after conversion so the final HTML stays within Telegram's
+        # length limit (a cut tag degrades to plain text via safe_reply).
+        html_response = truncate_message(
+            markdown_to_telegram_html(result.response),
+            suffix="\n\n<i>(truncated)</i>",
+        )
+        await safe_reply(
+            message, html_response, parse_mode="HTML", reply_markup=reply_markup
+        )
 
     return handler
 

@@ -8,6 +8,7 @@ from aiogram.types import Message, MaybeInaccessibleMessage
 from aiogram.exceptions import TelegramBadRequest
 
 from src.constants import MAX_CONTAINER_NAME_LENGTH
+from src.utils.telegram_format import strip_html_tags
 
 # Valid Docker container name pattern (alphanumeric, dash, underscore, dot, colon)
 # Docker allows: [a-zA-Z0-9][a-zA-Z0-9_.-]* but we also allow colons for compose names
@@ -26,18 +27,25 @@ def _strip_markdown(text: str) -> str:
     return text.replace("*", "").replace("`", "").replace("_", "").replace("[", "").replace("]", "")
 
 
+def _plain_fallback(text: str, parse_mode: str | None) -> str:
+    """Reduce formatted text to plain text for the parse-failure fallback."""
+    if parse_mode == "HTML":
+        return strip_html_tags(text)
+    return _strip_markdown(text)
+
+
 async def safe_reply(
     message: Message,
     text: str,
     parse_mode: str = "Markdown",
     **kwargs: Any,
 ) -> Message:
-    """Send a message with Markdown, falling back to plain text on parse failure."""
+    """Send a formatted message, falling back to plain text on parse failure."""
     try:
         return await message.answer(text, parse_mode=parse_mode, **kwargs)
     except TelegramBadRequest as e:
         if "can't parse entities" in str(e):
-            return await message.answer(_strip_markdown(text), **kwargs)
+            return await message.answer(_plain_fallback(text, parse_mode), **kwargs)
         raise
 
 
@@ -47,12 +55,12 @@ async def safe_edit(
     parse_mode: str = "Markdown",
     **kwargs: Any,
 ) -> Message | bool:
-    """Edit a message with Markdown, falling back to plain text on parse failure."""
+    """Edit a message with formatting, falling back to plain text on parse failure."""
     try:
         return await message.edit_text(text, parse_mode=parse_mode, **kwargs)  # type: ignore[union-attr]
     except TelegramBadRequest as e:
         if "can't parse entities" in str(e):
-            return await message.edit_text(_strip_markdown(text), **kwargs)  # type: ignore[union-attr]
+            return await message.edit_text(_plain_fallback(text, parse_mode), **kwargs)  # type: ignore[union-attr]
         raise
 
 

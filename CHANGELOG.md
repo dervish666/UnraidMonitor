@@ -2,6 +2,14 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.14.2] - 2026-06-05
+
+### Fixed
+- **AI replies no longer show literal `*` characters** — the LLM returns standard CommonMark (`**bold**`, `### headings`, `*italic*`), but the natural-language chat handler sent it with no parse mode (so the asterisks rendered literally) and `/diagnose` sent it as Telegram legacy Markdown (which can't parse `**`, silently stripping the formatting). Model output is now converted to Telegram **HTML** before sending, so bold/italic/headings/code render correctly. HTML is the most forgiving parse target — text is escaped and only balanced tags are emitted, so an unmatched delimiter degrades to harmless text instead of breaking the whole message.
+
+### Added
+- `src/utils/telegram_format.py` — `markdown_to_telegram_html()` converter (snake_case- and math-safe emphasis rules, fenced/inline code, links, list markers) plus `strip_html_tags()` for the plain-text fallback. Applied to NL chat, `/diagnose` (+ details), and the Diagnose alert button.
+
 ## [0.14.1] - 2026-06-05
 
 ### Fixed

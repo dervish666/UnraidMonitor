@@ -1,5 +1,6 @@
 """Diagnose command handler for AI-powered container analysis."""
 
+import html
 import logging
 import re
 from typing import Callable, Awaitable
@@ -10,6 +11,7 @@ from aiogram.enums import ChatAction
 from src.state import ContainerStateManager
 from src.services.diagnostic import DiagnosticService
 from src.utils.formatting import safe_reply
+from src.utils.telegram_format import markdown_to_telegram_html
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +122,13 @@ def diagnose_command(
             ],
         ])
 
-        response = f"""*Diagnosis: {actual_name}*
+        # analysis is LLM Markdown; render the whole reply as Telegram HTML.
+        response = (
+            f"<b>Diagnosis: {html.escape(actual_name)}</b>\n\n"
+            f"{markdown_to_telegram_html(analysis)}"
+        )
 
-{analysis}"""
-
-        await safe_reply(message, response, reply_markup=keyboard)
+        await safe_reply(message, response, parse_mode="HTML", reply_markup=keyboard)
 
     return handler
 
@@ -153,9 +157,9 @@ def diag_details_callback(
 
         details = await diagnostic_service.get_details(user_id)
         if details:
-            response = f"*Detailed Analysis*\n\n{details}"
+            response = f"<b>Detailed Analysis</b>\n\n{markdown_to_telegram_html(details)}"
             if isinstance(callback.message, Message):
-                await safe_reply(callback.message, response)
+                await safe_reply(callback.message, response, parse_mode="HTML")
         else:
             if callback.message:
                 await callback.message.answer("Could not generate detailed analysis.")

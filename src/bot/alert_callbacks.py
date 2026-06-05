@@ -1,6 +1,7 @@
 """Callback handlers for alert action buttons."""
 
 import asyncio
+import html
 import logging
 import re
 from datetime import timedelta
@@ -27,6 +28,7 @@ from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes
 from src.utils.sanitize import sanitize_logs_for_display
+from src.utils.telegram_format import markdown_to_telegram_html
 
 if TYPE_CHECKING:
     from src.alerts.array_mute_manager import ArrayMuteManager
@@ -265,15 +267,16 @@ def diagnose_callback(
         context.brief_summary = analysis
         diagnostic_service.store_context(user_id, context)
 
-        response = f"""*Diagnosis: {escape_markdown(actual_name)}*
-
-{analysis}
-
-_Want more details?_"""
+        # analysis is LLM Markdown; render the whole reply as Telegram HTML.
+        response = (
+            f"<b>Diagnosis: {html.escape(actual_name)}</b>\n\n"
+            f"{markdown_to_telegram_html(analysis)}\n\n"
+            f"<i>Want more details?</i>"
+        )
 
         if callback.message:
             try:
-                await callback.message.answer(response, parse_mode="Markdown")
+                await callback.message.answer(response, parse_mode="HTML")
             except TelegramBadRequest:
                 plain_response = f"Diagnosis: {actual_name}\n\n{analysis}\n\nWant more details?"
                 await callback.message.answer(plain_response)
