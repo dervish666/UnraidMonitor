@@ -16,6 +16,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Guards against concurrent restart triggers (e.g. /restart button + wizard
+# finish) interleaving duplicate broadcast notices. execv replaces the whole
+# process, so this never needs resetting.
+_restart_in_progress = False
+
 
 async def restart_bot(
     bot: "Bot",
@@ -47,6 +52,11 @@ async def restart_bot(
     preempt the restart. ``execv`` only returns on failure, in which case the
     bot keeps running normally.
     """
+    global _restart_in_progress
+    if _restart_in_progress:
+        logger.warning("Restart already in progress, ignoring duplicate trigger")
+        return
+    _restart_in_progress = True
     logger.info("Restarting bot to apply configuration changes")
     if notice:
         for cid in chat_id_store.get_all_chat_ids():
@@ -54,4 +64,9 @@ async def restart_bot(
                 await bot.send_message(cid, notice)
             except Exception:
                 pass
-    os.execv(sys.executable, [sys.executable, "-m", "src.main"])
+    try:
+        os.execv(sys.executable, [sys.executable, "-m", "src.main"])
+    finally:
+        # execv only returns (or raises) on failure — the process was NOT
+        # replaced, so clear the guard to allow a retry.
+        _restart_in_progress = False

@@ -132,9 +132,7 @@ class UnraidClientWrapper:
             payload = {"query": "{ info { os { hostname } } }"}
             async with self._session.post(self._base_url, json=payload) as response:
                 if response.status != 200:
-                    text = (await response.text())[:200]
-                    if self._api_key:
-                        text = text.replace(self._api_key, "[REDACTED]")
+                    text = self._safe_body(await response.text())
                     logger.error(f"Unraid connectivity test failed: {response.status} - {text}")
                     await self._session.close()
                     self._session = None
@@ -161,6 +159,16 @@ class UnraidClientWrapper:
         """Raise error if not connected."""
         if not self._connected or self._session is None:
             raise UnraidConnectionError("Not connected to Unraid server")
+
+    def _safe_body(self, text: str) -> str:
+        """Redact the API key and truncate a response body for safe logging.
+
+        Redaction happens before truncation so a key straddling the cut-off
+        can't partially leak.
+        """
+        if self._api_key:
+            text = text.replace(self._api_key, "[REDACTED]")
+        return text[:200]
 
     async def _reconnect_if_needed(self) -> None:
         """Attempt to reconnect if the connection was lost."""
@@ -195,7 +203,7 @@ class UnraidClientWrapper:
         try:
             async with self._session.post(self._base_url, json=payload) as response:
                 if response.status != 200:
-                    text = await response.text()
+                    text = self._safe_body(await response.text())
                     raise UnraidConnectionError(
                         f"GraphQL request failed: {response.status} - {text}"
                     )
@@ -203,9 +211,9 @@ class UnraidClientWrapper:
                 try:
                     result = await response.json()
                 except json.JSONDecodeError as e:
-                    text = await response.text()
+                    text = self._safe_body(await response.text())
                     raise UnraidConnectionError(
-                        f"Invalid JSON response: {e}. Response: {text[:200]}"
+                        f"Invalid JSON response: {e}. Response: {text}"
                     )
 
                 if "errors" in result:

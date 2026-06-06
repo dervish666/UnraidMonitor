@@ -38,7 +38,7 @@ ignored_containers:
 # Containers that cannot be controlled via Telegram
 # (restart/stop/start/pull commands will be rejected)
 protected_containers:
-  - unraid-monitor-bot
+  - UnraidMonitorBot
 
 # Log watching configuration for Phase 2 alerts
 log_watching:
@@ -46,8 +46,7 @@ log_watching:
   containers:
     - plex
     - tautulli
-    - overseerr
-    - mariadb
+    - Seerr
     - postgresql14
     - redis
     - brisbooks
@@ -100,6 +99,5 @@ memory_management:
   stabilization_wait: 180
   priority_containers:
     - plex
-    - mariadb
     - postgresql14
   killable_containers: []  # Add containers that can be killed, in kill order 

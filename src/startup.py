@@ -38,7 +38,7 @@ from src.monitor_callbacks import (
     make_mute_maintenance_loop,
 )
 from src.bot.health_command import BOT_VERSION, build_status_lines
-from src.constants import WHATS_NEW, ANNOUNCED_VERSION_PATH
+from src.constants import WHATS_NEW, ANNOUNCED_VERSION_PATH, ANNOUNCED_UPDATES_PATH
 from src.utils.version_store import read_announced_version, write_announced_version
 
 
@@ -462,6 +462,7 @@ async def start_monitoring(
             config=config.image_updates,
             alert_manager=alert_manager,
             ignored_containers=config.ignored_containers,
+            state_path=ANNOUNCED_UPDATES_PATH,
         )
         logger.info("Image-update detection enabled")
     bg.image_update_monitor = image_update_monitor

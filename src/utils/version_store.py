@@ -18,6 +18,11 @@ def read_announced_version(path: str) -> str | None:
         return None
     except (json.JSONDecodeError, OSError, AttributeError) as e:
         logger.warning(f"Failed to read announced version from {path}: {e}")
+        # Drop the corrupted file so the next write starts clean (best-effort).
+        try:
+            os.remove(path)
+        except OSError:
+            pass
         return None
 
 

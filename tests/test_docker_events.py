@@ -362,3 +362,76 @@ async def test_unhealthy_not_opted_in_sends_alert():
     await mon._handle_health_event({"Actor": {"Attributes": {"name": "plex"}}, "_alert_type": "health"})
     healer.heal.assert_not_awaited()
     alert.send_health_alert.assert_awaited_once()
+
+
+async def test_unhealthy_reenters_heal_when_still_unhealthy():
+    """A container that stays unhealthy after a heal attempt is healed again — the
+    storm guard bounds the retry loop, not the _unhealthy_alerted dedup set."""
+    from src.monitors.docker_events import DockerEventMonitor
+    from src.state import ContainerStateManager
+    alert = MagicMock(); alert.send_health_alert = AsyncMock()
+    mon = DockerEventMonitor(state_manager=ContainerStateManager(), alert_manager=alert)
+    healer = MagicMock(); healer.is_enabled.return_value = True
+    healer.heal = AsyncMock(return_value="restarted")
+    mon.set_auto_healer(healer)
+    event = {"Actor": {"Attributes": {"name": "radarr"}}, "_alert_type": "health"}
+    await mon._handle_health_event(event)
+    await mon._handle_health_event(event)  # no healthy event in between
+    assert healer.heal.await_count == 2
+
+
+async def test_unhealthy_reenters_heal_after_failed_restart():
+    from src.monitors.docker_events import DockerEventMonitor
+    from src.state import ContainerStateManager
+    alert = MagicMock(); alert.send_health_alert = AsyncMock()
+    mon = DockerEventMonitor(state_manager=ContainerStateManager(), alert_manager=alert)
+    healer = MagicMock(); healer.is_enabled.return_value = True
+    healer.heal = AsyncMock(return_value="failed")
+    mon.set_auto_healer(healer)
+    event = {"Actor": {"Attributes": {"name": "radarr"}}, "_alert_type": "health"}
+    await mon._handle_health_event(event)
+    await mon._handle_health_event(event)
+    assert healer.heal.await_count == 2
+
+
+async def test_unhealthy_no_reentry_after_gave_up():
+    """Once the healer gives up, further unhealthy events stay quiet until a
+    healthy transition clears the dedup flag."""
+    from src.monitors.docker_events import DockerEventMonitor
+    from src.state import ContainerStateManager
+    alert = MagicMock(); alert.send_health_alert = AsyncMock()
+    mon = DockerEventMonitor(state_manager=ContainerStateManager(), alert_manager=alert)
+    healer = MagicMock(); healer.is_enabled.return_value = True
+    healer.heal = AsyncMock(return_value="gave_up")
+    mon.set_auto_healer(healer)
+    event = {"Actor": {"Attributes": {"name": "radarr"}}, "_alert_type": "health"}
+    await mon._handle_health_event(event)
+    await mon._handle_health_event(event)
+    assert healer.heal.await_count == 1
+    alert.send_health_alert.assert_not_awaited()
+
+
+async def test_unhealthy_storm_guard_end_to_end():
+    """Real AutoHealer wired to the monitor: a container that never goes healthy
+    is restarted max_restarts times, then exactly one gave-up escalation fires
+    and subsequent unhealthy events stay quiet."""
+    from src.config import AutoHealConfig
+    from src.monitors.docker_events import DockerEventMonitor
+    from src.services.auto_healer import AutoHealer
+    from src.state import ContainerStateManager
+    alert = MagicMock()
+    alert.send_health_alert = AsyncMock()
+    alert.send_autoheal_alert = AsyncMock()
+    controller = MagicMock()
+    controller.is_protected.return_value = False
+    controller.restart = AsyncMock(return_value="✅ radarr restarted successfully")
+    config = AutoHealConfig(enabled=True, containers=["radarr"], max_restarts=3, window_minutes=60)
+    mon = DockerEventMonitor(state_manager=ContainerStateManager(), alert_manager=alert)
+    mon.set_auto_healer(AutoHealer(config=config, controller=controller, alert_manager=alert))
+    event = {"Actor": {"Attributes": {"name": "radarr"}}, "_alert_type": "health"}
+    for _ in range(6):  # container never transitions to healthy
+        await mon._handle_health_event(event)
+    assert controller.restart.await_count == 3
+    gave_up_calls = [c for c in alert.send_autoheal_alert.call_args_list if c.kwargs["gave_up"]]
+    assert len(gave_up_calls) == 1
+    alert.send_health_alert.assert_not_awaited()

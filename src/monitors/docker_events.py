@@ -566,7 +566,13 @@ class DockerEventMonitor:
 
         logger.info(f"Container {container_name} is unhealthy")
         if self._auto_healer is not None and self._auto_healer.is_enabled(container_name):
-            await self._auto_healer.heal(container_name)
+            outcome = await self._auto_healer.heal(container_name)
+            if outcome != "gave_up":
+                # Let the post-restart unhealthy event re-enter heal(): the
+                # storm guard bounds the retry loop, not this dedup set. Once
+                # the healer gives up, keep the flag so we stay quiet until a
+                # healthy transition clears it.
+                self._unhealthy_alerted.discard(container_name)
             return
         await self.alert_manager.send_health_alert(
             container_name=container_name,

@@ -126,6 +126,25 @@ files:
       - from: re
         items: [compile, sub, search, DOTALL, IGNORECASE, MULTILINE]
 
+  telegram_format.py:
+    description: Convert LLM-generated Markdown into Telegram-safe HTML (escape-first, code blocks stashed) and strip tags for plain-text fallback
+    exports:
+      - name: markdown_to_telegram_html
+        kind: function
+        description: Render LLM markdown (bold/italic/code/links/headings) as Telegram HTML; html.escape runs before markdown conversion so model output cannot inject tags
+        params: [{name: text, type: str}]
+        returns: str
+      - name: strip_html_tags
+        kind: function
+        description: Strip HTML tags and unescape entities for the plain-text fallback path
+        params: [{name: text, type: str}]
+        returns: str
+    imports:
+      - from: html
+        items: [escape, unescape]
+      - from: re
+        items: [compile]
+
   telegram_retry.py:
     description: Telegram API retry utilities for handling rate limits and transient failures.
     exports:

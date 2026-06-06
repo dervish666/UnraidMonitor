@@ -11,7 +11,7 @@ from typing import Any
 
 from src.utils.api_errors import handle_llm_error
 from src.utils.formatting import format_uptime
-from src.utils.sanitize import sanitize_container_name, sanitize_logs
+from src.utils.sanitize import sanitize_container_name, sanitize_for_prompt, sanitize_logs
 
 logger = logging.getLogger(__name__)
 
@@ -125,10 +125,21 @@ class DiagnosticService:
             container = await asyncio.to_thread(self._docker.containers.get, container_name)
         except docker.errors.NotFound:
             return None
+        except docker.errors.DockerException as e:
+            # Daemon hiccup (API error, socket timeout) — treat like not-found
+            # so the caller reports "couldn't gather context" instead of crashing
+            # after the user has already seen "Analyzing…".
+            logger.warning(f"Failed to fetch container {container_name} for diagnosis: {e}")
+            return None
 
-        # Get logs
-        log_bytes = await asyncio.to_thread(container.logs, tail=lines, timestamps=False)
-        logs = log_bytes.decode("utf-8", errors="replace")
+        # Get logs — degrade to a placeholder rather than losing the whole
+        # diagnosis if the log endpoint hangs or errors mid-gather.
+        try:
+            log_bytes = await asyncio.to_thread(container.logs, tail=lines, timestamps=False)
+            logs = log_bytes.decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.warning(f"Failed to fetch logs for {container_name} during diagnosis: {e}")
+            logs = "(logs unavailable)"
 
         # Get container state
         attrs = container.attrs
@@ -261,10 +272,11 @@ class DiagnosticService:
 
         status_block = "\n".join(sections)
 
-        # Alert context
+        # Alert context — values are hardcoded descriptions today, but sanitize
+        # anyway so a future caller passing free text can't inject instructions.
         alert_block = ""
         if context.alert_context:
-            alert_block = f"\nTriggered by: {context.alert_context}\n"
+            alert_block = f"\nTriggered by: {sanitize_for_prompt(context.alert_context, max_length=200)}\n"
 
         # Docker configuration
         config_parts = []

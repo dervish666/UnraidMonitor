@@ -214,17 +214,17 @@ files:
         items: [MemoryConfig]
 
   image_update_monitor.py:
-    description: Polls Docker registries for image digest changes, deduplicates across polls, sends batched update alert with Pull buttons
+    description: Polls Docker registries for image digest changes, deduplicates across polls AND restarts (persisted to data/announced_updates.json), sends batched update alert with Pull buttons
     exports:
       - name: extract_local_digests
         kind: function
         description: Return sha256 digests from a container's RepoDigests
-        params: [{name: container, type: Any}]
+        params: [{name: container, type: Container}]
         returns: list[str]
 
       - name: ImageUpdateMonitor
         kind: class
-        description: Poll loop that checks opted-in containers for newer registry images and emits a batched digest alert
+        description: Poll loop that checks opted-in containers for newer registry images and emits a batched digest alert; constructor takes optional state_path for the persisted dedup map, prunes entries for removed containers
         methods:
           - name: start
             params: []
@@ -237,6 +237,8 @@ files:
             returns: bool
 
     imports:
+      - from: docker.models.containers
+        items: [Container]
       - from: src.config
         items: [ImageUpdatesConfig]
       - from: src.alerts.manager

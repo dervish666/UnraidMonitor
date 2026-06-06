@@ -1,6 +1,6 @@
 [project]
 name = "unraid-monitor-bot"
-version = "0.14.4"
+version = "0.15.0"
 requires-python = ">=3.11"
 dependencies = [
     "docker>=7.0.0,<8.0.0",
@@ -26,6 +26,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.0",
     "mypy>=1.20",
+    "pip-audit>=2.7",
     "anthropic>=0.40.0,<1.0.0",
     "openai>=2.0.0,<3.0.0",
 ]

@@ -2,6 +2,32 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.15.0] - 2026-06-06
+
+Audit remediation release — all 16 items from the June 6 codebase audit (`audit-reports/audit-2026-06-06-1538.md`).
+
+### Fixed
+- **Auto-heal now actually retries containers that stay unhealthy** — the `_unhealthy_alerted` dedup set blocked the post-restart unhealthy event from re-entering `heal()`, so a persistently-broken container got exactly one restart attempt and then silence: the documented storm guard (`max_restarts` per `window_minutes`) and the give-up escalation were only reachable for *flapping* containers. The dedup flag is now cleared after each heal attempt (unless the healer has given up), so the storm guard — not the dedup set — bounds the retry loop. `heal()` also checks the result of `controller.restart()` now: a failed restart sends a distinct "❌ Auto-heal failed" alert instead of the success-implying "attempt N/M". Failed attempts count toward the storm guard so a restart that keeps erroring escalates instead of retrying forever.
+- **Image-update alerts no longer repeat after a bot restart** — the dedup map (container → announced digest) was in-memory only, and the bot restarts itself routinely (setup wizard, `/manage` feature toggles, `/restart`). It now persists to `data/announced_updates.json` (atomic write, corrupt-file tolerant) and prunes entries for removed containers — never on a failed Docker poll, so a daemon outage can't wipe it.
+- **`/diagnose` no longer goes silent after "Analyzing…" when Docker hiccups** — `gather_context()` only handled `NotFound`; an `APIError` from `containers.get` or any failure fetching logs crashed the handler. Daemon errors now degrade to "couldn't gather context", and unavailable logs degrade to a partial diagnosis with `(logs unavailable)`.
+- **Concurrent `/restart` triggers no longer send duplicate notices** — a module-level guard with a `finally` reset (a *failed* `os.execv` clears it so retries still work).
+- **Corrupted `data/announced_version.json` is removed on read** so "What's new" isn't re-shown on every boot after a bad write.
+
+### Security
+- **Unraid API error bodies are now redacted and truncated in all paths** — `_execute_query()` raised exceptions containing the full response body (the connectivity test already redacted; the query paths didn't). New `_safe_body()` helper redacts the API key *before* truncating so a key straddling the cut-off can't partially leak.
+- **Auto-heal picker validates container names** — `fh_tog:` callback data is now checked against the live candidate list (every other callback family already validated), and `AutoHealConfig.set_containers()` defensively filters invalid names, so a spoofed callback can't persist junk into config.yaml.
+- **Dependency CVE scanning added** (`pip-audit` in dev deps + non-blocking CI step). First run found 6 CVEs: `idna`, `requests`, `urllib3` upgraded in the lockfile. `aiohttp` 3.13.5 (CVE-2026-34993, CVE-2026-47265, fixed in 3.14.0) remains pinned by aiogram 3.28.2 (`aiohttp<3.14`) — exposure is client-only; re-check when aiogram releases.
+- **Defense-in-depth**: diagnostic `alert_context` strings pass through `sanitize_for_prompt()`, and `markdown_to_telegram_html` now has explicit regression tests proving model output can't inject `<tg-spoiler>`/`<a href>` tags.
+
+### Changed
+- **AutoHealer storm-guard window uses `time.monotonic()`** instead of wall-clock, so NTP steps can't stretch or shrink it; `_recent_count` renamed to `_prune_and_count` to reflect its mutation.
+- **`alert_callbacks.py` callback parsing deduplicated** — four shared helpers (`_parse_container_callback`, `_parse_valued_callback`, `_parse_metric_callback`, `_parse_minutes_callback`) replace ~230 lines of repeated parse→validate→lookup boilerplate across 12 handlers (935 → 838 lines). New alert buttons get name validation for free.
+- `atomic_yaml_write()` sets 0o644 on fresh files (matching `version_store.py`); `ResourceMonitor._violation_last_seen` initialised in `__init__` instead of lazily; `extract_local_digests` properly typed.
+
+### Added
+- `send_autoheal_alert(..., failed=True)` variant across protocol, manager, and proxy with a distinct failure message.
+- 23 new tests (1169 total), including an end-to-end storm-guard test (unhealthy → 3 restarts → exactly one give-up escalation → silence) and a restart-survival test for image-update dedup.
+
 ## [0.14.4] - 2026-06-05
 
 ### Fixed

@@ -88,6 +88,7 @@ DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 # Image-update detection defaults
 IMAGE_UPDATE_POLL_INTERVAL_HOURS = 24
 IMAGE_UPDATE_MAX_SHOWN = 10  # cap Pull buttons per digest message
+ANNOUNCED_UPDATES_PATH = "data/announced_updates.json"  # dedup map surviving restarts
 
 # Auto-heal defaults
 AUTOHEAL_MAX_RESTARTS = 3
@@ -97,6 +98,10 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.15.0": [
+        "Auto-heal that doesn't give up - containers that stay unhealthy after a restart are now retried up to your limit, failed restarts are reported honestly, and the give-up escalation actually fires",
+        "Image-update alerts remember what they've told you - restarting the bot no longer re-announces updates you've already seen",
+    ],
     "0.14.3": [
         "Chattier assistant - ask for the server status as a story, a captain's log, or a haiku and it'll play along with real numbers, while still staying focused on your server",
     ],

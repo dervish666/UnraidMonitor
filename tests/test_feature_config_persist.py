@@ -62,6 +62,35 @@ def test_auto_heal_set_containers_persists_and_enables(tmp_path):
     assert written["auto_heal"]["containers"] == ["plex", "sonarr"]
 
 
+def test_auto_heal_set_containers_filters_invalid_names(tmp_path):
+    """Defense in depth: junk names from any caller are dropped before persist."""
+    cfg_path = tmp_path / "config.yaml"
+    _write_yaml(cfg_path, {"auto_heal": {"enabled": False, "containers": []}})
+
+    config = AutoHealConfig.from_dict({"enabled": False, "containers": []})
+    config.config_path = str(cfg_path)
+
+    config.set_containers(["plex", "../../etc/passwd", "", "$(rm -rf /)", "sonarr"])
+
+    assert config.containers == ["plex", "sonarr"]
+    written = load_yaml_config(str(cfg_path))
+    assert written["auto_heal"]["containers"] == ["plex", "sonarr"]
+
+
+def test_auto_heal_all_invalid_names_disables(tmp_path):
+    """If every name is junk, auto-heal ends up disabled rather than enabled-with-garbage."""
+    cfg_path = tmp_path / "config.yaml"
+    _write_yaml(cfg_path, {"auto_heal": {"enabled": False, "containers": []}})
+
+    config = AutoHealConfig.from_dict({"enabled": False, "containers": []})
+    config.config_path = str(cfg_path)
+
+    config.set_containers(["../../etc/passwd", ""])
+
+    assert config.containers == []
+    assert config.enabled is False
+
+
 def test_auto_heal_empty_containers_disables(tmp_path):
     cfg_path = tmp_path / "config.yaml"
     _write_yaml(cfg_path, {"auto_heal": {"enabled": True, "containers": ["plex"]}})

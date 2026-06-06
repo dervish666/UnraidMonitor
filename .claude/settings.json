@@ -26,8 +26,8 @@
         "matcher": "Edit|Write",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "Check if the file being edited has a name matching any of these patterns: .env, .env.*, *.pem, *.key, credentials*, secrets*. If it matches, respond {\"decision\": \"block\", \"reason\": \"Blocked edit to secrets/credentials file. Modify these manually.\"}. Otherwise respond {\"decision\": \"allow\"}."
+            "type": "command",
+            "command": "f=$(jq -r \".tool_input.file_path // empty\" 2>/dev/null); b=$(basename \"$f\" 2>/dev/null); case \"$b\" in .env|.env.*|*.pem|*.key|credentials*|secrets*) echo \"{\\\"hookSpecificOutput\\\":{\\\"hookEventName\\\":\\\"PreToolUse\\\",\\\"permissionDecision\\\":\\\"deny\\\",\\\"permissionDecisionReason\\\":\\\"Blocked edit to secrets/credentials file. Modify these manually.\\\"}}\" ;; esac"
           }
         ]
       }

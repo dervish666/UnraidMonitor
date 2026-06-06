@@ -667,10 +667,17 @@ def feat_heal_toggle_callback(
         container = parts[1]
         user_id = callback.from_user.id if callback.from_user else 0
 
+        candidates = _heal_candidates(state, protected_containers)
+        if container not in candidates:
+            # Spoofed or stale callback data — only real, non-protected
+            # containers may be toggled into the auto-heal list.
+            logger.warning(f"Rejected auto-heal toggle for unknown container: {container[:50]!r}")
+            await callback.answer("Unknown container")
+            return
+
         selection_state.toggle(user_id, container)
         await callback.answer()
 
-        candidates = _heal_candidates(state, protected_containers)
         _, keyboard = _build_heal_picker(candidates, selection_state.get(user_id))
         if isinstance(callback.message, Message):
             try:

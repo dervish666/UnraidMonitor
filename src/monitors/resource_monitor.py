@@ -160,6 +160,7 @@ class ResourceMonitor:
         self._rate_limiter = rate_limiter
         self._mute_manager = mute_manager
         self._violations: dict[str, dict[str, ViolationState]] = {}
+        self._violation_last_seen: dict[str, float] = {}
         self._running = False
         self._stats_semaphore = asyncio.Semaphore(10)
         self._last_cleanup: float = 0.0
@@ -390,8 +391,6 @@ class ResourceMonitor:
                 await self._send_alert(stats, violation)
 
         # Mark last-seen time and evict violations for containers gone > 10 minutes
-        if not hasattr(self, "_violation_last_seen"):
-            self._violation_last_seen: dict[str, float] = {}
         for name in active_names:
             self._violation_last_seen[name] = now
         stale = [

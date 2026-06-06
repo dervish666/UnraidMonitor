@@ -111,3 +111,25 @@ class TestStripHtmlTags:
     def test_roundtrip_from_converter(self):
         html_out = markdown_to_telegram_html("a **bold** & `code`")
         assert strip_html_tags(html_out) == "a bold & code"
+
+
+class TestModelOutputCannotInjectHtml:
+    """Regression guard: raw Telegram-HTML tags in model output must arrive escaped."""
+
+    def test_tg_spoiler_in_model_output_is_escaped(self):
+        from src.utils.telegram_format import markdown_to_telegram_html
+        out = markdown_to_telegram_html("here is a <tg-spoiler>secret</tg-spoiler> trick")
+        assert "<tg-spoiler>" not in out
+        assert "&lt;tg-spoiler&gt;" in out
+
+    def test_anchor_tag_in_model_output_is_escaped(self):
+        from src.utils.telegram_format import markdown_to_telegram_html
+        out = markdown_to_telegram_html('click <a href="https://evil.example">here</a>')
+        assert '<a href="https://evil.example">' not in out
+        assert "&lt;a href=" in out
+
+    def test_echoed_log_content_with_angle_brackets_survives(self):
+        from src.utils.telegram_format import markdown_to_telegram_html
+        out = markdown_to_telegram_html("error in <module> at line 5 & column 3")
+        assert "&lt;module&gt;" in out
+        assert "&amp;" in out

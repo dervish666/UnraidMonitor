@@ -37,6 +37,132 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def _validate_and_resolve(
+    callback: CallbackQuery,
+    container_name: str,
+    state: ContainerStateManager | None,
+) -> str | None:
+    """Shared tail of callback parsing: name-format check + optional state lookup.
+
+    Answers the callback with the error itself; returns the resolved container
+    name (or the validated raw name when *state* is None), else None.
+    """
+    if not validate_container_name(container_name):
+        logger.warning(f"Invalid container name in callback: {container_name[:50]}")
+        await callback.answer("Invalid container name")
+        return None
+    if state is None:
+        return container_name
+    matches = state.find_by_name(container_name)
+    if not matches:
+        await callback.answer(f"Container '{container_name}' not found")
+        return None
+    return matches[0].name
+
+
+async def _parse_container_callback(
+    callback: CallbackQuery,
+    state: ContainerStateManager | None = None,
+) -> str | None:
+    """Parse ``prefix:container_name`` callback data.
+
+    maxsplit=1 keeps container names containing colons intact. Answers the
+    callback with the error itself; returns the (resolved) name or None.
+    """
+    if not callback.data:
+        return None
+    parts = callback.data.split(":", 1)
+    if len(parts) < 2:
+        await callback.answer("Invalid callback data")
+        return None
+    return await _validate_and_resolve(callback, parts[1], state)
+
+
+async def _parse_valued_callback(
+    callback: CallbackQuery,
+    state: ContainerStateManager | None = None,
+    default: int = 60,
+    max_value: int | None = None,
+) -> tuple[str, int] | None:
+    """Parse ``prefix:container_name:value`` callback data.
+
+    The value is split from the right so container names containing colons
+    stay intact. A non-numeric value falls back to *default*; *max_value*
+    clamps into [1, max_value]. Answers the callback with the error itself;
+    returns (resolved_name, value) or None.
+    """
+    if not callback.data:
+        return None
+    parts = callback.data.rsplit(":", 1)
+    if len(parts) < 2:
+        await callback.answer("Invalid callback data")
+        return None
+    try:
+        value = int(parts[1])
+    except ValueError:
+        value = default
+    if max_value is not None:
+        value = max(1, min(value, max_value))
+    prefix_parts = parts[0].split(":", 1)
+    if len(prefix_parts) < 2:
+        await callback.answer("Invalid callback data")
+        return None
+    name = await _validate_and_resolve(callback, prefix_parts[1], state)
+    if name is None:
+        return None
+    return name, value
+
+
+async def _parse_metric_callback(
+    callback: CallbackQuery,
+    default: int | None = None,
+) -> tuple[str, str, int] | None:
+    """Parse ``prefix:container_name:metric:value`` (metric: cpu|memory).
+
+    A non-numeric value falls back to *default*, or answers "Invalid threshold
+    value" when *default* is None. Returns (name, metric, value) or None.
+    """
+    if not callback.data:
+        return None
+    parts = callback.data.rsplit(":", 2)
+    if len(parts) < 3:
+        await callback.answer("Invalid callback data")
+        return None
+    try:
+        value = int(parts[2])
+    except ValueError:
+        if default is None:
+            await callback.answer("Invalid threshold value")
+            return None
+        value = default
+    metric = parts[1]
+    if metric not in ("cpu", "memory"):
+        await callback.answer("Invalid metric")
+        return None
+    prefix_parts = parts[0].split(":", 1)
+    if len(prefix_parts) < 2:
+        await callback.answer("Invalid callback data")
+        return None
+    name = await _validate_and_resolve(callback, prefix_parts[1], None)
+    if name is None:
+        return None
+    return name, metric, value
+
+
+async def _parse_minutes_callback(callback: CallbackQuery) -> int | None:
+    """Parse ``prefix:minutes`` mute callbacks; clamps to [1, 43200] (30 days)."""
+    if not callback.data:
+        return None
+    parts = callback.data.split(":", 1)
+    if len(parts) < 2:
+        await callback.answer("Invalid callback data")
+        return None
+    try:
+        return max(1, min(int(parts[1]), 43200))
+    except ValueError:
+        return 60
+
+
 def restart_callback(
     state: ContainerStateManager,
     controller: ContainerController,
@@ -44,31 +170,9 @@ def restart_callback(
     """Factory for restart button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
+        actual_name = await _parse_container_callback(callback, state)
+        if actual_name is None:
             return
-
-        # Parse callback data: restart:container_name
-        # Use maxsplit=1 to handle container names with colons
-        parts = callback.data.split(":", 1)
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        container_name = parts[1]
-
-        # Validate container name format
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
-            return
-
-        # Find container
-        matches = state.find_by_name(container_name)
-        if not matches:
-            await callback.answer(f"Container '{container_name}' not found")
-            return
-
-        actual_name = matches[0].name
 
         # Check if container is protected
         if controller.is_protected(actual_name):
@@ -97,46 +201,14 @@ def logs_callback(
     """Factory for logs button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
+        # Format: logs:container_name:lines
+        parsed = await _parse_valued_callback(callback, state, default=50)
+        if parsed is None:
             return
-
-        # Parse callback data: logs:container_name:lines
-        # Split from the right to handle container names with colons
-        # Format: logs:container_name:50 -> ["logs", "container_name", "50"]
-        parts = callback.data.rsplit(":", 1)  # Split off the lines count
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        try:
-            lines = int(parts[1])
-        except ValueError:
-            lines = 50
-
-        # Now split the prefix to get container name
-        prefix_parts = parts[0].split(":", 1)  # Split off "logs"
-        if len(prefix_parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        container_name = prefix_parts[1]
-
-        # Validate container name format
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
-            return
+        actual_name, lines = parsed
 
         # Cap at reasonable limit
         lines = min(lines, max_lines)
-
-        # Find container
-        matches = state.find_by_name(container_name)
-        if not matches:
-            await callback.answer(f"Container '{container_name}' not found")
-            return
-
-        actual_name = matches[0].name
 
         # Acknowledge button press
         await callback.answer(f"Fetching logs for {actual_name}...")
@@ -207,35 +279,13 @@ def diagnose_callback(
     """Factory for diagnose button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-
         if not diagnostic_service:
             await callback.answer("AI diagnostics not configured")
             return
 
-        # Parse callback data: diagnose:container_name
-        # Use maxsplit=1 to handle container names with colons
-        parts = callback.data.split(":", 1)
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
+        actual_name = await _parse_container_callback(callback, state)
+        if actual_name is None:
             return
-
-        container_name = parts[1]
-
-        # Validate container name format
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
-            return
-
-        # Find container
-        matches = state.find_by_name(container_name)
-        if not matches:
-            await callback.answer(f"Container '{container_name}' not found")
-            return
-
-        actual_name = matches[0].name
 
         # Extract alert context from the parent message (the alert)
         alert_context = ""
@@ -291,46 +341,15 @@ def mute_callback(
     """Factory for mute button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-
         if not mute_manager:
             await callback.answer("Mute manager not configured")
             return
 
-        # Parse callback data: mute:container_name:minutes
-        # Split from the right to handle container names with colons
-        parts = callback.data.rsplit(":", 1)  # Split off the minutes count
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
+        # Format: mute:container_name:minutes
+        parsed = await _parse_valued_callback(callback, state, default=60, max_value=43200)
+        if parsed is None:
             return
-
-        try:
-            minutes = max(1, min(int(parts[1]), 43200))
-        except ValueError:
-            minutes = 60
-
-        # Now split the prefix to get container name
-        prefix_parts = parts[0].split(":", 1)  # Split off "mute"
-        if len(prefix_parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        container_name = prefix_parts[1]
-
-        # Validate container name format
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
-            return
-
-        # Find container
-        matches = state.find_by_name(container_name)
-        if not matches:
-            await callback.answer(f"Container '{container_name}' not found")
-            return
-
-        actual_name = matches[0].name
+        actual_name, minutes = parsed
 
         # Mute the container
         mute_manager.add_mute(actual_name, timedelta(minutes=minutes))
@@ -354,20 +373,9 @@ def mem_kill_callback(
     _protected = set(protected_containers or [])
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-
-        # Parse callback data: mem_kill:container_name
-        parts = callback.data.split(":", 1)
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        container_name = parts[1]
-
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in mem_kill callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
+        # Format: mem_kill:container_name
+        container_name = await _parse_container_callback(callback)
+        if container_name is None:
             return
 
         if container_name in _protected:
@@ -415,19 +423,8 @@ def mem_restart_yes_callback(
     """Factory for memory restart Yes button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-
-        parts = callback.data.split(":", 1)
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        container_name = parts[1]
-
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in mem_restart_yes callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
+        container_name = await _parse_container_callback(callback)
+        if container_name is None:
             return
 
         await callback.answer(f"Restarting {container_name}...")
@@ -459,19 +456,8 @@ def mem_restart_no_callback(
     """Factory for memory restart No button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-
-        parts = callback.data.split(":", 1)
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        container_name = parts[1]
-
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in mem_restart_no callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
+        container_name = await _parse_container_callback(callback)
+        if container_name is None:
             return
 
         await memory_monitor.decline_restart(container_name)
@@ -586,37 +572,11 @@ def raise_limit_callback(
     """Factory for 'Raise Limit' button — shows threshold options."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-
         # Format: res_limit:container_name:metric:current_threshold
-        # Split from right to get trailing fields
-        parts = callback.data.rsplit(":", 2)
-        if len(parts) < 3:
-            await callback.answer("Invalid callback data")
+        parsed = await _parse_metric_callback(callback, default=80)
+        if parsed is None:
             return
-
-        try:
-            current_threshold = int(parts[2])
-        except ValueError:
-            current_threshold = 80
-
-        metric = parts[1]
-        if metric not in ("cpu", "memory"):
-            await callback.answer("Invalid metric")
-            return
-
-        prefix_parts = parts[0].split(":", 1)
-        if len(prefix_parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        container_name = prefix_parts[1]
-
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in res_limit callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
-            return
+        container_name, metric, current_threshold = parsed
 
         await callback.answer()
 
@@ -667,37 +627,11 @@ def set_limit_callback(
     """Factory for applying a selected threshold."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-
         # Format: res_set:container_name:metric:value
-        parts = callback.data.rsplit(":", 2)
-        if len(parts) < 3:
-            await callback.answer("Invalid callback data")
+        parsed = await _parse_metric_callback(callback)
+        if parsed is None:
             return
-
-        try:
-            value = int(parts[2])
-        except ValueError:
-            await callback.answer("Invalid threshold value")
-            return
-
-        metric = parts[1]
-        if metric not in ("cpu", "memory"):
-            await callback.answer("Invalid metric")
-            return
-
-        prefix_parts = parts[0].split(":", 1)
-        if len(prefix_parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        container_name = prefix_parts[1]
-
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in res_set callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
-            return
+        container_name, metric, value = parsed
 
         resource_config.set_threshold(container_name, metric, value)
 
@@ -728,18 +662,9 @@ def array_mute_callback(
     """Factory for array mute button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
+        minutes = await _parse_minutes_callback(callback)
+        if minutes is None:
             return
-
-        parts = callback.data.split(":", 1)
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        try:
-            minutes = max(1, min(int(parts[1]), 43200))
-        except ValueError:
-            minutes = 60
 
         array_mute_manager.mute_array(timedelta(minutes=minutes))
 
@@ -816,18 +741,9 @@ def server_mute_callback(
     """Factory for server mute button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
+        minutes = await _parse_minutes_callback(callback)
+        if minutes is None:
             return
-
-        parts = callback.data.split(":", 1)
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-
-        try:
-            minutes = max(1, min(int(parts[1]), 43200))
-        except ValueError:
-            minutes = 60
 
         server_mute_manager.mute_server(timedelta(minutes=minutes))
 
@@ -905,22 +821,9 @@ def pull_callback(
     """Factory for the image-update digest 'Pull' button - shows a confirmation."""
 
     async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
+        actual_name = await _parse_container_callback(callback, state)
+        if actual_name is None:
             return
-        parts = callback.data.split(":", 1)
-        if len(parts) < 2:
-            await callback.answer("Invalid callback data")
-            return
-        container_name = parts[1]
-        if not validate_container_name(container_name):
-            logger.warning(f"Invalid container name in callback: {container_name[:50]}")
-            await callback.answer("Invalid container name")
-            return
-        matches = state.find_by_name(container_name)
-        if not matches:
-            await callback.answer(f"Container '{container_name}' not found")
-            return
-        actual_name = matches[0].name
         if controller.is_protected(actual_name):
             await callback.answer(f"{actual_name} is protected", show_alert=True)
             return

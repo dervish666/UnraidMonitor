@@ -55,7 +55,9 @@ class AlertSender(Protocol):
 
     async def send_update_alert(self, updates: list[tuple[str, str]]) -> None: ...
 
-    async def send_autoheal_alert(self, container_name: str, attempt: int, max_attempts: int, gave_up: bool) -> None: ...
+    async def send_autoheal_alert(
+        self, container_name: str, attempt: int, max_attempts: int, gave_up: bool, failed: bool = False
+    ) -> None: ...
 
 
 class ChatIdStore:
@@ -364,12 +366,17 @@ Exceeded for: {duration_str}
         except Exception as e:
             logger.error(f"Failed to send health alert: {e}")
 
-    async def send_autoheal_alert(self, container_name: str, attempt: int, max_attempts: int, gave_up: bool) -> None:
-        """Notify that an unhealthy container was auto-restarted (or that we gave up)."""
+    async def send_autoheal_alert(
+        self, container_name: str, attempt: int, max_attempts: int, gave_up: bool, failed: bool = False
+    ) -> None:
+        """Notify that an unhealthy container was auto-restarted, the restart failed, or we gave up."""
         safe_name = escape_markdown(container_name)
         if gave_up:
             text = (f"⚠️ *Auto-heal gave up:* {safe_name}\n\n"
                     f"Restarted {attempt} times but it's still unhealthy. Manual attention needed.")
+        elif failed:
+            text = (f"❌ *Auto-heal failed:* {safe_name}\n\n"
+                    f"Restart attempt {attempt}/{max_attempts} didn't go through. Worth a look.")
         else:
             text = (f"🔧 *Auto-restarted:* {safe_name}\n\n"
                     f"Container was unhealthy - auto-restarted (attempt {attempt}/{max_attempts}).")
@@ -380,7 +387,7 @@ Exceeded for: {duration_str}
         try:
             await send_with_retry(self.bot.send_message, chat_id=self.chat_id, text=text,
                                   parse_mode="Markdown", reply_markup=keyboard)
-            logger.info(f"Sent autoheal alert for {container_name} (gave_up={gave_up})")
+            logger.info(f"Sent autoheal alert for {container_name} (gave_up={gave_up}, failed={failed})")
         except Exception as e:
             logger.error(f"Failed to send autoheal alert: {e}")
 

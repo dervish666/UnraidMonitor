@@ -201,18 +201,21 @@ files:
         items: [sanitize_container_name, sanitize_logs]
 
   auto_healer.py:
-    description: Auto-restarts opted-in containers that report HEALTHCHECK unhealthy, with per-container time-windowed storm guard
+    description: Auto-restarts opted-in containers that report HEALTHCHECK unhealthy, with per-container time-windowed storm guard (monotonic clock); failed restarts count toward the guard
     exports:
+      - name: HealOutcome
+        kind: type-alias
+        description: Literal["restarted", "failed", "gave_up"] — result of a heal attempt
       - name: AutoHealer
         kind: class
-        description: Checks opt-in list and protected containers, tracks restart counts in a rolling window, restarts or escalates
+        description: Checks opt-in list and protected containers, tracks restart attempts in a rolling window, restarts or escalates; checks ContainerController.restart result and sends failed-flavoured alert when the restart errors
         methods:
           - name: is_enabled
             params: [{name: container_name, type: str}]
             returns: bool
           - name: heal
             params: [{name: container_name, type: str}]
-            returns: Awaitable[None]
+            returns: Awaitable[HealOutcome]
 
     imports:
       - from: src.config

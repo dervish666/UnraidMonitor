@@ -298,3 +298,44 @@ def test_filter_env_vars():
     assert "DB_PASSWORD" not in names
     assert "MY_SECRET_THING" not in names
     assert "SOME_AUTH_TOKEN" not in names
+
+
+async def test_gather_context_returns_none_on_docker_api_error():
+    """A daemon hiccup on containers.get degrades to None instead of crashing the handler."""
+    import docker
+    from src.services.diagnostic import DiagnosticService
+
+    mock_client = MagicMock()
+    mock_client.containers.get.side_effect = docker.errors.APIError("daemon restarting")
+
+    service = DiagnosticService(docker_client=mock_client, provider=None)
+    context = await service.gather_context("overseerr", lines=50)
+
+    assert context is None
+
+
+async def test_gather_context_degrades_when_logs_unavailable():
+    """A failing log endpoint still yields a usable DiagnosticContext."""
+    from src.services.diagnostic import DiagnosticService
+
+    mock_container = MagicMock()
+    mock_container.logs.side_effect = Exception("read timeout")
+    mock_container.attrs = {
+        "State": {"ExitCode": 1, "Status": "exited", "Running": False,
+                  "OOMKilled": False, "Error": "", "StartedAt": "2025-01-25T10:00:00Z"},
+        "RestartCount": 0,
+        "Config": {"Env": []},
+        "HostConfig": {"PortBindings": {}, "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0}},
+        "Mounts": [],
+    }
+    mock_container.image.tags = ["linuxserver/overseerr:latest"]
+
+    mock_client = MagicMock()
+    mock_client.containers.get.return_value = mock_container
+
+    service = DiagnosticService(docker_client=mock_client, provider=None)
+    context = await service.gather_context("overseerr", lines=50)
+
+    assert context is not None
+    assert context.logs == "(logs unavailable)"
+    assert context.container_name == "overseerr"

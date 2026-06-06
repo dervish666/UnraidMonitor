@@ -556,6 +556,43 @@ async def test_feat_heal_toggle_updates_selection():
 
 
 @pytest.mark.asyncio
+async def test_feat_heal_toggle_rejects_unknown_container():
+    """Spoofed or stale callback data must not enter the selection."""
+    state = _state_with("plex", "sonarr")
+    selection = AutoHealSelectionState()
+    selection.init(123, ["plex"])
+    handler = feat_heal_toggle_callback(state, selection)
+    callback = AsyncMock()
+    callback.data = "fh_tog:../../etc/passwd"
+    callback.from_user.id = 123
+    callback.message = AsyncMock(spec=Message)
+
+    await handler(callback)
+
+    assert selection.get(123) == {"plex"}
+    callback.answer.assert_awaited_once_with("Unknown container")
+    callback.message.edit_reply_markup.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_feat_heal_toggle_rejects_protected_container():
+    """Protected containers are excluded from the picker and from spoofed toggles."""
+    state = _state_with("plex", "traefik")
+    selection = AutoHealSelectionState()
+    selection.init(123, [])
+    handler = feat_heal_toggle_callback(state, selection, protected_containers=["traefik"])
+    callback = AsyncMock()
+    callback.data = "fh_tog:traefik"
+    callback.from_user.id = 123
+    callback.message = AsyncMock(spec=Message)
+
+    await handler(callback)
+
+    assert selection.get(123) == set()
+    callback.answer.assert_awaited_once_with("Unknown container")
+
+
+@pytest.mark.asyncio
 async def test_feat_heal_save_applies_and_rerenders():
     auto_heal = MagicMock(enabled=True, containers=["plex", "sonarr"])
     selection = AutoHealSelectionState()

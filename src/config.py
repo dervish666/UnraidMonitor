@@ -60,6 +60,7 @@ def atomic_yaml_write(data: dict[str, Any], target: Path) -> None:
         dir=target.parent, suffix=".tmp", prefix=".config_"
     )
     try:
+        os.fchmod(fd, 0o644)  # mkstemp creates 0o600; match version_store.py
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
         os.replace(tmp_path, target)
@@ -398,9 +399,17 @@ class AutoHealConfig:
         Auto-heal is considered enabled only while at least one container is
         opted in, so ``enabled`` tracks whether the list is non-empty. The
         running AutoHealer holds a reference to this object, so the change
-        applies live without a restart.
+        applies live without a restart. Names failing container-name
+        validation are dropped — defense in depth; the picker callback
+        already rejects anything not in the live container list.
         """
-        self.containers = list(containers)
+        from src.utils.formatting import validate_container_name  # local: config stays free of UI-layer imports
+
+        valid = [c for c in containers if validate_container_name(c)]
+        dropped = set(containers) - set(valid)
+        if dropped:
+            logger.warning(f"Dropped invalid auto-heal container names: {sorted(dropped)}")
+        self.containers = valid
         self.enabled = bool(self.containers)
         self._persist()
 

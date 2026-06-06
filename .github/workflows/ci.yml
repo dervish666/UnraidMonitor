@@ -32,3 +32,8 @@ jobs:
 
       - name: Test (pytest)
         run: uv run pytest tests/
+
+      # Audits the project venv for known CVEs. Non-blocking is deliberate:
+      # a new upstream CVE shouldn't break unrelated PRs — review the log.
+      - name: Dependency audit (pip-audit)
+        run: uv run pip-audit || true

@@ -150,9 +150,11 @@ class AlertManagerProxy:
             health_status=health_status,
         )
 
-    async def send_autoheal_alert(self, container_name: str, attempt: int, max_attempts: int, gave_up: bool) -> None:
+    async def send_autoheal_alert(
+        self, container_name: str, attempt: int, max_attempts: int, gave_up: bool, failed: bool = False
+    ) -> None:
         await self._send_alert("send_autoheal_alert", container_name=container_name,
-                               attempt=attempt, max_attempts=max_attempts, gave_up=gave_up)
+                               attempt=attempt, max_attempts=max_attempts, gave_up=gave_up, failed=failed)
 
     async def send_update_alert(self, updates: list[tuple[str, str]]) -> None:
         await self._send_alert("send_update_alert", updates=updates)

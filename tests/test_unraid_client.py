@@ -379,3 +379,34 @@ async def test_unraid_client_connect_fails_on_exception():
         await wrapper.connect()
 
         assert wrapper.is_connected is False
+
+
+def test_safe_body_redacts_api_key():
+    """API key echoed in an error body must never reach logs or exceptions."""
+    from src.unraid.client import UnraidClientWrapper
+
+    wrapper = UnraidClientWrapper(host="192.168.1.100", api_key="super-secret-key")
+    body = 'error: bad request, x-api-key was "super-secret-key"'
+    safe = wrapper._safe_body(body)
+    assert "super-secret-key" not in safe
+    assert "[REDACTED]" in safe
+
+
+def test_safe_body_redacts_before_truncating():
+    """A key straddling the 200-char cut-off must not partially leak."""
+    from src.unraid.client import UnraidClientWrapper
+
+    key = "k" * 40
+    wrapper = UnraidClientWrapper(host="192.168.1.100", api_key=key)
+    # Key starts at position 190 — truncate-first would leave a 10-char prefix
+    body = "x" * 190 + key + "trailing"
+    safe = wrapper._safe_body(body)
+    assert "k" not in safe
+    assert len(safe) <= 200
+
+
+def test_safe_body_truncates_long_bodies():
+    from src.unraid.client import UnraidClientWrapper
+
+    wrapper = UnraidClientWrapper(host="192.168.1.100", api_key="key")
+    assert len(wrapper._safe_body("a" * 5000)) == 200
