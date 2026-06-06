@@ -14,3 +14,17 @@ venv/
 data/
 .worktrees/
 config/config.yaml
+
+# Local tooling artifacts (not part of the build)
+.sota/
+graphify-out/
+.claude/agents/
+.claude/skills/
+
+# Internal working docs (audits, design plans) — kept locally, not shipped
+audit-plans/
+audit-reports/
+AUDIT_FINDINGS.md
+docs/audit-report-*.md
+docs/plans/
+docs/superpowers/
