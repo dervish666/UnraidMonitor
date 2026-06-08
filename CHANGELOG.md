@@ -2,6 +2,13 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.15.1] - 2026-06-08
+
+### Changed
+- **Documentation refreshed for current features** — the README's "What's New" was still pinned to v0.12.0; replaced it with a v0.15.0 summary, and updated the feature list and command table to reflect the `/manage` Features panel (server/disks/features sections) and per-feature `/model` overrides (`chat`/`diagnose`/`analyze`).
+- **User guide expanded** — added an Optional Features section documenting image-update detection and auto-heal (how to enable from `/manage` → ⚙️ Features and via `config.yaml`), documented per-feature model switching, and added the Features panel to the Manage Dashboard walkthrough.
+- **Data Storage docs** — listed the previously-undocumented `announced_version.json` and `announced_updates.json` files.
+
 ## [0.15.0] - 2026-06-06
 
 Audit remediation release — all 16 items from the June 6 codebase audit (`audit-reports/audit-2026-06-06-1538.md`).

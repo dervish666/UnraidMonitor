@@ -12,6 +12,7 @@ This guide walks you through everything the bot can do, from first-run setup to 
 - [Unraid Server Monitoring](#unraid-server-monitoring)
 - [Alert Control](#alert-control)
 - [AI Features](#ai-features)
+- [Optional Features](#optional-features)
 - [Tips & Best Practices](#tips--best-practices)
 
 ---
@@ -293,6 +294,7 @@ You can also manage ignores through the `/manage` dashboard (see below).
 - **💾 Disks** — Disk status
 - **📝 Manage Ignores** — Browse and delete ignore patterns
 - **🔕 Manage Mutes** — Browse and remove active mutes
+- **⚙️ Features** — Turn optional monitors on or off (see [Optional Features](#optional-features))
 
 Each sub-view includes per-item **🗑** delete buttons and a **⬅️ Back** button to return to the dashboard.
 
@@ -330,7 +332,69 @@ Follow-up questions work too. After asking about a container, you can say "resta
 2. Choose a model from the list
 3. Models without tool support are marked "(no tools)" — NL chat actions may be limited
 
-Your selection is persisted across bot restarts.
+You can also type the choice directly:
+
+- **`/model sonnet`** — set the global default model (family names `sonnet`, `haiku`, `opus` resolve to the latest available release)
+- **`/model chat sonnet`** — use a different model just for natural-language chat
+- **`/model diagnose haiku`** — use a cheaper model for `/diagnose`
+- **`/model analyze haiku`** — use a cheaper model for ignore-pattern generation
+- **`/model chat default`** — reset a feature back to the global default
+
+Per-feature overrides let you spend on a capable model where it matters (chat) and a cheap one where it doesn't (pattern analysis). Your selection is persisted across bot restarts.
+
+---
+
+## Optional Features
+
+Two monitors are off by default. You can turn them on from Telegram — open **`/manage`** and tap **⚙️ Features** — or by editing `config.yaml`.
+
+### Image-Update Detection
+
+Checks once a day whether a newer image is available for your containers, then sends a single digest listing what's outdated, each with a one-tap **Pull** button.
+
+**Enable it:** `/manage` → **⚙️ Features** → **✅ Enable image updates**. Because the check only runs at startup, the bot restarts itself to apply the change.
+
+What you'll see:
+
+```
+🔄 Image updates available (3)
+
+• radarr — linuxserver/radarr:latest
+• sonarr — linuxserver/sonarr:latest
+• plex — plexinc/pms-docker:latest
+
+[⬇️ Pull radarr] [⬇️ Pull sonarr] [⬇️ Pull plex]
+```
+
+Tapping **Pull** runs the same confirm-then-recreate flow as `/pull`, preserving all container settings. The same update isn't re-announced after a restart.
+
+**In `config.yaml`:**
+
+```yaml
+image_updates:
+  enabled: true
+  poll_interval_hours: 24   # minimum 1
+```
+
+### Auto-Heal
+
+Automatically restarts a container when it reports an unhealthy Docker HEALTHCHECK — useful for apps that occasionally wedge but recover on a restart. A **storm guard** stops restart loops: after `max_restarts` attempts within `window_minutes`, it gives up and sends an escalation alert instead of restarting forever. Protected containers are never auto-healed.
+
+**Enable it:** `/manage` → **⚙️ Features** → **🩹 Configure auto-heal**, then tap to select which containers should be healed. Tap **💾 Save** — this applies live, with no restart.
+
+**In `config.yaml`:**
+
+```yaml
+auto_heal:
+  enabled: true
+  containers:
+    - radarr
+    - sonarr
+  max_restarts: 3       # give up after this many restarts in the window
+  window_minutes: 60    # rolling window for the restart count
+```
+
+When auto-heal gives up on a container, you get an alert so you can investigate manually rather than the bot silently looping.
 
 ---
 

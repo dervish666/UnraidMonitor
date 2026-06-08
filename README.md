@@ -18,15 +18,16 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Memory Pressure Management** - Automatic container priority handling during high memory
 - **Mute System** - Temporarily silence alerts per container, server, or array
 - **Natural Language Chat** - Ask questions naturally instead of using commands
-- **Interactive Dashboard** - `/manage` hub for status, resources, ignores, and mutes
+- **Interactive Dashboard** - `/manage` hub for status, resources, server, disks, ignores, mutes, and a Features panel to toggle optional monitors
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
 
-## What's New in v0.12.0
+## What's New in v0.15.0
 
-- **Image-update detection** - Opt-in daily digest of containers with newer images available, with per-container Pull buttons (`image_updates.enabled: true`)
-- **Auto-heal** - Opt-in automatic restart of containers that fail their Docker HEALTHCHECK, with a storm guard that gives up after configurable retries (`auto_heal.containers: [...]`)
-- **Richer startup message** - On first boot after an upgrade, shows a "What's new" summary so you always know what changed
-- **CI test pipeline** - Tests, lint, and type-check now run automatically on every push and pull request
+- **Toggle optional features from Telegram** - `/manage` → ⚙️ Features enables image-update detection and picks auto-heal containers without editing `config.yaml`
+- **Alert-context-aware diagnostics** - `/diagnose` now knows which alert fired (crash / errors / restart-loop / high-usage) and gathers full container state, for far more accurate root-cause analysis
+- **Properly formatted AI replies** - Bold, italics, headings, and code blocks now render correctly in Telegram instead of showing literal `*` characters
+- **Friendlier natural-language chat** - Plays along with creative on-topic requests ("status as a captain's log", "roast my containers") while staying grounded in real stats
+- **Reliability & security hardening** - Auto-heal retries persist correctly, image-update alerts no longer repeat after a restart, and API error bodies are redacted in all paths (full June 6 audit remediation)
 
 See the [changelog](CHANGELOG.md) for full details.
 
@@ -429,9 +430,10 @@ auto_heal:
 |---------|-------------|
 | `/setup` | Re-run the setup wizard (merges with existing config) |
 | `/cancel` | Exit the setup wizard mid-flow |
-| `/manage` | Interactive dashboard — status, resources, ignores, mutes |
+| `/manage` | Interactive dashboard — status, resources, server, disks, ignores, mutes, features |
 | `/health` | Bot version, uptime, and monitor status |
-| `/model` | Switch LLM provider and model at runtime |
+| `/model` | Switch the global LLM provider and model at runtime |
+| `/model <feature> <model>` | Per-feature model override (`chat`, `diagnose`, `analyze`); `default` resets to global |
 | `/help` | Browse commands by category with navigation buttons |
 
 ### Natural Language Chat
@@ -611,12 +613,14 @@ config/
 └── .env                  # Environment variables (secrets)
 
 data/
-├── ignored_errors.json   # Ignore patterns
-├── mutes.json            # Container mutes
-├── server_mutes.json     # Server mutes
-├── array_mutes.json      # Array mutes
-├── model_selection.json  # Active LLM provider/model choice
-└── chat_ids.json         # Persistent Telegram chat IDs for alert delivery across restarts
+├── ignored_errors.json     # Ignore patterns
+├── mutes.json              # Container mutes
+├── server_mutes.json       # Server mutes
+├── array_mutes.json        # Array mutes
+├── model_selection.json    # Active LLM provider/model choice
+├── chat_ids.json           # Persistent Telegram chat IDs for alert delivery across restarts
+├── announced_version.json  # Last-announced version (gates the startup "What's new" message)
+└── announced_updates.json  # Image-update dedup map (stops restarts re-announcing the same update)
 ```
 
 ---
