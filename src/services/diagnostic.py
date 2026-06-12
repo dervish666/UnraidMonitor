@@ -278,16 +278,21 @@ class DiagnosticService:
         if context.alert_context:
             alert_block = f"\nTriggered by: {sanitize_for_prompt(context.alert_context, max_length=200)}\n"
 
-        # Docker configuration
+        # Docker configuration — volume paths, env values, and port mappings come
+        # from the container's own config; sanitize like every other prompt input.
         config_parts = []
         if context.volumes:
-            vol_list = "\n".join(f"  {v}" for v in context.volumes)
+            vol_list = "\n".join(f"  {sanitize_for_prompt(v, max_length=200)}" for v in context.volumes)
             config_parts.append(f"Volume mounts:\n{vol_list}")
         if context.env_vars:
-            env_list = "\n".join(f"  {e}" for e in context.env_vars[:30])
+            env_list = "\n".join(
+                f"  {sanitize_for_prompt(e, max_length=200)}" for e in context.env_vars[:30]
+            )
             config_parts.append(f"Environment (non-secret):\n{env_list}")
         if context.ports:
-            config_parts.append(f"Ports: {', '.join(context.ports)}")
+            config_parts.append(
+                f"Ports: {', '.join(sanitize_for_prompt(p, max_length=100) for p in context.ports)}"
+            )
         config_block = "\n".join(config_parts)
 
         prompt = f"""You are a Docker container diagnostics expert for a home server (Unraid). Analyze this issue precisely.

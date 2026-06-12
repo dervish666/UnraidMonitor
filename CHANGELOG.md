@@ -2,6 +2,27 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.16.0] - 2026-06-12
+
+Remediation of the June 12 codebase audit (vault: `audits/Unraid Monitor/reports/audit-2026-06-12-0639.md`) — all actionable findings implemented.
+
+### Added
+- **Container health check** — the bot now touches a liveness heartbeat file from its event loop every 60s (`src/utils/heartbeat.py`), and the Dockerfile gained a `HEALTHCHECK` that fails when the file goes stale. Bot health shows up in `docker ps` and the Unraid dashboard with no port mapping required. The heartbeat starts before the setup wizard too, so a container mid-setup doesn't report unhealthy.
+- 10 new tests (1179 total): flush retry/drop semantics, queue dedup, spoofed `model_select` rejection, heartbeat liveness.
+
+### Fixed
+- **Queued alerts are no longer lost on a failed flush** — the pre-`/start` queue was cleared *before* delivery, so a transient Telegram failure during the flush silently discarded boot-time alerts. An alert now counts as delivered once any chat receives it; alerts that fail every chat get one retry on the next flush, then are dropped with a logged warning.
+- **Identical consecutive alerts dedup at queue time** — two identical crash alerts queued before `/start` no longer both deliver.
+- **Auto-heal save surfaces dropped names** — if `set_containers()` ever filters an invalid name, the `/manage` save answer now says how many were skipped instead of staying silent.
+
+### Security
+- **`model_select:` callback validated against the registry** — the last callback family without input validation. A spoofed callback can no longer persist arbitrary provider/model strings into `data/model_selection.json`; unknown pairs get "Invalid selection".
+- **pip-audit is now blocking in CI** — it previously ran with `|| true`, which is how the aiohttp CVEs went unnoticed. The two known aiohttp advisories (CVE-2026-34993, CVE-2026-47265; fixed only in 3.14, which aiogram caps below) are explicitly `--ignore-vuln`-ed with justification: neither is exploitable here (no `CookieJar.load()`, no per-request cookies). Any *new* CVE now fails the build. aiohttp floor raised to 3.13.5 with a comment documenting the situation.
+- **Diagnostic prompt sanitizes container config** — volume mounts, env vars, and port mappings now pass through `sanitize_for_prompt()` like every other prompt input (defense-in-depth against a compromised container injecting instructions).
+
+### Changed
+- **Explicit LLM timeouts** — Anthropic/OpenAI clients are constructed with a 120s timeout (SDK default is ~10 minutes), Ollama gets 300s (local models on CPU are legitimately slow), and startup model discovery is capped at 15s so a slow API can't stall boot.
+
 ## [0.15.1] - 2026-06-08
 
 ### Changed

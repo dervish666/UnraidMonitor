@@ -43,6 +43,19 @@ PATTERN_ANALYZER_CONTEXT_LINES = 30
 DIAGNOSTIC_CONTEXT_EXPIRY_SECONDS = 600
 NL_MAX_TOOL_ITERATIONS = 10
 NL_MAX_CONVERSATION_EXCHANGES = 5
+# SDK defaults are ~10 minutes; a hung cloud call shouldn't pin a chat that long.
+# Ollama gets longer — local models on CPU can legitimately take minutes.
+LLM_REQUEST_TIMEOUT_SECONDS = 120
+OLLAMA_REQUEST_TIMEOUT_SECONDS = 300
+MODEL_DISCOVERY_TIMEOUT_SECONDS = 15
+
+# ---------------------------------------------------------------------------
+# Liveness heartbeat (Docker HEALTHCHECK reads this file's mtime)
+# ---------------------------------------------------------------------------
+HEARTBEAT_PATH = "/tmp/unraidmonitor-heartbeat"
+HEARTBEAT_INTERVAL_SECONDS = 60
+# Dockerfile HEALTHCHECK fails when the file is older than this (3 missed beats).
+HEARTBEAT_MAX_AGE_SECONDS = 180
 
 # ---------------------------------------------------------------------------
 # Unraid monitoring defaults
@@ -98,6 +111,10 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.16.0": [
+        "Health check in the Unraid dashboard - the container now reports healthy/unhealthy in docker ps and the Unraid UI, no setup needed",
+        "No more lost boot alerts - alerts queued before your first /start are retried if Telegram is flaky during delivery, instead of vanishing",
+    ],
     "0.15.0": [
         "Auto-heal that doesn't give up - containers that stay unhealthy after a restart are now retried up to your limit, failed restarts are reported honestly, and the give-up escalation actually fires",
         "Image-update alerts remember what they've told you - restarting the bot no longer re-announces updates you've already seen",

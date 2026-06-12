@@ -33,7 +33,13 @@ jobs:
       - name: Test (pytest)
         run: uv run pytest tests/
 
-      # Audits the project venv for known CVEs. Non-blocking is deliberate:
-      # a new upstream CVE shouldn't break unrelated PRs — review the log.
+      # Audits the project venv for known CVEs. Blocking, so new CVEs surface
+      # immediately. Ignored IDs are aiohttp issues fixed only in 3.14, which
+      # aiogram caps below; neither is exploitable here (no CookieJar.load(),
+      # no per-request cookies) — see pyproject.toml. Drop the ignores once
+      # aiogram allows aiohttp>=3.14.
       - name: Dependency audit (pip-audit)
-        run: uv run pip-audit || true
+        run: >
+          uv run pip-audit
+          --ignore-vuln CVE-2026-34993
+          --ignore-vuln CVE-2026-47265

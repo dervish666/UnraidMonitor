@@ -702,14 +702,20 @@ def feat_heal_save_callback(
     async def handler(callback: CallbackQuery) -> None:
         user_id = callback.from_user.id if callback.from_user else 0
         selected = sorted(selection_state.get(user_id))
+        saved = selected
         if auto_heal_config is not None:
             auto_heal_config.set_containers(selected)
+            saved = list(auto_heal_config.containers)
         selection_state.clear(user_id)
 
-        count = len(selected)
-        await callback.answer(
-            f"Auto-heal {'on for ' + str(count) + ' container(s)' if count else 'disabled'}"
-        )
+        count = len(saved)
+        answer = f"Auto-heal {'on for ' + str(count) + ' container(s)' if count else 'disabled'}"
+        # set_containers drops names that fail validation — unreachable via the
+        # picker, but if it ever happens the user should hear about it.
+        dropped = len(selected) - len(saved)
+        if dropped:
+            answer += f" ({dropped} invalid name(s) skipped)"
+        await callback.answer(answer)
         if callback.message:
             text, keyboard = _build_features_view(image_update_monitor, auto_heal_config)
             await safe_edit(callback.message, text, reply_markup=keyboard)

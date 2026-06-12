@@ -30,12 +30,15 @@ class AlertManagerProxy:
         self.chat_id_store = chat_id_store
         self.error_display_max_chars = error_display_max_chars
         self._queued_alerts: list[tuple[str, dict[str, Any]]] = []
+        # Queued alerts that failed every chat on their first flush get one
+        # more attempt on the next flush before being dropped.
+        self._retry_alerts: list[tuple[str, dict[str, Any]]] = []
         self._managers: dict[int, AlertManager] = {}
         self._send_lock = asyncio.Lock()
 
     @property
     def queued_count(self) -> int:
-        return len(self._queued_alerts)
+        return len(self._queued_alerts) + len(self._retry_alerts)
 
     def _get_manager(self, chat_id: int) -> AlertManager:
         """Get or create a cached AlertManager for the given chat_id."""
@@ -56,7 +59,7 @@ class AlertManagerProxy:
         if chat_ids:
             async with self._send_lock:
                 # Flush any queued alerts first
-                if self._queued_alerts:
+                if self._queued_alerts or self._retry_alerts:
                     await self._flush_queue(chat_ids)
                 for chat_id in chat_ids:
                     try:
@@ -66,24 +69,42 @@ class AlertManagerProxy:
                         logger.error(f"Failed to send alert to {chat_id}: {e}")
                 await asyncio.sleep(self._SEND_DELAY)
         else:
-            if len(self._queued_alerts) < self.MAX_QUEUED:
-                self._queued_alerts.append((method_name, kwargs))
+            entry = (method_name, kwargs)
+            if self._queued_alerts and self._queued_alerts[-1] == entry:
+                logger.info(f"Skipping duplicate queued {method_name.replace('_', ' ')}")
+            elif len(self._queued_alerts) < self.MAX_QUEUED:
+                self._queued_alerts.append(entry)
                 logger.info(f"Queued {method_name.replace('_', ' ')} (no chat ID yet, {len(self._queued_alerts)} queued)")
             else:
                 logger.warning(f"Alert queue full, dropping {method_name.replace('_', ' ')}")
 
     async def _flush_queue(self, chat_ids: set[int]) -> None:
-        """Deliver all queued alerts to all chat IDs."""
-        queued = self._queued_alerts[:]
-        self._queued_alerts.clear()
-        logger.info(f"Flushing {len(queued)} queued alerts to {len(chat_ids)} users")
-        for method_name, kwargs in queued:
+        """Deliver all queued alerts to all chat IDs.
+
+        An alert counts as delivered once any chat receives it. Alerts that
+        fail every chat (e.g. Telegram still flaky right after /start) are
+        kept for one retry on the next flush, then dropped.
+        """
+        retrying = self._retry_alerts
+        fresh = self._queued_alerts
+        self._retry_alerts = []
+        self._queued_alerts = []
+        logger.info(f"Flushing {len(retrying) + len(fresh)} queued alerts to {len(chat_ids)} users")
+        for entry, is_retry in [(e, True) for e in retrying] + [(e, False) for e in fresh]:
+            method_name, kwargs = entry
+            delivered = False
             for chat_id in chat_ids:
                 try:
                     manager = self._get_manager(chat_id)
                     await getattr(manager, method_name)(**kwargs)
+                    delivered = True
                 except Exception as e:
                     logger.error(f"Failed to send queued alert to {chat_id}: {e}")
+            if not delivered:
+                if is_retry:
+                    logger.warning(f"Dropping queued {method_name.replace('_', ' ')} after failed retry")
+                else:
+                    self._retry_alerts.append(entry)
 
     async def send_crash_alert(
         self,

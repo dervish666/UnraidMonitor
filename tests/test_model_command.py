@@ -155,6 +155,36 @@ class TestModelCommand:
         callback.answer.assert_called_once_with("Invalid selection")
 
     @pytest.mark.asyncio
+    async def test_model_select_rejects_unknown_provider(self, mock_registry):
+        """Spoofed callback with a provider not in the registry must not persist."""
+        from src.bot.model_command import model_select_callback
+
+        callback = MagicMock()
+        callback.data = "model_select:evil_provider:some-model"
+        callback.answer = AsyncMock()
+
+        handler = model_select_callback(mock_registry)
+        await handler(callback)
+
+        mock_registry.set_model.assert_not_called()
+        callback.answer.assert_called_once_with("Invalid selection")
+
+    @pytest.mark.asyncio
+    async def test_model_select_rejects_unknown_model(self, mock_registry):
+        """Spoofed callback with a model the provider doesn't offer must not persist."""
+        from src.bot.model_command import model_select_callback
+
+        callback = MagicMock()
+        callback.data = "model_select:anthropic:not-a-real-model"
+        callback.answer = AsyncMock()
+
+        handler = model_select_callback(mock_registry)
+        await handler(callback)
+
+        mock_registry.set_model.assert_not_called()
+        callback.answer.assert_called_once_with("Invalid selection")
+
+    @pytest.mark.asyncio
     async def test_model_provider_shows_no_tools_marker(self):
         from src.bot.model_command import model_provider_callback
 

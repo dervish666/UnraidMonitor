@@ -191,3 +191,15 @@ files:
         items: [Path]
       - from: tempfile
         items: [tempfile]
+
+  heartbeat.py:
+    description: Liveness heartbeat loop touching a file the Docker HEALTHCHECK reads; fresh mtime proves the event loop is responsive.
+    exports:
+      - name: heartbeat_loop
+        kind: function
+        description: Touch HEARTBEAT_PATH every interval seconds forever; OSError is logged, never raised
+        params: [{name: path, type: str}, {name: interval, type: float}]
+        returns: None
+    imports:
+      - from: src.constants
+        items: [HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_PATH]

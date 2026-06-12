@@ -38,7 +38,14 @@ from src.monitor_callbacks import (
     make_mute_maintenance_loop,
 )
 from src.bot.health_command import BOT_VERSION, build_status_lines
-from src.constants import WHATS_NEW, ANNOUNCED_VERSION_PATH, ANNOUNCED_UPDATES_PATH
+from src.constants import (
+    WHATS_NEW,
+    ANNOUNCED_VERSION_PATH,
+    ANNOUNCED_UPDATES_PATH,
+    LLM_REQUEST_TIMEOUT_SECONDS,
+    OLLAMA_REQUEST_TIMEOUT_SECONDS,
+    MODEL_DISCOVERY_TIMEOUT_SECONDS,
+)
 from src.utils.version_store import read_announced_version, write_announced_version
 
 
@@ -76,15 +83,20 @@ async def _build_provider_registry(
     ollama_models: list[Any] = []
 
     if config.anthropic_api_key:
-        anthropic_client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
+        anthropic_client = anthropic.AsyncAnthropic(
+            api_key=config.anthropic_api_key, timeout=LLM_REQUEST_TIMEOUT_SECONDS
+        )
 
     if settings.openai_api_key:
-        openai_client = openai_sdk.AsyncOpenAI(api_key=settings.openai_api_key)
+        openai_client = openai_sdk.AsyncOpenAI(
+            api_key=settings.openai_api_key, timeout=LLM_REQUEST_TIMEOUT_SECONDS
+        )
 
     if ai_config.ollama_host:
         ollama_client = openai_sdk.AsyncOpenAI(
             base_url=f"{ai_config.ollama_host}/v1",
             api_key="ollama",
+            timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
         )
 
     async def _discover_ollama() -> list[Any]:
@@ -104,7 +116,10 @@ async def _build_provider_registry(
         if anthropic_client is None:
             return []
         try:
-            models_page = await anthropic_client.models.list(limit=100)
+            models_page = await asyncio.wait_for(
+                anthropic_client.models.list(limit=100),
+                timeout=MODEL_DISCOVERY_TIMEOUT_SECONDS,
+            )
             models = [m.id for m in models_page.data]
             logger.info("Discovered %d Anthropic models", len(models))
             return models

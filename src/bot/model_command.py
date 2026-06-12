@@ -210,6 +210,15 @@ def model_select_callback(registry: "ProviderRegistry") -> Callable[[CallbackQue
             return
 
         _, provider_name, model_name = parts
+
+        # The picker only ever offers known provider/model pairs, so anything
+        # else is a spoofed callback — reject rather than persist it.
+        providers = registry.get_available_providers()
+        provider = next((p for p in providers if p.name == provider_name), None)
+        if provider is None or model_name not in {m.id for m in provider.available_models}:
+            await callback.answer("Invalid selection")
+            return
+
         registry.set_model(provider_name, model_name)
 
         current = registry.get_current_model()

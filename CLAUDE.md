@@ -85,6 +85,7 @@ src/unraid/monitors/array_monitor.py - ArrayMonitor for disk health and usage al
 # Utils
 src/utils/api_errors.py - LLM API error handling (Anthropic + OpenAI) with user-friendly messages
 src/utils/formatting.py - Bytes/uptime formatting, safe_reply/safe_edit, format_mute_expiry
+src/utils/heartbeat.py - heartbeat_loop() touching the liveness file the Docker HEALTHCHECK reads
 src/utils/rate_limiter.py - PerUserRateLimiter for per-user API rate limiting
 src/utils/sanitize.py - Prompt injection prevention, sensitive data redaction
 src/utils/telegram_retry.py - Telegram API retry logic for rate limit handling
@@ -92,7 +93,7 @@ src/utils/version_store.py - read/write data/announced_version.json for startup 
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.15.1) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.16.0) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources) and Unraid server health (CPU, memory, disks, array, UPS). Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 **Version string lives in TWO places** — `pyproject.toml` (`version`) and `src/__init__.py` (`__version__`). Both must be bumped together on release; `tests/test_version.py` guards against drift. `BOT_VERSION` (in `src/bot/health_command.py`) resolves from installed package metadata when available, else falls back to `src.__version__` — the package is not installed in the Docker image, so the `__version__` fallback is what runs in production.
 

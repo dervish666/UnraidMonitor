@@ -34,6 +34,12 @@ RUN useradd -m appuser && \
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# Liveness: the bot touches /tmp/unraidmonitor-heartbeat from its event loop
+# every 60s (src/utils/heartbeat.py); stale or missing file = unhealthy.
+# Surfaces in `docker ps` and the Unraid dashboard.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
+    CMD ["python", "-c", "import os,sys,time; sys.exit(0 if time.time() - os.stat('/tmp/unraidmonitor-heartbeat').st_mtime < 180 else 1)"]
+
 # Container starts as root; entrypoint drops to PUID:PGID after fixing permissions
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "src.main"]

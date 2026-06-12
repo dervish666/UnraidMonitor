@@ -18,6 +18,7 @@ from src.bot.setup_wizard import SetupWizard
 from src.background import _BackgroundTasks
 from src.restart import restart_bot
 from src.startup import start_monitoring
+from src.utils.heartbeat import heartbeat_loop
 
 
 logging.basicConfig(
@@ -54,6 +55,9 @@ async def main() -> None:
     dp = create_dispatcher(cast(list[int], settings.telegram_allowed_users), chat_id_store=chat_id_store)
 
     bg = _BackgroundTasks()
+    # Liveness heartbeat for the Docker HEALTHCHECK — runs in wizard mode too,
+    # so a container mid-setup doesn't report unhealthy.
+    bg.add_task(asyncio.create_task(heartbeat_loop()))
 
     wizard_provider = None
     if settings.anthropic_api_key:
