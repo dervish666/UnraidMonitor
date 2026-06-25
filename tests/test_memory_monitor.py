@@ -188,6 +188,12 @@ class TestStateMachine:
     ):
         mock_psutil.virtual_memory.return_value = MagicMock(percent=91.0)
 
+        c1 = MagicMock()
+        c1.name = "bitmagnet"
+        c2 = MagicMock()
+        c2.name = "obsidian"
+        mock_docker_client.containers.list.return_value = [c1, c2]
+
         monitor = MemoryMonitor(
             docker_client=mock_docker_client,
             config=memory_config,
@@ -202,7 +208,54 @@ class TestStateMachine:
         args = mock_on_alert.call_args[0]
         assert "91" in args[1]  # message contains percentage
         assert args[2] == "warning"  # alert_type
-        assert args[3] == ["bitmagnet", "obsidian"]  # killable_names
+        assert args[3] == ["bitmagnet", "obsidian"]  # killable_names (both running)
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_warning_lists_only_running_killable(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        # obsidian is killable but NOT running -- only bitmagnet should be offered
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=91.0)
+        running = MagicMock()
+        running.name = "bitmagnet"
+        mock_docker_client.containers.list.return_value = [running]
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        await monitor._check_memory()
+
+        args = mock_on_alert.call_args[0]
+        assert args[3] == ["bitmagnet"]  # stopped 'obsidian' excluded
+        assert "bitmagnet" in args[1]
+        assert "obsidian" not in args[1]
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_warning_no_running_killable(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        # No killable containers running at all
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=91.0)
+        mock_docker_client.containers.list.return_value = []
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        await monitor._check_memory()
+
+        args = mock_on_alert.call_args[0]
+        assert args[3] == []  # no buttons
+        assert "none running" in args[1]
 
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")

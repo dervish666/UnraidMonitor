@@ -73,23 +73,29 @@ class MemoryMonitor:
         """Get current system memory usage percentage."""
         return float(psutil.virtual_memory().percent)
 
+    async def _get_running_killable(self) -> list[str]:
+        """Return killable containers that are currently running.
+
+        Preserves the configured priority order (lowest priority first)
+        and excludes any already stopped in this pressure event.
+        """
+        running_names = await asyncio.to_thread(
+            lambda: {c.name for c in self._docker.containers.list()}
+        )
+        return [
+            name
+            for name in self._config.killable_containers
+            if name in running_names and name not in self._killed_containers
+        ]
+
     async def _get_next_killable(self) -> str | None:
         """Get the next container to kill from the killable list.
 
         Returns the first running container from killable_containers
         that hasn't already been killed in this pressure event.
         """
-        running_names = await asyncio.to_thread(
-            lambda: {c.name for c in self._docker.containers.list()}
-        )
-
-        for name in self._config.killable_containers:
-            if name in self._killed_containers:
-                continue
-            if name in running_names:
-                return name
-
-        return None
+        running_killable = await self._get_running_killable()
+        return running_killable[0] if running_killable else None
 
     async def _stop_container(self, name: str) -> None:
         """Stop a container and record it as killed."""
@@ -142,11 +148,16 @@ class MemoryMonitor:
                 await self._on_ask_restart(container)
 
     async def _handle_warning(self, percent: float) -> None:
-        """Handle warning state - notify user."""
-        killable = ", ".join(self._config.killable_containers) or "none configured"
+        """Handle warning state - notify user.
+
+        Only lists/offers containers that are killable *and* currently
+        running -- stopped containers can't free any memory.
+        """
+        running_killable = await self._get_running_killable()
+        killable = ", ".join(running_killable) or "none running"
         message = f"Memory at {percent:.0f}%. Killable containers: {killable}"
         await self._on_alert(
-            "Memory Warning", message, "warning", list(self._config.killable_containers)
+            "Memory Warning", message, "warning", running_killable
         )
 
     async def _handle_critical(self, percent: float) -> None:

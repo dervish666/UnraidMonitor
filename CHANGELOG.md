@@ -2,6 +2,11 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.16.1] - 2026-06-25
+
+### Fixed
+- **Memory pressure warning lists only running containers** — the "Killable containers" warning alert offered a "⏹ Stop" button for every configured killable container, including ones already stopped (which can't free any memory). It now lists and offers only containers that are killable *and* currently running, and says "none running" when there are none. The running filter is shared with the critical-alert path (`_get_running_killable`), so both stay consistent.
+
 ## [0.16.0] - 2026-06-12
 
 Remediation of the June 12 codebase audit (vault: `audits/Unraid Monitor/reports/audit-2026-06-12-0639.md`) — all actionable findings implemented.
