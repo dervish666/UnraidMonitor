@@ -454,7 +454,7 @@ async def start_monitoring(
     memory_config = config.memory_management
     if memory_config.enabled:
         on_memory_alert = make_memory_alert_handler(
-            chat_id_store, bot, resource_monitor, escape_markdown,
+            chat_id_store, bot, escape_markdown,
         )
         on_ask_restart = make_ask_restart_handler(
             chat_id_store, bot, escape_markdown,

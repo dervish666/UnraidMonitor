@@ -16,6 +16,7 @@ from src.bot.alert_callbacks import (
 )
 from src.state import ContainerStateManager
 from src.models import ContainerInfo
+from src.monitors.memory_monitor import KillResult
 
 
 @pytest.fixture
@@ -512,7 +513,7 @@ class TestMemKillCallback:
         from src.bot.alert_callbacks import mem_kill_callback
 
         memory_monitor = MagicMock()
-        memory_monitor.kill_container = AsyncMock(return_value=True)
+        memory_monitor.kill_container = AsyncMock(return_value=KillResult(True, "plex"))
 
         handler = mem_kill_callback(memory_monitor, protected_containers=["mariadb"])
 
@@ -531,7 +532,7 @@ class TestMemKillCallback:
         from src.bot.alert_callbacks import mem_kill_callback
 
         memory_monitor = MagicMock()
-        memory_monitor.kill_container = AsyncMock(return_value=True)
+        memory_monitor.kill_container = AsyncMock(return_value=KillResult(True, "plex"))
 
         # No protected_containers arg — should proceed
         handler = mem_kill_callback(memory_monitor)
@@ -545,6 +546,37 @@ class TestMemKillCallback:
         await handler(callback)
 
         memory_monitor.kill_container.assert_called_once_with("plex")
+
+    @pytest.mark.asyncio
+    async def test_mem_kill_reports_memory_freed(self):
+        from src.bot.alert_callbacks import mem_kill_callback
+
+        memory_monitor = MagicMock()
+        memory_monitor.kill_container = AsyncMock(
+            return_value=KillResult(
+                success=True,
+                name="plex",
+                freed_bytes=800 * 1024**2,
+                system_percent=72.0,
+                system_available_bytes=4 * 1024**3,
+            )
+        )
+
+        handler = mem_kill_callback(memory_monitor)
+
+        callback = MagicMock()
+        callback.data = "mem_kill:plex"
+        callback.answer = AsyncMock()
+        callback.message = MagicMock()
+        callback.message.answer = AsyncMock()
+
+        await handler(callback)
+
+        sent = callback.message.answer.call_args[0][0]
+        assert "plex" in sent
+        assert "800MB" in sent  # how much it was using
+        assert "72%" in sent  # system memory now
+        assert "free" in sent
 
 
 class TestRaiseLimitCallback:

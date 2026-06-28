@@ -180,6 +180,123 @@ class TestContainerControl:
         assert "bitmagnet" in monitor._killed_containers
 
 
+class TestMemoryReporting:
+    """Memory figures surfaced on kill buttons and confirmations."""
+
+    @staticmethod
+    def _stats(usage_bytes: int, cache_bytes: int = 0) -> dict:
+        return {
+            "memory_stats": {
+                "usage": usage_bytes,
+                "limit": 8 * 1024**3,
+                "stats": {"cache": cache_bytes},
+            }
+        }
+
+    def _running_container(self, name: str, usage_bytes: int) -> MagicMock:
+        c = MagicMock()
+        c.name = name
+        c.status = "running"
+        c.stats.return_value = self._stats(usage_bytes)
+        return c
+
+    @pytest.mark.asyncio
+    async def test_get_killable_memory_includes_usage(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mems = {"bitmagnet": 500 * 1024**2, "obsidian": 1500 * 1024**2}
+        r1 = MagicMock()
+        r1.name = "bitmagnet"
+        r2 = MagicMock()
+        r2.name = "obsidian"
+        mock_docker_client.containers.list.return_value = [r1, r2]
+        mock_docker_client.containers.get.side_effect = (
+            lambda name: self._running_container(name, mems[name])
+        )
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        result = await monitor.get_killable_memory()
+        assert result == [("bitmagnet", 500 * 1024**2), ("obsidian", 1500 * 1024**2)]
+
+    @pytest.mark.asyncio
+    async def test_get_killable_memory_timeout_falls_back_to_names(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        running = MagicMock()
+        running.name = "bitmagnet"
+        mock_docker_client.containers.list.return_value = [running]
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+            stats_timeout=0.01,
+        )
+
+        async def slow(_name: str) -> int:
+            await asyncio.sleep(1)
+            return 123
+
+        monitor._container_memory_bytes = slow  # type: ignore[assignment]
+
+        result = await monitor.get_killable_memory()
+        assert result == [("bitmagnet", None)]  # name kept, memory unknown
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_kill_container_returns_memory_context(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=72.0, available=4 * 1024**3)
+        mock_docker_client.containers.get.side_effect = (
+            lambda name: self._running_container(name, 800 * 1024**2)
+        )
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        result = await monitor.kill_container("bitmagnet")
+        assert result.success is True
+        assert result.name == "bitmagnet"
+        assert result.freed_bytes == 800 * 1024**2  # captured before the stop
+        assert result.system_percent == 72.0
+        assert result.system_available_bytes == 4 * 1024**3
+        assert "bitmagnet" in monitor._killed_containers
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_kill_container_failure_returns_unsuccessful(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        import docker as docker_mod
+
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=72.0, available=1)
+        mock_docker_client.containers.get.side_effect = docker_mod.errors.NotFound("nope")
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+
+        result = await monitor.kill_container("ghost")
+        assert result.success is False
+        assert result.name == "ghost"
+        assert result.freed_bytes is None
+
+
 class TestStateMachine:
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")
@@ -208,7 +325,8 @@ class TestStateMachine:
         args = mock_on_alert.call_args[0]
         assert "91" in args[1]  # message contains percentage
         assert args[2] == "warning"  # alert_type
-        assert args[3] == ["bitmagnet", "obsidian"]  # killable_names (both running)
+        # killable is (name, memory_bytes|None); these mocks report no stats
+        assert args[3] == [("bitmagnet", None), ("obsidian", None)]
 
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")
@@ -231,7 +349,7 @@ class TestStateMachine:
         await monitor._check_memory()
 
         args = mock_on_alert.call_args[0]
-        assert args[3] == ["bitmagnet"]  # stopped 'obsidian' excluded
+        assert args[3] == [("bitmagnet", None)]  # stopped 'obsidian' excluded
         assert "bitmagnet" in args[1]
         assert "obsidian" not in args[1]
 
@@ -281,6 +399,42 @@ class TestStateMachine:
         assert args[2] == "critical"  # alert_type
         # No killable containers running, so empty list
         assert args[3] == []
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_critical_alert_includes_memory(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=96.0)
+        running = MagicMock()
+        running.name = "bitmagnet"
+        mock_docker_client.containers.list.return_value = [running]
+
+        def _get(name: str) -> MagicMock:
+            c = MagicMock()
+            c.name = name
+            c.status = "running"
+            c.stats.return_value = {
+                "memory_stats": {"usage": 700 * 1024**2, "limit": 8 * 1024**3, "stats": {"cache": 0}}
+            }
+            return c
+
+        mock_docker_client.containers.get.side_effect = _get
+
+        monitor = MemoryMonitor(
+            docker_client=mock_docker_client,
+            config=memory_config,
+            on_alert=mock_on_alert,
+            on_ask_restart=mock_on_ask_restart,
+        )
+        monitor._state = MemoryState.WARNING
+
+        await monitor._check_memory()
+
+        args = mock_on_alert.call_args[0]
+        assert args[2] == "critical"
+        assert args[3] == [("bitmagnet", 700 * 1024**2)]  # name + memory for the button
+        assert "using" in args[1].lower()
 
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")

@@ -111,6 +111,10 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.17.0": [
+        "Memory pressure alerts now show how much RAM each container is using right on the Stop buttons, so you can free the most memory first",
+        "When a container is stopped to free memory, the bot tells you how much it was using and how much system memory is now free",
+    ],
     "0.16.0": [
         "Health check in the Unraid dashboard - the container now reports healthy/unhealthy in docker ps and the Unraid UI, no setup needed",
         "No more lost boot alerts - alerts queued before your first /start are retried if Telegram is flaky during delivery, instead of vanishing",

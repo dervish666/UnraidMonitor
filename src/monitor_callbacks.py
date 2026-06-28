@@ -15,6 +15,7 @@ from src.alerts.mute_manager import MuteManager
 from src.alerts.rate_limiter import RateLimiter
 from src.alert_proxy import AlertManagerProxy
 from src.monitors.resource_monitor import ResourceMonitor
+from src.utils.formatting import format_bytes
 from src.utils.telegram_retry import send_with_retry
 
 
@@ -155,11 +156,13 @@ def make_server_alert_handler(
 def make_memory_alert_handler(
     chat_id_store: ChatIdStore,
     bot: Bot,
-    resource_monitor: ResourceMonitor | None,
     escape_markdown_fn: Callable[[str], str],
-) -> Callable[[str, str, str, list[str]], Awaitable[None]]:
+) -> Callable[[str, str, str, list[tuple[str, int | None]]], Awaitable[None]]:
     async def on_memory_alert(
-        title: str, message: str, alert_type: str, killable_names: list[str]
+        title: str,
+        message: str,
+        alert_type: str,
+        killable: list[tuple[str, int | None]],
     ) -> None:
         chat_ids = chat_id_store.get_all_chat_ids()
         if not chat_ids:
@@ -169,37 +172,25 @@ def make_memory_alert_handler(
         alert_text = f"{emoji} *{escape_markdown_fn(title)}*\n\n{message}"
         keyboard = None
 
-        if alert_type in ("warning", "critical") and killable_names:
-            # Try to get per-container memory stats for button labels
-            stats_by_name: dict[str, str] = {}
-            if resource_monitor is not None:
-                try:
-                    all_stats = await asyncio.wait_for(
-                        resource_monitor.get_all_stats(), timeout=5.0
-                    )
-                    stats_by_name = {s.name: s.memory_display for s in all_stats}
-                except Exception:
-                    pass  # Graceful degradation -- buttons without memory info
+        # Memory usage per container is supplied by the MemoryMonitor (it only
+        # queries the killable containers, so this is robust even when the
+        # resource monitor is disabled or Docker is slow under pressure).
+        if alert_type == "warning" and killable:
+            buttons = []
+            for name, mem in killable:
+                label = f"⏹ Stop {name}" + (f" ({format_bytes(mem)})" if mem else "")
+                buttons.append(
+                    [InlineKeyboardButton(text=label, callback_data=f"mem_kill:{name}")]
+                )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-            if alert_type == "warning":
-                buttons = []
-                for name in killable_names:
-                    mem = stats_by_name.get(name, "")
-                    label = f"⏹ Stop {name}" + (f" ({mem})" if mem else "")
-                    buttons.append(
-                        [InlineKeyboardButton(text=label, callback_data=f"mem_kill:{name}")]
-                    )
-                if buttons:
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-
-            elif alert_type == "critical":
-                target = killable_names[0]
-                mem = stats_by_name.get(target, "")
-                kill_label = f"⏹ Kill {target} Now" + (f" ({mem})" if mem else "")
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=kill_label, callback_data=f"mem_kill:{target}")],
-                    [InlineKeyboardButton(text="❌ Cancel Auto-Kill", callback_data="mem_cancel_kill")],
-                ])
+        elif alert_type == "critical" and killable:
+            target, mem = killable[0]
+            kill_label = f"⏹ Kill {target} Now" + (f" ({format_bytes(mem)})" if mem else "")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=kill_label, callback_data=f"mem_kill:{target}")],
+                [InlineKeyboardButton(text="❌ Cancel Auto-Kill", callback_data="mem_cancel_kill")],
+            ])
 
         for cid in chat_ids:
             try:

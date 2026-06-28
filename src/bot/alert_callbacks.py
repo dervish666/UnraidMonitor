@@ -26,7 +26,7 @@ from src.constants import (
 from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
-from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes
+from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes, format_bytes
 from src.utils.sanitize import sanitize_logs_for_display
 from src.utils.telegram_format import markdown_to_telegram_html
 
@@ -384,13 +384,23 @@ def mem_kill_callback(
 
         await callback.answer(f"Stopping {container_name}...")
 
-        success = await memory_monitor.kill_container(container_name)
+        result = await memory_monitor.kill_container(container_name)
 
         if callback.message:
-            if success:
-                await callback.message.answer(
-                    f"⏹ Stopped *{escape_markdown(container_name)}* to free memory.", parse_mode="Markdown"
-                )
+            if result.success:
+                lines = [f"⏹ Stopped *{escape_markdown(container_name)}* to free memory."]
+                if result.freed_bytes:
+                    lines.append(f"It was using ~{format_bytes(result.freed_bytes)}.")
+                if result.system_percent is not None:
+                    free = (
+                        format_bytes(result.system_available_bytes)
+                        if result.system_available_bytes is not None
+                        else "?"
+                    )
+                    lines.append(
+                        f"System memory now {result.system_percent:.0f}% ({free} free)."
+                    )
+                await callback.message.answer(" ".join(lines), parse_mode="Markdown")
             else:
                 await callback.message.answer(
                     f"❌ Failed to stop {container_name}. It may already be stopped."

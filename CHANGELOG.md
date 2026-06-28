@@ -2,6 +2,16 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.17.0] - 2026-06-28
+
+### Added
+- **Per-container memory on the kill buttons** — the memory-pressure warning/critical alerts now show how much RAM each killable container is using right on its "⏹ Stop" button (and in the alert text), so you can free the most memory first. `MemoryMonitor` now reads this itself for just the killable containers (`get_killable_memory`), so it works even when resource monitoring is disabled and is robust if Docker is slow under pressure (bounded by `stats_timeout`, falls back to names-only).
+- **Memory feedback when a container is stopped** — stopping a container (via button or the auto-kill countdown) now reports how much memory it was using and the system memory level afterwards (e.g. "It was using ~1.8GB. System memory now 78% (6.2GB free)."). `kill_container` returns a new `KillResult` carrying this context.
+
+### Changed
+- The memory alert handler no longer depends on the resource monitor for button labels — memory figures are supplied by `MemoryMonitor` through the alert itself.
+- The auto-kill confirmation reads system memory *after* the stop (it previously reported the pre-kill figure).
+
 ## [0.16.1] - 2026-06-25
 
 ### Fixed
