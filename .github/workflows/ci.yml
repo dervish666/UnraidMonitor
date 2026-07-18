@@ -34,12 +34,8 @@ jobs:
         run: uv run pytest tests/
 
       # Audits the project venv for known CVEs. Blocking, so new CVEs surface
-      # immediately. Ignored IDs are aiohttp issues fixed only in 3.14, which
-      # aiogram caps below; neither is exploitable here (no CookieJar.load(),
-      # no per-request cookies) — see pyproject.toml. Drop the ignores once
-      # aiogram allows aiohttp>=3.14.
+      # immediately. No ignores: the long-standing aiohttp exceptions were
+      # dropped in v0.18.1 when aiogram 3.30 lifted its aiohttp<3.14 cap and
+      # we moved to aiohttp>=3.14.1.
       - name: Dependency audit (pip-audit)
-        run: >
-          uv run pip-audit
-          --ignore-vuln CVE-2026-34993
-          --ignore-vuln CVE-2026-47265
+        run: uv run pip-audit

@@ -2,6 +2,15 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.18.1] - 2026-07-18
+
+### Security
+- **All aiohttp CVE ignores dropped** — aiogram 3.30 lifted its `aiohttp<3.14` cap, so aiohttp is now 3.14.1, which fixes the two long-ignored advisories (CVE-2026-34993, CVE-2026-47265) *and* the nine new aiohttp PYSEC advisories published 2026-07-18 that turned CI red minutes after the v0.18.0 push. CI pip-audit now runs with **no ignore flags**.
+- Bumped `cryptography` (47.0.0 → 49.0.0), `msgpack` (1.1.2 → 1.2.1), and `pydantic-settings` (2.14.1 → 2.14.2) past their respective advisories. `pip-audit`: no known vulnerabilities.
+
+### Changed
+- aiogram 3.28.2 → 3.30.0 (floor raised to `>=3.30.0`); full suite re-verified on the new versions.
+
 ## [0.18.0] - 2026-07-18
 
 ### Added
