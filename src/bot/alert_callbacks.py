@@ -14,7 +14,7 @@ import docker
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from src.config import ResourceConfig, UnraidConfig
+from src.config import MemoryConfig, ResourceConfig, UnraidConfig
 from src.constants import (
     CPU_THRESHOLD_STEPS,
     MEMORY_THRESHOLD_STEPS,
@@ -404,6 +404,61 @@ def mem_kill_callback(
             else:
                 await callback.message.answer(
                     f"❌ Failed to stop {container_name}. It may already be stopped."
+                )
+
+    return handler
+
+
+def mem_restart_callback(
+    memory_monitor: "MemoryMonitor",
+    memory_config: MemoryConfig,
+    protected_containers: list[str] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for the memory restart button callback handler (mem_restart:<name>).
+
+    The gentle alternative to a kill for services that free memory after a
+    bounce. Only names currently opted in via
+    memory_management.restart_containers are accepted -- the config object is
+    shared with the /manage picker, so list changes apply live. Protected
+    containers are rejected even if hand-edited into the restart list.
+    """
+    _protected = set(protected_containers or [])
+
+    async def handler(callback: CallbackQuery) -> None:
+        container_name = await _parse_container_callback(callback)
+        if container_name is None:
+            return
+
+        if container_name in _protected:
+            await callback.answer(f"{container_name} is a protected container")
+            return
+
+        if container_name not in memory_config.restart_containers:
+            await callback.answer(f"{container_name} is not in the memory restart list")
+            return
+
+        await callback.answer(f"Restarting {container_name}...")
+
+        result = await memory_monitor.restart_container(container_name)
+
+        if callback.message:
+            if result.success:
+                lines = [f"🔄 Restarted *{escape_markdown(container_name)}* to reclaim memory."]
+                if result.freed_bytes:
+                    lines.append(f"It was using ~{format_bytes(result.freed_bytes)}.")
+                if result.system_percent is not None:
+                    free = (
+                        format_bytes(result.system_available_bytes)
+                        if result.system_available_bytes is not None
+                        else "?"
+                    )
+                    lines.append(
+                        f"System memory now {result.system_percent:.0f}% ({free} free)."
+                    )
+                await callback.message.answer(" ".join(lines), parse_mode="Markdown")
+            else:
+                await callback.message.answer(
+                    f"❌ Failed to restart {container_name}. Check its logs."
                 )
 
     return handler

@@ -711,3 +711,94 @@ async def test_pull_callback_blocks_protected():
     await handler(cb)
     cb.message.answer.assert_not_awaited()
     cb.answer.assert_awaited()
+
+
+class TestMemRestartCallback:
+    """Tests for mem_restart_callback (restart to reclaim memory)."""
+
+    def _config(self, restart_containers):
+        config = MagicMock()
+        config.restart_containers = restart_containers
+        return config
+
+    def _callback(self, data):
+        callback = MagicMock()
+        callback.data = data
+        callback.answer = AsyncMock()
+        callback.message = MagicMock()
+        callback.message.answer = AsyncMock()
+        return callback
+
+    @pytest.mark.asyncio
+    async def test_mem_restart_not_in_list_rejected(self):
+        from src.bot.alert_callbacks import mem_restart_callback
+
+        memory_monitor = MagicMock()
+        memory_monitor.restart_container = AsyncMock()
+
+        handler = mem_restart_callback(memory_monitor, self._config(["plex"]))
+        callback = self._callback("mem_restart:sonarr")
+
+        await handler(callback)
+
+        callback.answer.assert_called_with("sonarr is not in the memory restart list")
+        memory_monitor.restart_container.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mem_restart_reports_memory_context(self):
+        from src.bot.alert_callbacks import mem_restart_callback
+
+        memory_monitor = MagicMock()
+        memory_monitor.restart_container = AsyncMock(
+            return_value=KillResult(
+                success=True,
+                name="plex",
+                freed_bytes=8 * 1024**3,
+                system_percent=72.0,
+                system_available_bytes=4 * 1024**3,
+            )
+        )
+
+        handler = mem_restart_callback(memory_monitor, self._config(["plex"]))
+        callback = self._callback("mem_restart:plex")
+
+        await handler(callback)
+
+        memory_monitor.restart_container.assert_called_once_with("plex")
+        sent = callback.message.answer.call_args[0][0]
+        assert "Restarted" in sent and "plex" in sent
+        assert "8.0GB" in sent  # what it was using
+        assert "72%" in sent
+
+    @pytest.mark.asyncio
+    async def test_mem_restart_failure_reports_error(self):
+        from src.bot.alert_callbacks import mem_restart_callback
+
+        memory_monitor = MagicMock()
+        memory_monitor.restart_container = AsyncMock(return_value=KillResult(False, "plex"))
+
+        handler = mem_restart_callback(memory_monitor, self._config(["plex"]))
+        callback = self._callback("mem_restart:plex")
+
+        await handler(callback)
+
+        sent = callback.message.answer.call_args[0][0]
+        assert "Failed to restart" in sent
+
+    @pytest.mark.asyncio
+    async def test_mem_restart_protected_container_rejected(self):
+        """Protected wins even if the name was hand-edited into the restart list."""
+        from src.bot.alert_callbacks import mem_restart_callback
+
+        memory_monitor = MagicMock()
+        memory_monitor.restart_container = AsyncMock()
+
+        handler = mem_restart_callback(
+            memory_monitor, self._config(["plex"]), protected_containers=["plex"],
+        )
+        callback = self._callback("mem_restart:plex")
+
+        await handler(callback)
+
+        callback.answer.assert_called_with("plex is a protected container")
+        memory_monitor.restart_container.assert_not_called()

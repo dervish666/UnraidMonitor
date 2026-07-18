@@ -37,6 +37,7 @@ from src.bot.alert_callbacks import (
     set_limit_callback,
     mem_kill_callback,
     mem_cancel_kill_callback,
+    mem_restart_callback,
     mem_restart_yes_callback,
     mem_restart_no_callback,
     array_mute_callback,
@@ -65,7 +66,10 @@ from src.bot.manage_command import (
     feat_heal_open_callback,
     feat_heal_toggle_callback,
     feat_heal_save_callback,
-    AutoHealSelectionState,
+    feat_memres_open_callback,
+    feat_memres_toggle_callback,
+    feat_memres_save_callback,
+    ContainerSelectionState,
 )
 from src.bot.resources_command import resources_command
 from src.bot.unraid_commands import (
@@ -197,6 +201,7 @@ def _register_memory_commands(
     dp: Dispatcher,
     memory_monitor: "MemoryMonitor | None",
     protected_containers: list[str] | None,
+    memory_config: Any | None = None,
 ) -> None:
     """Register memory management commands and kill/restart button callbacks."""
     dp.message.register(cancel_kill_command(memory_monitor), Command("cancel-kill"))
@@ -206,6 +211,13 @@ def _register_memory_commands(
             F.data.startswith("mem_kill:"),
         )
         dp.callback_query.register(mem_cancel_kill_callback(memory_monitor), F.data == "mem_cancel_kill")
+        # "mem_restart_yes:"/"mem_restart_no:" don't match startswith("mem_restart:")
+        # (underscore vs colon after the prefix), so the three handlers are disjoint.
+        if memory_config is not None:
+            dp.callback_query.register(
+                mem_restart_callback(memory_monitor, memory_config, protected_containers),
+                F.data.startswith("mem_restart:"),
+            )
         dp.callback_query.register(mem_restart_yes_callback(memory_monitor), F.data.startswith("mem_restart_yes:"))
         dp.callback_query.register(mem_restart_no_callback(memory_monitor), F.data.startswith("mem_restart_no:"))
 
@@ -222,6 +234,7 @@ def _register_manage_commands(
     image_update_monitor: Any | None = None,
     image_updates_config: Any | None = None,
     auto_heal_config: Any | None = None,
+    memory_config: Any | None = None,
     protected_containers: list[str] | None = None,
     restart_cb: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
@@ -243,10 +256,12 @@ def _register_manage_commands(
         F.data.startswith("mdm:"),
     )
 
-    # Features panel: enable image updates / configure auto-heal
-    heal_selection = AutoHealSelectionState()
+    # Features panel: image updates / auto-heal / memory restart list
+    heal_selection = ContainerSelectionState()
+    memres_selection = ContainerSelectionState()
     dp.callback_query.register(
-        manage_features_callback(image_update_monitor, auto_heal_config), F.data == "manage:features",
+        manage_features_callback(image_update_monitor, auto_heal_config, memory_config),
+        F.data == "manage:features",
     )
     dp.callback_query.register(
         feat_image_toggle_callback(image_updates_config, restart_cb), F.data.startswith("feat:img:"),
@@ -260,8 +275,20 @@ def _register_manage_commands(
         F.data.startswith("fh_tog:"),
     )
     dp.callback_query.register(
-        feat_heal_save_callback(auto_heal_config, heal_selection, image_update_monitor),
+        feat_heal_save_callback(auto_heal_config, heal_selection, image_update_monitor, memory_config),
         F.data == "fh_save",
+    )
+    dp.callback_query.register(
+        feat_memres_open_callback(state, memory_config, memres_selection, protected_containers),
+        F.data == "feat:memres",
+    )
+    dp.callback_query.register(
+        feat_memres_toggle_callback(state, memres_selection, protected_containers),
+        F.data.startswith("mr_tog:"),
+    )
+    dp.callback_query.register(
+        feat_memres_save_callback(memory_config, memres_selection, image_update_monitor, auto_heal_config),
+        F.data == "mr_save",
     )
 
 
@@ -282,6 +309,7 @@ def register_commands(
     array_monitor: Any | None = None,
     unraid_config: Any | None = None,
     memory_monitor: "MemoryMonitor | None" = None,
+    memory_config: Any | None = None,
     pattern_analyzer: Any | None = None,
     nl_processor: Any | None = None,
     ai_config: Any | None = None,
@@ -355,7 +383,7 @@ def register_commands(
             dp.message.register(unmute_command(state, mute_manager), Command("unmute"))
 
         _register_unraid_commands(dp, unraid_system_monitor, server_mute_manager, array_mute_manager, array_monitor, unraid_config)
-        _register_memory_commands(dp, memory_monitor, protected_containers)
+        _register_memory_commands(dp, memory_monitor, protected_containers, memory_config)
 
         if ignore_manager is not None and mute_manager is not None:
             _register_manage_commands(
@@ -364,6 +392,7 @@ def register_commands(
                 image_update_monitor=image_update_monitor,
                 image_updates_config=image_updates_config,
                 auto_heal_config=auto_heal_config,
+                memory_config=memory_config,
                 protected_containers=protected_containers,
                 restart_cb=restart_cb,
             )

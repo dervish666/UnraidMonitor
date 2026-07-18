@@ -31,6 +31,7 @@ MEMORY_CRITICAL_THRESHOLD = 95
 MEMORY_SAFE_THRESHOLD = 80
 MEMORY_KILL_DELAY_SECONDS = 60
 MEMORY_STABILIZATION_WAIT = 180
+MEMORY_TOP_CONSUMERS = 5  # Containers listed in the "Top memory users" alert section
 
 # ---------------------------------------------------------------------------
 # AI / LLM token limits
@@ -111,6 +112,10 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.18.0": [
+        "Memory warnings now show your top 5 memory users, and Stop buttons are sorted so the biggest win is always the top button",
+        "New memory restart list - pick containers (like Plex) that just need a bounce to give memory back, and pressure alerts offer a one-tap 🔄 Restart. Set it up in /manage → Features",
+    ],
     "0.17.0": [
         "Memory pressure alerts now show how much RAM each container is using right on the Stop buttons, so you can free the most memory first",
         "When a container is stopped to free memory, the bot tells you how much it was using and how much system memory is now free",

@@ -308,6 +308,8 @@ class MemoryConfig:
     stabilization_wait: int  # Wait between kills in seconds (default 180)
     priority_containers: list[str]  # Never kill these
     killable_containers: list[str]  # Kill in this order
+    restart_containers: list[str] = field(default_factory=list)  # Offer restart on pressure alerts
+    config_path: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MemoryConfig":
@@ -320,6 +322,7 @@ class MemoryConfig:
             stabilization_wait=max(data.get("stabilization_wait", MEMORY_STABILIZATION_WAIT), 10),
             priority_containers=data.get("priority_containers", []),
             killable_containers=data.get("killable_containers", []),
+            restart_containers=data.get("restart_containers", []) or [],
         )
         # Validate threshold ordering: critical > warning > safe
         if not (config.critical_threshold > config.warning_threshold > config.safe_threshold):
@@ -332,6 +335,40 @@ class MemoryConfig:
             config.warning_threshold = MEMORY_WARNING_THRESHOLD
             config.safe_threshold = MEMORY_SAFE_THRESHOLD
         return config
+
+    def set_restart_containers(self, containers: list[str]) -> None:
+        """Set the restart-offer list and persist it to config.yaml.
+
+        These containers get a one-tap Restart button on memory pressure
+        alerts. The running MemoryMonitor holds a reference to this object,
+        so the change applies live without a restart. Names failing
+        container-name validation are dropped — defense in depth; the picker
+        callback already rejects anything not in the live container list.
+        """
+        from src.utils.formatting import validate_container_name  # local: config stays free of UI-layer imports
+
+        valid = [c for c in containers if validate_container_name(c)]
+        dropped = set(containers) - set(valid)
+        if dropped:
+            logger.warning(f"Dropped invalid memory restart container names: {sorted(dropped)}")
+        self.restart_containers = valid
+        self._persist_restart_containers()
+
+    def _persist_restart_containers(self) -> None:
+        """Write only restart_containers back to the memory_management section.
+
+        The section's other keys (thresholds, killable list, etc.) keep
+        whatever is currently on disk.
+        """
+        if not self.config_path:
+            return
+        path = Path(self.config_path)
+        if not path.exists():
+            return
+
+        data = load_yaml_config(str(path))
+        data.setdefault("memory_management", {})["restart_containers"] = self.restart_containers
+        atomic_yaml_write(data, path)
 
 
 @dataclass
@@ -609,6 +646,7 @@ class AppConfig:
         self._memory_management = MemoryConfig.from_dict(
             self._yaml_config.get("memory_management", {})
         )
+        self._memory_management.config_path = settings.config_path
         self._image_updates = ImageUpdatesConfig.from_dict(self._yaml_config.get("image_updates", {}))
         self._image_updates.config_path = settings.config_path
         self._auto_heal = AutoHealConfig.from_dict(self._yaml_config.get("auto_heal", {}))

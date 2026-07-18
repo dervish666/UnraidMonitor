@@ -6,6 +6,7 @@ from collections.abc import Coroutine
 from typing import Any, Awaitable, Callable
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from src.constants import MUTE_MAINTENANCE_INTERVAL_SECONDS
@@ -157,12 +158,13 @@ def make_memory_alert_handler(
     chat_id_store: ChatIdStore,
     bot: Bot,
     escape_markdown_fn: Callable[[str], str],
-) -> Callable[[str, str, str, list[tuple[str, int | None]]], Awaitable[None]]:
+) -> Callable[[str, str, str, list[tuple[str, int | None]], list[tuple[str, int | None]]], Awaitable[None]]:
     async def on_memory_alert(
         title: str,
         message: str,
         alert_type: str,
         killable: list[tuple[str, int | None]],
+        restartable: list[tuple[str, int | None]],
     ) -> None:
         chat_ids = chat_id_store.get_all_chat_ids()
         if not chat_ids:
@@ -172,11 +174,20 @@ def make_memory_alert_handler(
         alert_text = f"{emoji} *{escape_markdown_fn(title)}*\n\n{message}"
         keyboard = None
 
-        # Memory usage per container is supplied by the MemoryMonitor (it only
-        # queries the killable containers, so this is robust even when the
-        # resource monitor is disabled or Docker is slow under pressure).
-        if alert_type == "warning" and killable:
-            buttons = []
+        # Memory usage per container is supplied by the MemoryMonitor, so this
+        # is robust even when the resource monitor is disabled or Docker is
+        # slow under pressure. Both lists arrive sorted largest-first.
+        restart_rows = [
+            [InlineKeyboardButton(
+                text="🔄 Restart " + name + (f" ({format_bytes(mem)})" if mem else ""),
+                callback_data=f"mem_restart:{name}",
+            )]
+            for name, mem in restartable
+        ]
+
+        if alert_type == "warning" and (killable or restartable):
+            # Restart first: it's the gentler action and usually the fix.
+            buttons = list(restart_rows)
             for name, mem in killable:
                 label = f"⏹ Stop {name}" + (f" ({format_bytes(mem)})" if mem else "")
                 buttons.append(
@@ -184,20 +195,31 @@ def make_memory_alert_handler(
                 )
             keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-        elif alert_type == "critical" and killable:
-            target, mem = killable[0]
-            kill_label = f"⏹ Kill {target} Now" + (f" ({format_bytes(mem)})" if mem else "")
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=kill_label, callback_data=f"mem_kill:{target}")],
-                [InlineKeyboardButton(text="❌ Cancel Auto-Kill", callback_data="mem_cancel_kill")],
-            ])
+        elif alert_type == "critical" and (killable or restartable):
+            buttons = []
+            if killable:
+                target, mem = killable[0]
+                kill_label = f"⏹ Kill {target} Now" + (f" ({format_bytes(mem)})" if mem else "")
+                buttons.append([InlineKeyboardButton(text=kill_label, callback_data=f"mem_kill:{target}")])
+                buttons.append([InlineKeyboardButton(text="❌ Cancel Auto-Kill", callback_data="mem_cancel_kill")])
+            buttons.extend(restart_rows)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
         for cid in chat_ids:
             try:
-                await send_with_retry(
-                    bot.send_message,
-                    chat_id=cid, text=alert_text, parse_mode="Markdown", reply_markup=keyboard,
-                )
+                try:
+                    await send_with_retry(
+                        bot.send_message,
+                        chat_id=cid, text=alert_text, parse_mode="Markdown", reply_markup=keyboard,
+                    )
+                except TelegramBadRequest:
+                    # Container names can contain Markdown special characters
+                    # (underscores are common) -- never let a parse failure
+                    # eat a memory alert. Resend as plain text.
+                    await send_with_retry(
+                        bot.send_message,
+                        chat_id=cid, text=alert_text.replace("*", ""), reply_markup=keyboard,
+                    )
             except Exception as e:
                 logger.error(f"Failed to send memory alert to {cid}: {e}")
     return on_memory_alert

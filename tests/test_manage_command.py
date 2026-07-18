@@ -23,7 +23,7 @@ from src.bot.manage_command import (
     feat_heal_open_callback,
     feat_heal_toggle_callback,
     feat_heal_save_callback,
-    AutoHealSelectionState,
+    ContainerSelectionState,
     _build_manage_keyboard,
 )
 from src.alerts.ignore_manager import IgnoreManager
@@ -512,7 +512,7 @@ async def test_feat_image_toggle_without_restart_cb():
 async def test_feat_heal_open_seeds_selection_and_excludes_protected():
     state = _state_with("plex", "sonarr", "traefik")
     auto_heal = MagicMock(containers=["plex"])
-    selection = AutoHealSelectionState()
+    selection = ContainerSelectionState()
     handler = feat_heal_open_callback(
         state, auto_heal, selection, protected_containers=["traefik"],
     )
@@ -541,7 +541,7 @@ async def test_feat_heal_open_seeds_selection_and_excludes_protected():
 @pytest.mark.asyncio
 async def test_feat_heal_toggle_updates_selection():
     state = _state_with("plex", "sonarr")
-    selection = AutoHealSelectionState()
+    selection = ContainerSelectionState()
     selection.init(123, ["plex"])
     handler = feat_heal_toggle_callback(state, selection)
     callback = AsyncMock()
@@ -559,7 +559,7 @@ async def test_feat_heal_toggle_updates_selection():
 async def test_feat_heal_toggle_rejects_unknown_container():
     """Spoofed or stale callback data must not enter the selection."""
     state = _state_with("plex", "sonarr")
-    selection = AutoHealSelectionState()
+    selection = ContainerSelectionState()
     selection.init(123, ["plex"])
     handler = feat_heal_toggle_callback(state, selection)
     callback = AsyncMock()
@@ -578,7 +578,7 @@ async def test_feat_heal_toggle_rejects_unknown_container():
 async def test_feat_heal_toggle_rejects_protected_container():
     """Protected containers are excluded from the picker and from spoofed toggles."""
     state = _state_with("plex", "traefik")
-    selection = AutoHealSelectionState()
+    selection = ContainerSelectionState()
     selection.init(123, [])
     handler = feat_heal_toggle_callback(state, selection, protected_containers=["traefik"])
     callback = AsyncMock()
@@ -595,7 +595,7 @@ async def test_feat_heal_toggle_rejects_protected_container():
 @pytest.mark.asyncio
 async def test_feat_heal_save_applies_and_rerenders():
     auto_heal = MagicMock(enabled=True, containers=["plex", "sonarr"])
-    selection = AutoHealSelectionState()
+    selection = ContainerSelectionState()
     selection.init(123, ["sonarr", "plex"])
     handler = feat_heal_save_callback(auto_heal, selection, image_update_monitor=None)
     callback = AsyncMock()
@@ -614,7 +614,7 @@ async def test_feat_heal_save_applies_and_rerenders():
 @pytest.mark.asyncio
 async def test_feat_heal_save_empty_disables():
     auto_heal = MagicMock(enabled=False, containers=[])
-    selection = AutoHealSelectionState()
+    selection = ContainerSelectionState()
     selection.init(123, [])
     handler = feat_heal_save_callback(auto_heal, selection)
     callback = AsyncMock()
@@ -625,3 +625,151 @@ async def test_feat_heal_save_empty_disables():
 
     auto_heal.set_containers.assert_called_once_with([])
     callback.answer.assert_called_with("Auto-heal disabled")
+
+
+@pytest.mark.asyncio
+async def test_features_panel_shows_memory_restart_section():
+    """A memory config present -> memres section, count, and configure button."""
+    memory_cfg = MagicMock(enabled=True, restart_containers=["plex"])
+    handler = manage_features_callback(
+        image_update_monitor=None, auto_heal_config=None, memory_config=memory_cfg,
+    )
+    callback = AsyncMock()
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    call_args = callback.message.edit_text.call_args
+    text = call_args.args[0]
+    assert "Memory restart list" in text
+    assert "1 container(s)" in text
+    callbacks = [b.callback_data for b in _flatten(call_args.kwargs["reply_markup"])]
+    assert "feat:memres" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_features_panel_notes_memory_management_disabled():
+    memory_cfg = MagicMock(enabled=False, restart_containers=[])
+    handler = manage_features_callback(memory_config=memory_cfg)
+    callback = AsyncMock()
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    text = callback.message.edit_text.call_args.args[0]
+    assert "Memory management is disabled" in text
+
+
+@pytest.mark.asyncio
+async def test_features_panel_without_memory_config_hides_section():
+    handler = manage_features_callback(image_update_monitor=None, auto_heal_config=None)
+    callback = AsyncMock()
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    call_args = callback.message.edit_text.call_args
+    assert "Memory restart list" not in call_args.args[0]
+    callbacks = [b.callback_data for b in _flatten(call_args.kwargs["reply_markup"])]
+    assert "feat:memres" not in callbacks
+
+
+@pytest.mark.asyncio
+async def test_feat_memres_open_seeds_selection_and_excludes_protected():
+    from src.bot.manage_command import feat_memres_open_callback
+
+    state = _state_with("plex", "sonarr", "traefik")
+    memory_cfg = MagicMock(enabled=True, restart_containers=["plex"])
+    selection = ContainerSelectionState()
+    handler = feat_memres_open_callback(
+        state, memory_cfg, selection, protected_containers=["traefik"],
+    )
+    callback = AsyncMock()
+    callback.from_user.id = 123
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    assert selection.get(123) == {"plex"}
+    keyboard = callback.message.edit_text.call_args.kwargs["reply_markup"]
+    toggle_btns = [b for b in _flatten(keyboard) if b.callback_data.startswith("mr_tog:")]
+    names = {b.callback_data.split(":", 1)[1] for b in toggle_btns}
+    assert names == {"plex", "sonarr"}
+    cbs = [b.callback_data for b in _flatten(keyboard)]
+    assert "mr_save" in cbs and "manage:features" in cbs
+
+
+@pytest.mark.asyncio
+async def test_feat_memres_toggle_updates_selection():
+    from src.bot.manage_command import feat_memres_toggle_callback
+
+    state = _state_with("plex", "sonarr")
+    selection = ContainerSelectionState()
+    selection.init(123, ["plex"])
+    handler = feat_memres_toggle_callback(state, selection)
+    callback = AsyncMock()
+    callback.data = "mr_tog:sonarr"
+    callback.from_user.id = 123
+    callback.message = AsyncMock(spec=Message)
+
+    await handler(callback)
+
+    assert selection.get(123) == {"plex", "sonarr"}
+    callback.message.edit_reply_markup.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_feat_memres_toggle_rejects_unknown_container():
+    from src.bot.manage_command import feat_memres_toggle_callback
+
+    state = _state_with("plex")
+    selection = ContainerSelectionState()
+    selection.init(123, [])
+    handler = feat_memres_toggle_callback(state, selection)
+    callback = AsyncMock()
+    callback.data = "mr_tog:../../etc/passwd"
+    callback.from_user.id = 123
+    callback.message = AsyncMock(spec=Message)
+
+    await handler(callback)
+
+    assert selection.get(123) == set()
+    callback.answer.assert_awaited_once_with("Unknown container")
+
+
+@pytest.mark.asyncio
+async def test_feat_memres_save_applies_and_rerenders():
+    from src.bot.manage_command import feat_memres_save_callback
+
+    memory_cfg = MagicMock(enabled=True, restart_containers=["plex", "sonarr"])
+    selection = ContainerSelectionState()
+    selection.init(123, ["sonarr", "plex"])
+    handler = feat_memres_save_callback(memory_cfg, selection)
+    callback = AsyncMock()
+    callback.from_user.id = 123
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    # Persisted as a sorted list (live-applied, no restart)
+    memory_cfg.set_restart_containers.assert_called_once_with(["plex", "sonarr"])
+    assert selection.get(123) == set()
+    callback.message.edit_text.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_feat_memres_save_empty_turns_off():
+    from src.bot.manage_command import feat_memres_save_callback
+
+    memory_cfg = MagicMock(enabled=True, restart_containers=[])
+    selection = ContainerSelectionState()
+    selection.init(123, [])
+    handler = feat_memres_save_callback(memory_cfg, selection)
+    callback = AsyncMock()
+    callback.from_user.id = 123
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    memory_cfg.set_restart_containers.assert_called_once_with([])
+    callback.answer.assert_called_with("Memory restarts off")

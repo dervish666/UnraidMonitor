@@ -469,9 +469,10 @@ def manage_delete_mute_callback(
 # ---------------------------------------------------------------------------
 
 
-class AutoHealSelectionState:
-    """Per-user container selections while the auto-heal picker is open.
+class ContainerSelectionState:
+    """Per-user container selections while a Features picker is open.
 
+    Shared by the auto-heal and memory-restart pickers (one instance each).
     Mirrors the wizard's in-memory session pattern: selections are seeded from
     the current config when the picker opens and discarded once saved.
     """
@@ -508,9 +509,17 @@ def _auto_heal_state(auto_heal_config: Any) -> str:
     return "⚪ Off"
 
 
+def _memory_restart_state(memory_config: Any) -> str:
+    """State label for the memory restart list, including container count."""
+    if memory_config is not None and memory_config.restart_containers:
+        return f"✅ {len(memory_config.restart_containers)} container(s)"
+    return "⚪ Off"
+
+
 def _build_features_view(
     image_update_monitor: Any,
     auto_heal_config: Any,
+    memory_config: Any = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build the Features panel text and keyboard."""
     image_on = image_update_monitor is not None
@@ -524,6 +533,16 @@ def _build_features_view(
         "healthcheck. Opt in per-container; a storm guard stops restart loops._"
     )
 
+    if memory_config is not None:
+        text += (
+            f"\n\n🧠 *Memory restart list* — {_memory_restart_state(memory_config)}\n"
+            "_Containers offered a one-tap Restart button on memory pressure "
+            "alerts — for services that grab memory and only give it back "
+            "after a bounce._"
+        )
+        if not memory_config.enabled:
+            text += "\n_(Memory management is disabled in config, so no alerts will fire.)_"
+
     if image_on:
         image_button = InlineKeyboardButton(
             text="⚪ Disable image updates", callback_data="feat:img:off",
@@ -533,24 +552,31 @@ def _build_features_view(
             text="✅ Enable image updates", callback_data="feat:img:on",
         )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [image_button],
         [InlineKeyboardButton(text="🩹 Configure auto-heal", callback_data="feat:heal")],
-        _back_button(),
-    ])
-    return text, keyboard
+    ]
+    if memory_config is not None:
+        rows.append([InlineKeyboardButton(
+            text="🧠 Configure memory restarts", callback_data="feat:memres",
+        )])
+    rows.append(_back_button())
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def manage_features_callback(
     image_update_monitor: Any = None,
     auto_heal_config: Any = None,
+    memory_config: Any = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the Features panel (manage:features)."""
 
     async def handler(callback: CallbackQuery) -> None:
         await callback.answer()
         if callback.message:
-            text, keyboard = _build_features_view(image_update_monitor, auto_heal_config)
+            text, keyboard = _build_features_view(
+                image_update_monitor, auto_heal_config, memory_config,
+            )
             await safe_edit(callback.message, text, reply_markup=keyboard)
 
     return handler
@@ -590,14 +616,39 @@ def feat_image_toggle_callback(
     return handler
 
 
-def _heal_candidates(
+def _picker_candidates(
     state: "ContainerStateManager",
     protected_containers: list[str] | None,
 ) -> list[str]:
-    """Controllable container names eligible for auto-heal, sorted."""
+    """Controllable container names eligible for a Features picker, sorted."""
     protected = set(protected_containers or [])
     names = {c.name for c in state.get_all() if c.name and c.name not in protected}
     return sorted(names)
+
+
+def _build_container_picker(
+    intro: str,
+    candidates: list[str],
+    selected: set[str],
+    toggle_prefix: str,
+    save_data: str,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build a container toggle-picker: one row per candidate plus Save/Back."""
+    text = intro
+    buttons: list[list[InlineKeyboardButton]] = []
+    if not candidates:
+        text += "\n\n_No controllable containers found._"
+    for name in candidates:
+        mark = "✅" if name in selected else "❌"
+        buttons.append([
+            InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"{toggle_prefix}:{name}")
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="💾 Save", callback_data=save_data),
+        InlineKeyboardButton(text="⬅️ Back", callback_data="manage:features"),
+    ])
+    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def _build_heal_picker(
@@ -605,32 +656,33 @@ def _build_heal_picker(
     selected: set[str],
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build the auto-heal container picker text and toggle keyboard."""
-    text = (
+    return _build_container_picker(
         "🩹 *Auto-heal containers*\n\n"
         "Tap to choose which containers get auto-restarted when they report an "
-        "unhealthy healthcheck. Protected containers are excluded."
+        "unhealthy healthcheck. Protected containers are excluded.",
+        candidates, selected, "fh_tog", "fh_save",
     )
 
-    buttons: list[list[InlineKeyboardButton]] = []
-    if not candidates:
-        text += "\n\n_No controllable containers found._"
-    for name in candidates:
-        mark = "✅" if name in selected else "❌"
-        buttons.append([
-            InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"fh_tog:{name}")
-        ])
 
-    buttons.append([
-        InlineKeyboardButton(text="💾 Save", callback_data="fh_save"),
-        InlineKeyboardButton(text="⬅️ Back", callback_data="manage:features"),
-    ])
-    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+def _build_memres_picker(
+    candidates: list[str],
+    selected: set[str],
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the memory-restart container picker text and toggle keyboard."""
+    return _build_container_picker(
+        "🧠 *Memory restart list*\n\n"
+        "Tap to choose which containers get a one-tap Restart button on memory "
+        "pressure alerts. Restarting is gentler than stopping — ideal for "
+        "services that hog memory but recover after a bounce. Protected "
+        "containers are excluded.",
+        candidates, selected, "mr_tog", "mr_save",
+    )
 
 
 def feat_heal_open_callback(
     state: "ContainerStateManager",
     auto_heal_config: Any,
-    selection_state: AutoHealSelectionState,
+    selection_state: ContainerSelectionState,
     protected_containers: list[str] | None = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory that opens the auto-heal container picker (feat:heal)."""
@@ -640,7 +692,7 @@ def feat_heal_open_callback(
         current = list(auto_heal_config.containers) if auto_heal_config is not None else []
         selection_state.init(user_id, current)
 
-        candidates = _heal_candidates(state, protected_containers)
+        candidates = _picker_candidates(state, protected_containers)
         text, keyboard = _build_heal_picker(candidates, selection_state.get(user_id))
 
         await callback.answer()
@@ -650,12 +702,14 @@ def feat_heal_open_callback(
     return handler
 
 
-def feat_heal_toggle_callback(
+def _toggle_in_picker(
     state: "ContainerStateManager",
-    selection_state: AutoHealSelectionState,
-    protected_containers: list[str] | None = None,
+    selection_state: ContainerSelectionState,
+    protected_containers: list[str] | None,
+    build_picker: Callable[[list[str], set[str]], tuple[str, InlineKeyboardMarkup]],
+    list_label: str,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
-    """Factory for picker toggle buttons (fh_tog:<container>)."""
+    """Shared toggle handler for the Features container pickers."""
 
     async def handler(callback: CallbackQuery) -> None:
         data = callback.data or ""
@@ -667,18 +721,18 @@ def feat_heal_toggle_callback(
         container = parts[1]
         user_id = callback.from_user.id if callback.from_user else 0
 
-        candidates = _heal_candidates(state, protected_containers)
+        candidates = _picker_candidates(state, protected_containers)
         if container not in candidates:
             # Spoofed or stale callback data — only real, non-protected
-            # containers may be toggled into the auto-heal list.
-            logger.warning(f"Rejected auto-heal toggle for unknown container: {container[:50]!r}")
+            # containers may be toggled into the list.
+            logger.warning(f"Rejected {list_label} toggle for unknown container: {container[:50]!r}")
             await callback.answer("Unknown container")
             return
 
         selection_state.toggle(user_id, container)
         await callback.answer()
 
-        _, keyboard = _build_heal_picker(candidates, selection_state.get(user_id))
+        _, keyboard = build_picker(candidates, selection_state.get(user_id))
         if isinstance(callback.message, Message):
             try:
                 await callback.message.edit_reply_markup(reply_markup=keyboard)
@@ -688,10 +742,22 @@ def feat_heal_toggle_callback(
     return handler
 
 
+def feat_heal_toggle_callback(
+    state: "ContainerStateManager",
+    selection_state: ContainerSelectionState,
+    protected_containers: list[str] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for auto-heal picker toggle buttons (fh_tog:<container>)."""
+    return _toggle_in_picker(
+        state, selection_state, protected_containers, _build_heal_picker, "auto-heal",
+    )
+
+
 def feat_heal_save_callback(
     auto_heal_config: Any,
-    selection_state: AutoHealSelectionState,
+    selection_state: ContainerSelectionState,
     image_update_monitor: Any = None,
+    memory_config: Any = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the picker Save button (fh_save).
 
@@ -717,7 +783,80 @@ def feat_heal_save_callback(
             answer += f" ({dropped} invalid name(s) skipped)"
         await callback.answer(answer)
         if callback.message:
-            text, keyboard = _build_features_view(image_update_monitor, auto_heal_config)
+            text, keyboard = _build_features_view(
+                image_update_monitor, auto_heal_config, memory_config,
+            )
+            await safe_edit(callback.message, text, reply_markup=keyboard)
+
+    return handler
+
+
+def feat_memres_open_callback(
+    state: "ContainerStateManager",
+    memory_config: Any,
+    selection_state: ContainerSelectionState,
+    protected_containers: list[str] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory that opens the memory-restart container picker (feat:memres)."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        user_id = callback.from_user.id if callback.from_user else 0
+        current = list(memory_config.restart_containers) if memory_config is not None else []
+        selection_state.init(user_id, current)
+
+        candidates = _picker_candidates(state, protected_containers)
+        text, keyboard = _build_memres_picker(candidates, selection_state.get(user_id))
+
+        await callback.answer()
+        if callback.message:
+            await safe_edit(callback.message, text, reply_markup=keyboard)
+
+    return handler
+
+
+def feat_memres_toggle_callback(
+    state: "ContainerStateManager",
+    selection_state: ContainerSelectionState,
+    protected_containers: list[str] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for memory-restart picker toggle buttons (mr_tog:<container>)."""
+    return _toggle_in_picker(
+        state, selection_state, protected_containers, _build_memres_picker, "memory-restart",
+    )
+
+
+def feat_memres_save_callback(
+    memory_config: Any,
+    selection_state: ContainerSelectionState,
+    image_update_monitor: Any = None,
+    auto_heal_config: Any = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for the memory-restart picker Save button (mr_save).
+
+    Applies live: the running MemoryMonitor shares this config object, so the
+    next pressure alert offers the updated restart buttons without a bot
+    restart.
+    """
+
+    async def handler(callback: CallbackQuery) -> None:
+        user_id = callback.from_user.id if callback.from_user else 0
+        selected = sorted(selection_state.get(user_id))
+        saved = selected
+        if memory_config is not None:
+            memory_config.set_restart_containers(selected)
+            saved = list(memory_config.restart_containers)
+        selection_state.clear(user_id)
+
+        count = len(saved)
+        answer = f"Memory restarts {'on for ' + str(count) + ' container(s)' if count else 'off'}"
+        dropped = len(selected) - len(saved)
+        if dropped:
+            answer += f" ({dropped} invalid name(s) skipped)"
+        await callback.answer(answer)
+        if callback.message:
+            text, keyboard = _build_features_view(
+                image_update_monitor, auto_heal_config, memory_config,
+            )
             await safe_edit(callback.message, text, reply_markup=keyboard)
 
     return handler

@@ -436,6 +436,11 @@ memory_management:
   enabled: true
 ```
 
+When memory passes the warning threshold, the alert shows the top 5 memory
+users (largest first) with one-tap buttons: **🔄 Restart** for containers on
+your memory restart list and **⏹ Stop** for killable ones, both sorted by how
+much memory they'd free.
+
 When system memory exceeds the critical threshold:
 1. The bot warns you and starts a countdown
 2. After the delay, it kills the lowest-priority killable container
@@ -443,6 +448,13 @@ When system memory exceeds the critical threshold:
 4. When memory drops below the safe threshold, the bot offers to restart killed containers
 
 Use `/cancel-kill` to abort a pending kill during the countdown.
+
+**The memory restart list** is for services that grab memory and only give it
+back after a bounce (Plex is the classic case) — a restart usually fixes the
+pressure without losing the service. Choose the containers from Telegram via
+**/manage → Features → 🧠 Configure memory restarts**; changes apply
+immediately, no bot restart needed. Restarting the container that's about to
+be auto-killed also cancels the countdown.
 
 ### Keeping Noise Down
 

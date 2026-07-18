@@ -21,13 +21,13 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Interactive Dashboard** - `/manage` hub for status, resources, server, disks, ignores, mutes, and a Features panel to toggle optional monitors
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
 
-## What's New in v0.15.0
+## What's New in v0.18.0
 
-- **Toggle optional features from Telegram** - `/manage` → ⚙️ Features enables image-update detection and picks auto-heal containers without editing `config.yaml`
-- **Alert-context-aware diagnostics** - `/diagnose` now knows which alert fired (crash / errors / restart-loop / high-usage) and gathers full container state, for far more accurate root-cause analysis
-- **Properly formatted AI replies** - Bold, italics, headings, and code blocks now render correctly in Telegram instead of showing literal `*` characters
-- **Friendlier natural-language chat** - Plays along with creative on-topic requests ("status as a captain's log", "roast my containers") while staying grounded in real stats
-- **Reliability & security hardening** - Auto-heal retries persist correctly, image-update alerts no longer repeat after a restart, and API error bodies are redacted in all paths (full June 6 audit remediation)
+- **Top memory users on pressure alerts** - Memory warnings now list the top 5 memory-consuming containers, largest first, so you can see who's eating the RAM
+- **Restart instead of kill** - A new memory restart list for containers (like Plex) that grab memory and only give it back after a bounce: pressure alerts offer a one-tap 🔄 Restart, and restarting the auto-kill target cancels the countdown
+- **Pick restartable containers from Telegram** - `/manage` → ⚙️ Features → 🧠 Configure memory restarts, applies live with no bot restart
+- **Smarter Stop buttons** - Kill buttons are sorted by memory usage with each container's RAM on the label, so the biggest win is always the top button (v0.17.0)
+- **Bot health in the Unraid dashboard** - The container reports healthy/unhealthy via a built-in HEALTHCHECK, plus hardened alert delivery and blocking dependency audits in CI (v0.16.0)
 
 See the [changelog](CHANGELOG.md) for full details.
 
@@ -327,7 +327,15 @@ memory_management:
   killable_containers:
     - handbrake
     - tdarr
+
+  # Offer a one-tap Restart button for these on pressure alerts — for
+  # services that hog memory but recover after a bounce (classic Plex).
+  # Pick them from Telegram via /manage → Features → Configure memory restarts.
+  restart_containers:
+    - plex
 ```
+
+Memory warnings list the top 5 memory users and offer Restart/Stop buttons sorted largest-first, so the biggest win is always the top button.
 
 ### Unraid Server Monitoring
 

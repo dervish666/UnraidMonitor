@@ -2,6 +2,17 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.18.0] - 2026-07-18
+
+### Added
+- **Top memory users in pressure warnings** — the memory warning alert now lists the top 5 memory-consuming containers across *all* running containers (largest first), not just the killable ones, so you can see at a glance who is actually eating the RAM. One bounded snapshot (`_memory_snapshot`, capped by `stats_timeout`) feeds both the text and the button labels; if Docker is slow under pressure the alert falls back to names without figures rather than being delayed.
+- **Memory restart list** (`memory_management.restart_containers`) — containers that hog memory but recover after a bounce (classic Plex) can be offered a one-tap "🔄 Restart" button on warning *and* critical memory alerts, as the gentle alternative to stopping. Restarting the container that is mid-countdown for an auto-kill cancels the countdown. Restart buttons are rejected for protected containers and for names not on the list, even if spoofed.
+- **Configure memory restarts from Telegram** — `/manage` → ⚙️ Features → 🧠 Configure memory restarts opens a tap-to-toggle container picker (same UX as auto-heal). Saves persist to `config.yaml` and apply live — the running `MemoryMonitor` shares the config object, so no bot restart is needed.
+
+### Changed
+- **Stop/Restart buttons on memory warnings are sorted by memory usage, largest first** — the biggest win is always the top button. The *auto-kill* order is unchanged and still follows the configured `killable_containers` priority order.
+- **Memory alerts fall back to plain text if Markdown parsing fails** — container names can contain Markdown special characters (underscores are common); a parse failure now resends the alert without formatting instead of silently dropping it during a memory event.
+
 ## [0.17.0] - 2026-06-28
 
 ### Added

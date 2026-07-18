@@ -350,8 +350,7 @@ class TestStateMachine:
 
         args = mock_on_alert.call_args[0]
         assert args[3] == [("bitmagnet", None)]  # stopped 'obsidian' excluded
-        assert "bitmagnet" in args[1]
-        assert "obsidian" not in args[1]
+        assert args[4] == []  # nothing in the restart list
 
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")
@@ -373,7 +372,7 @@ class TestStateMachine:
 
         args = mock_on_alert.call_args[0]
         assert args[3] == []  # no buttons
-        assert "none running" in args[1]
+        assert "No killable or restartable containers" in args[1]
 
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")
@@ -757,3 +756,252 @@ class TestPollingLoop:
         monitor.stop()
 
         assert monitor._running is False
+
+
+GB = 1024**3
+
+
+def _pressure_config(**overrides) -> MemoryConfig:
+    """MemoryConfig with sane pressure thresholds; lists via overrides."""
+    defaults = dict(
+        enabled=True,
+        warning_threshold=90,
+        critical_threshold=95,
+        safe_threshold=80,
+        kill_delay_seconds=60,
+        stabilization_wait=180,
+        priority_containers=[],
+        killable_containers=[],
+        restart_containers=[],
+    )
+    defaults.update(overrides)
+    return MemoryConfig(**defaults)
+
+
+class TestWarningAlertContent:
+    """Top-consumer list and size-sorted button payloads on warning alerts."""
+
+    @staticmethod
+    def _stats(usage_bytes: int, cache_bytes: int = 0) -> dict:
+        return {
+            "memory_stats": {
+                "usage": usage_bytes,
+                "limit": 8 * 1024**3,
+                "stats": {"cache": cache_bytes},
+            }
+        }
+
+    def _running_container(self, name: str, usage_bytes: int) -> MagicMock:
+        c = MagicMock()
+        c.name = name
+        c.status = "running"
+        c.stats.return_value = self._stats(usage_bytes)
+        return c
+
+    def _docker_with(self, mock_docker_client, mems: dict) -> None:
+        containers = []
+        for name in mems:
+            c = MagicMock()
+            c.name = name
+            containers.append(c)
+        mock_docker_client.containers.list.return_value = containers
+        mock_docker_client.containers.get.side_effect = (
+            lambda name: self._running_container(name, mems[name])
+        )
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_warning_sorts_buttons_and_lists_top_users(
+        self, mock_psutil, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=91.0)
+        config = _pressure_config(
+            killable_containers=["sab", "bitmagnet"],  # config (priority) order
+            restart_containers=["plex"],
+        )
+        self._docker_with(mock_docker_client, {
+            "plex": 8 * GB, "sab": 1 * GB, "bitmagnet": 2 * GB, "postgres": 3 * GB,
+        })
+
+        monitor = MemoryMonitor(mock_docker_client, config, mock_on_alert, mock_on_ask_restart)
+        await monitor._check_memory()
+
+        title, message, alert_type, killable, restartable = mock_on_alert.call_args[0]
+        assert alert_type == "warning"
+        # Buttons are size-sorted, not config order
+        assert killable == [("bitmagnet", 2 * GB), ("sab", 1 * GB)]
+        assert restartable == [("plex", 8 * GB)]
+        # Message lists top users largest first, including non-actionable ones
+        assert "Top memory users" in message
+        assert (
+            message.index("plex")
+            < message.index("postgres")
+            < message.index("bitmagnet")
+            < message.index("sab")
+        )
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_warning_top_users_capped_at_five(
+        self, mock_psutil, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=91.0)
+        mems = {f"svc{i}": i * GB for i in range(1, 8)}  # svc1 .. svc7
+        self._docker_with(mock_docker_client, mems)
+
+        monitor = MemoryMonitor(
+            mock_docker_client, _pressure_config(), mock_on_alert, mock_on_ask_restart,
+        )
+        await monitor._check_memory()
+
+        message = mock_on_alert.call_args[0][1]
+        assert "svc7" in message and "svc3" in message  # top five: svc7..svc3
+        assert "svc2" not in message and "svc1" not in message
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_warning_snapshot_timeout_falls_back_to_names(
+        self, mock_psutil, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=91.0)
+        config = _pressure_config(
+            killable_containers=["bitmagnet"], restart_containers=["plex"],
+        )
+        c1, c2 = MagicMock(), MagicMock()
+        c1.name = "bitmagnet"
+        c2.name = "plex"
+        mock_docker_client.containers.list.return_value = [c1, c2]
+
+        monitor = MemoryMonitor(
+            mock_docker_client, config, mock_on_alert, mock_on_ask_restart,
+            stats_timeout=0.01,
+        )
+
+        async def slow(_name: str) -> int:
+            await asyncio.sleep(1)
+            return 123
+
+        monitor._container_memory_bytes = slow  # type: ignore[assignment]
+        await monitor._check_memory()
+
+        args = mock_on_alert.call_args[0]
+        assert args[3] == [("bitmagnet", None)]  # names kept, sizes unknown
+        assert args[4] == [("plex", None)]
+        assert "Top memory users" not in args[1]
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_critical_includes_restartable(
+        self, mock_psutil, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=96.0)
+        config = _pressure_config(
+            killable_containers=["sab"], restart_containers=["plex"],
+        )
+        self._docker_with(mock_docker_client, {"plex": 8 * GB, "sab": 1 * GB})
+
+        monitor = MemoryMonitor(mock_docker_client, config, mock_on_alert, mock_on_ask_restart)
+        await monitor._check_memory()
+
+        title, message, alert_type, killable, restartable = mock_on_alert.call_args[0]
+        assert title == "Memory Critical"
+        assert killable == [("sab", 1 * GB)]  # auto-kill target keeps priority order
+        assert restartable == [("plex", 8 * GB)]
+
+    @pytest.mark.asyncio
+    async def test_get_restartable_memory_sorted_largest_first(
+        self, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        config = _pressure_config(restart_containers=["small", "big"])
+        self._docker_with(mock_docker_client, {"small": 1 * GB, "big": 4 * GB})
+
+        monitor = MemoryMonitor(mock_docker_client, config, mock_on_alert, mock_on_ask_restart)
+        result = await monitor.get_restartable_memory()
+        assert result == [("big", 4 * GB), ("small", 1 * GB)]
+
+
+class TestRestartContainer:
+    """restart_container(): the gentle alternative to a kill."""
+
+    @staticmethod
+    def _stats(usage_bytes: int) -> dict:
+        return {
+            "memory_stats": {
+                "usage": usage_bytes,
+                "limit": 8 * 1024**3,
+                "stats": {"cache": 0},
+            }
+        }
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_restart_returns_memory_context(
+        self, mock_psutil, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(
+            percent=78.0, available=4 * GB,
+        )
+        container = MagicMock()
+        container.name = "plex"
+        container.status = "running"
+        container.stats.return_value = self._stats(8 * GB)
+        mock_docker_client.containers.get.return_value = container
+
+        monitor = MemoryMonitor(
+            mock_docker_client, _pressure_config(restart_containers=["plex"]),
+            mock_on_alert, mock_on_ask_restart,
+        )
+        result = await monitor.restart_container("plex")
+
+        container.restart.assert_called_once_with(timeout=10)
+        assert result.success is True
+        assert result.freed_bytes == 8 * GB
+        assert result.system_percent == 78.0
+        assert result.system_available_bytes == 4 * GB
+        # A restart is not a kill: nothing recorded for the recovery prompt
+        assert monitor._killed_containers == []
+
+    @pytest.mark.asyncio
+    async def test_restart_failure_returns_unsuccessful(
+        self, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_docker_client.containers.get.side_effect = Exception("daemon exploded")
+
+        monitor = MemoryMonitor(
+            mock_docker_client, _pressure_config(), mock_on_alert, mock_on_ask_restart,
+        )
+        result = await monitor.restart_container("plex")
+        assert result.success is False
+        assert result.freed_bytes is None
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_restart_cancels_pending_kill_of_same_container(
+        self, mock_psutil, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=90.0, available=2 * GB)
+        monitor = MemoryMonitor(
+            mock_docker_client, _pressure_config(), mock_on_alert, mock_on_ask_restart,
+        )
+        monitor._pending_kill = "plex"
+        event = asyncio.Event()
+        monitor._kill_cancel_event = event
+
+        await monitor.restart_container("plex")
+        assert event.is_set()
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_restart_keeps_pending_kill_of_other_container(
+        self, mock_psutil, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=90.0, available=2 * GB)
+        monitor = MemoryMonitor(
+            mock_docker_client, _pressure_config(), mock_on_alert, mock_on_ask_restart,
+        )
+        monitor._pending_kill = "sab"
+        event = asyncio.Event()
+        monitor._kill_cancel_event = event
+
+        await monitor.restart_container("plex")
+        assert not event.is_set()

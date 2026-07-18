@@ -10,6 +10,7 @@ import docker
 import psutil
 
 from src.config import MemoryConfig
+from src.constants import MEMORY_TOP_CONSUMERS
 from src.monitors.resource_monitor import parse_container_stats
 from src.utils.formatting import format_bytes
 
@@ -32,13 +33,13 @@ class MemoryState(Enum):
 
 @dataclass
 class KillResult:
-    """Outcome of stopping a container, with memory context for the user."""
+    """Outcome of stopping (or restarting) a container, with memory context for the user."""
 
     success: bool
     name: str
-    freed_bytes: int | None = None  # container memory just before it was stopped
-    system_percent: float | None = None  # system memory % after the stop
-    system_available_bytes: int | None = None  # system memory free after the stop
+    freed_bytes: int | None = None  # container memory just before the stop/restart
+    system_percent: float | None = None  # system memory % afterwards
+    system_available_bytes: int | None = None  # system memory free afterwards
 
 
 class MemoryMonitor:
@@ -48,7 +49,7 @@ class MemoryMonitor:
         self,
         docker_client: docker.DockerClient,
         config: MemoryConfig,
-        on_alert: Callable[[str, str, str, list[KillableEntry]], Awaitable[None]],
+        on_alert: Callable[[str, str, str, list[KillableEntry], list[KillableEntry]], Awaitable[None]],
         on_ask_restart: Callable[[str], Awaitable[None]],
         check_interval: int = 10,
         error_sleep: int = 30,
@@ -59,10 +60,11 @@ class MemoryMonitor:
         Args:
             docker_client: Docker client for container control.
             config: Memory management configuration.
-            on_alert: Callback for sending alerts (title, message, alert_type, killable).
+            on_alert: Callback for sending alerts
+                (title, message, alert_type, killable, restartable).
                 alert_type is "warning", "critical", or "info".
-                killable is a list of (name, memory_bytes | None) tuples for the
-                containers relevant to kill buttons.
+                killable and restartable are lists of (name, memory_bytes | None)
+                tuples for the containers relevant to kill/restart buttons.
             on_ask_restart: Callback for asking to restart a container.
             check_interval: Seconds between memory checks.
             error_sleep: Seconds to sleep after an error.
@@ -120,6 +122,18 @@ class MemoryMonitor:
         running_killable = await self._get_running_killable()
         return running_killable[0] if running_killable else None
 
+    async def _get_running_restartable(self) -> list[str]:
+        """Restart-offer containers that are currently running, config order."""
+        running_names = await asyncio.to_thread(
+            lambda: {c.name for c in self._docker.containers.list()}
+        )
+        return [name for name in self._config.restart_containers if name in running_names]
+
+    @staticmethod
+    def _sorted_by_memory(entries: list[KillableEntry]) -> list[KillableEntry]:
+        """Sort (name, memory) entries largest first; unknown sizes go last."""
+        return sorted(entries, key=lambda e: -1 if e[1] is None else e[1], reverse=True)
+
     async def _container_memory_bytes(self, name: str) -> int | None:
         """Current cache-adjusted memory usage (bytes) for a running container.
 
@@ -163,6 +177,49 @@ class MemoryMonitor:
             logger.warning("Timed out reading killable container memory; showing names only")
             return [(name, None) for name in names]
         return list(zip(names, mems))
+
+    async def get_restartable_memory(self) -> list[KillableEntry]:
+        """Running restart-offer containers with current memory, largest first.
+
+        Same bounded-batch approach as ``get_killable_memory`` -- if Docker is
+        slow under pressure we fall back to names with no memory figure.
+        """
+        names = await self._get_running_restartable()
+        if not names:
+            return []
+        try:
+            mems = await asyncio.wait_for(
+                asyncio.gather(*(self._container_memory_bytes(n) for n in names)),
+                timeout=self._stats_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Timed out reading restartable container memory; showing names only")
+            return [(name, None) for name in names]
+        return self._sorted_by_memory(list(zip(names, mems)))
+
+    async def _memory_snapshot(self) -> list[KillableEntry]:
+        """(name, memory_bytes) for every running container, bounded by stats_timeout.
+
+        One batch feeds the whole warning alert (top consumers plus the
+        kill/restart button lists) so the figures are consistent and Docker is
+        only queried once. Returns [] when Docker is too slow or errors --
+        callers fall back to the cheaper names-only lists.
+        """
+        try:
+            names = await asyncio.to_thread(
+                lambda: [c.name for c in self._docker.containers.list() if c.name]
+            )
+            mems = await asyncio.wait_for(
+                asyncio.gather(*(self._container_memory_bytes(n) for n in names)),
+                timeout=self._stats_timeout,
+            )
+            return list(zip(names, mems))
+        except asyncio.TimeoutError:
+            logger.warning("Timed out reading container memory snapshot")
+            return []
+        except Exception as e:
+            logger.warning(f"Could not snapshot container memory: {e}")
+            return []
 
     def _system_memory(self) -> tuple[float, int]:
         """Current system memory as (percent_used, available_bytes)."""
@@ -230,20 +287,51 @@ class MemoryMonitor:
     async def _handle_warning(self, percent: float) -> None:
         """Handle warning state - notify user.
 
-        Only lists/offers containers that are killable *and* currently
-        running -- stopped containers can't free any memory -- and annotates
-        each with how much memory it is currently using.
+        The alert lists the top memory consumers across all running containers
+        and offers restart/stop buttons for the configured lists, largest
+        first. Only running containers are offered -- stopped ones can't free
+        any memory.
         """
-        killable = await self.get_killable_memory()
-        listed = ", ".join(
-            name + (f" ({format_bytes(mem)})" if mem else "") for name, mem in killable
-        ) or "none running"
-        message = f"Memory at {percent:.0f}%. Killable containers: {listed}"
-        await self._on_alert("Memory Warning", message, "warning", killable)
+        snapshot = await self._memory_snapshot()
+        if snapshot:
+            by_name = dict(snapshot)
+            killable = self._sorted_by_memory([
+                (name, by_name[name])
+                for name in self._config.killable_containers
+                if name in by_name and name not in self._killed_containers
+            ])
+            restartable = self._sorted_by_memory([
+                (name, by_name[name])
+                for name in self._config.restart_containers
+                if name in by_name
+            ])
+        else:
+            # Snapshot failed/timed out: still offer the buttons, just
+            # without memory figures.
+            killable = [(name, None) for name in await self._get_running_killable()]
+            restartable = [(name, None) for name in await self._get_running_restartable()]
+
+        top = sorted(
+            ((name, mem) for name, mem in snapshot if mem),
+            key=lambda e: e[1],
+            reverse=True,
+        )[:MEMORY_TOP_CONSUMERS]
+        lines = [f"Memory at {percent:.0f}%."]
+        if top:
+            lines.append("\nTop memory users:")
+            lines.extend(
+                f"{i}. {name} — {format_bytes(mem)}" for i, (name, mem) in enumerate(top, 1)
+            )
+        if not killable and not restartable:
+            lines.append("\nNo killable or restartable containers are running.")
+        await self._on_alert(
+            "Memory Warning", "\n".join(lines), "warning", killable, restartable,
+        )
 
     async def _handle_critical(self, percent: float) -> None:
         """Handle critical state - prepare to kill."""
         next_kill = await self._get_next_killable()
+        restartable = await self.get_restartable_memory()
         if next_kill:
             self._pending_kill = next_kill
             mem = await self._container_memory_bytes(next_kill)
@@ -253,10 +341,14 @@ class MemoryMonitor:
                 f"Will stop {next_kill}{using} in {self._config.kill_delay_seconds} seconds "
                 f"to protect priority services."
             )
-            await self._on_alert("Memory Critical", message, "critical", [(next_kill, mem)])
+            await self._on_alert(
+                "Memory Critical", message, "critical", [(next_kill, mem)], restartable,
+            )
         else:
             message = f"Memory critical ({percent:.0f}%) but no killable containers available!"
-            await self._on_alert("Memory Critical - No Action Available", message, "critical", [])
+            await self._on_alert(
+                "Memory Critical - No Action Available", message, "critical", [], restartable,
+            )
 
     async def _execute_kill_countdown(self) -> None:
         """Execute the kill countdown for pending container."""
@@ -303,6 +395,7 @@ class MemoryMonitor:
                     f"Stopped {container_name} to free memory.{freed_note} "
                     f"System memory now {now_percent:.0f}% ({format_bytes(available)} free).",
                     "info",
+                    [],
                     [],
                 )
             else:
@@ -353,6 +446,38 @@ class MemoryMonitor:
     def get_pending_kill(self) -> str | None:
         """Get the name of the container pending kill, if any."""
         return self._pending_kill
+
+    async def restart_container(self, name: str) -> KillResult:
+        """Restart a container to reclaim its memory (from button press).
+
+        The gentle alternative to a kill, for services that grow but recover
+        after a bounce (e.g. Plex). If this container is the pending auto-kill
+        target the countdown is cancelled -- the restart already frees its
+        memory. Returns a KillResult whose freed_bytes is what the container
+        was using just before the restart.
+        """
+        async with self._kill_lock:
+            if self._pending_kill == name and self._kill_cancel_event:
+                self._kill_cancel_event.set()
+
+        # Capture usage before restarting -- afterwards it starts fresh.
+        freed = await self._container_memory_bytes(name)
+
+        try:
+            def _do_restart() -> None:
+                container = self._docker.containers.get(name)
+                container.restart(timeout=10)
+
+            await asyncio.to_thread(_do_restart)
+            logger.info(f"Restarted container {name} to reclaim memory")
+            percent, available = self._system_memory()
+            return KillResult(True, name, freed, percent, available)
+        except docker.errors.NotFound:
+            logger.warning(f"Container {name} not found when trying to restart")
+            return KillResult(False, name)
+        except Exception as e:
+            logger.error(f"Failed to restart container {name}: {e}")
+            return KillResult(False, name)
 
     async def confirm_restart(self, name: str) -> bool:
         """Confirm restart of a killed container.

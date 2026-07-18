@@ -507,6 +507,7 @@ async def start_monitoring(
         array_monitor=uc.array_monitor,
         unraid_config=config.unraid if uc.array_mute_manager else None,
         memory_monitor=memory_monitor,
+        memory_config=config.memory_management,
         pattern_analyzer=pattern_analyzer,
         nl_processor=nl_processor,
         ai_config=ai_config,
