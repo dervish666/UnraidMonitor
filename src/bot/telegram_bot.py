@@ -3,7 +3,7 @@ from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher, BaseMiddleware, F
 from aiogram.filters import Command, Filter
-from aiogram.types import Message, CallbackQuery, TelegramObject
+from aiogram.types import ErrorEvent, Message, CallbackQuery, TelegramObject
 import docker
 
 from src.state import ContainerStateManager
@@ -128,12 +128,60 @@ def create_bot(token: str) -> Bot:
     return Bot(token=token)
 
 
+async def unhandled_callback(callback: CallbackQuery) -> None:
+    """Answer any callback no other handler claimed.
+
+    Telegram spins a button's progress indicator until the callback is answered,
+    so an unmatched prefix (a stale keyboard, or a feature disabled since the
+    message was sent) otherwise looks like the bot ignoring the tap forever.
+    """
+    logger.warning(f"Unhandled callback data: {callback.data!r}")
+    await callback.answer("That button is no longer available.", show_alert=True)
+
+
+async def on_handler_error(event: ErrorEvent) -> bool:
+    """Surface handler exceptions to the user instead of failing silently.
+
+    Returns True so aiogram treats the update as handled.
+    """
+    logger.error(
+        f"Unhandled exception in handler: {type(event.exception).__name__}: {event.exception}",
+        exc_info=event.exception,
+    )
+
+    reason = type(event.exception).__name__
+    text = f"⚠️ That failed ({reason}). Check the bot logs for details."
+
+    if event.update.callback_query is not None:
+        # Answer first so the button stops spinning -- but in its own guard, or a
+        # query that has already expired takes the actual explanation down with it.
+        try:
+            await event.update.callback_query.answer("Something went wrong")
+        except Exception as e:
+            logger.warning(f"Failed to answer the failed callback: {e}")
+
+    target = event.update.message
+    if event.update.callback_query is not None and isinstance(
+        event.update.callback_query.message, Message
+    ):
+        target = event.update.callback_query.message
+
+    if target is not None:
+        try:
+            await target.answer(text)
+        except Exception as e:
+            logger.warning(f"Failed to report handler error to the user: {e}")
+
+    return True
+
+
 def create_dispatcher(allowed_users: list[int], chat_id_store: Any = None) -> Dispatcher:
-    """Create dispatcher with auth middleware."""
+    """Create dispatcher with auth middleware and a global error handler."""
     dp = Dispatcher()
     auth = AuthMiddleware(allowed_users, chat_id_store=chat_id_store)
     dp.message.middleware(auth)
     dp.callback_query.middleware(auth)
+    dp.errors.register(on_handler_error)
     return dp
 
 
@@ -203,8 +251,18 @@ def _register_memory_commands(
     protected_containers: list[str] | None,
     memory_config: Any | None = None,
 ) -> None:
-    """Register memory management commands and kill/restart button callbacks."""
-    dp.message.register(cancel_kill_command(memory_monitor), Command("cancel-kill"))
+    """Register memory management commands and kill/restart button callbacks.
+
+    The kill/restart callbacks are registered whenever a MemoryMonitor object
+    exists, not only when the pressure loop is running: Unraid memory alerts
+    render Stop buttons independently of ``memory_management.enabled``, and an
+    unregistered prefix leaves the button spinning forever.
+    """
+    memory_enabled = bool(memory_config is not None and getattr(memory_config, "enabled", False))
+    # /cancel-kill only has meaning when the pressure loop can schedule a kill.
+    dp.message.register(
+        cancel_kill_command(memory_monitor if memory_enabled else None), Command("cancel-kill"),
+    )
     if memory_monitor is not None:
         dp.callback_query.register(
             mem_kill_callback(memory_monitor, protected_containers=protected_containers),
@@ -416,8 +474,12 @@ def register_commands(
             dp.callback_query.register(create_nl_cancel_callback(nl_processor), F.data == "nl_cancel")
             dp.message.register(create_nl_handler(nl_processor), NLFilter())
 
+        # Must be last: an unfiltered handler claims every callback not matched above.
+        dp.callback_query.register(unhandled_callback)
+
         return controller, diagnostic_service
 
+    dp.callback_query.register(unhandled_callback)
     return None, None
 
 

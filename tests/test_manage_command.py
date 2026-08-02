@@ -773,3 +773,85 @@ async def test_feat_memres_save_empty_turns_off():
 
     memory_cfg.set_restart_containers.assert_called_once_with([])
     callback.answer.assert_called_with("Memory restarts off")
+
+
+# ---------------------------------------------------------------------------
+# Panel keyboards: editing without reply_markup drops the keyboard entirely,
+# which turned these four panels into one-way doors.
+# ---------------------------------------------------------------------------
+
+
+def _keyboard_of(callback):
+    return callback.message.edit_text.call_args.kwargs.get("reply_markup")
+
+
+def _button_data(keyboard):
+    return [b.callback_data for row in keyboard.inline_keyboard for b in row]
+
+
+@pytest.mark.asyncio
+async def test_status_panel_keeps_back_and_refresh():
+    handler = manage_status_callback(ContainerStateManager())
+    callback = AsyncMock()
+    callback.data = "manage:status"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    assert _button_data(_keyboard_of(callback)) == ["manage:status", "manage:back"]
+
+
+@pytest.mark.asyncio
+async def test_resources_panel_keeps_back_when_monitor_missing():
+    handler = manage_resources_callback(None)
+    callback = AsyncMock()
+    callback.data = "manage:resources"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    assert "manage:back" in _button_data(_keyboard_of(callback))
+
+
+@pytest.mark.asyncio
+async def test_server_panel_keeps_back_when_unraid_missing():
+    handler = manage_server_callback(None)
+    callback = AsyncMock()
+    callback.data = "manage:server"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    assert "manage:back" in _button_data(_keyboard_of(callback))
+
+
+@pytest.mark.asyncio
+async def test_disks_panel_keeps_back_when_unraid_missing():
+    handler = manage_disks_callback(None)
+    callback = AsyncMock()
+    callback.data = "manage:disks"
+    callback.message = AsyncMock()
+
+    await handler(callback)
+
+    assert "manage:back" in _button_data(_keyboard_of(callback))
+
+
+@pytest.mark.asyncio
+async def test_every_panel_refresh_points_at_its_own_section():
+    """A Refresh button that re-issues the wrong section silently navigates away."""
+    cases = [
+        ("status", manage_status_callback(ContainerStateManager())),
+        ("resources", manage_resources_callback(None)),
+        ("server", manage_server_callback(None)),
+        ("disks", manage_disks_callback(None)),
+    ]
+
+    for section, handler in cases:
+        callback = AsyncMock()
+        callback.data = f"manage:{section}"
+        callback.message = AsyncMock()
+
+        await handler(callback)
+
+        assert _button_data(_keyboard_of(callback))[0] == f"manage:{section}"

@@ -14,20 +14,23 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Container Control** - Start, stop, restart, and pull containers with inline confirmation buttons
 - **Image-Update Detection** - Opt-in daily digest of containers with newer images available, with Pull buttons
 - **Auto-Heal** - Opt-in automatic restart of unhealthy containers (HEALTHCHECK failures) with storm guard
-- **Unraid Server Monitoring** - CPU/memory, temperatures, UPS status, and array health
+- **Unraid Server Monitoring** - CPU/memory, temperatures, and array health
 - **Memory Pressure Management** - Automatic container priority handling during high memory
 - **Mute System** - Temporarily silence alerts per container, server, or array
 - **Natural Language Chat** - Ask questions naturally instead of using commands
 - **Interactive Dashboard** - `/manage` hub for status, resources, server, disks, ignores, mutes, and a Features panel to toggle optional monitors
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
 
-## What's New in v0.18.0
+## What's New in v0.19.0
 
-- **Top memory users on pressure alerts** - Memory warnings now list the top 5 memory-consuming containers, largest first, so you can see who's eating the RAM
-- **Restart instead of kill** - A new memory restart list for containers (like Plex) that grab memory and only give it back after a bounce: pressure alerts offer a one-tap 🔄 Restart, and restarting the auto-kill target cancels the countdown
-- **Pick restartable containers from Telegram** - `/manage` → ⚙️ Features → 🧠 Configure memory restarts, applies live with no bot restart
-- **Smarter Stop buttons** - Kill buttons are sorted by memory usage with each container's RAM on the label, so the biggest win is always the top button (v0.17.0)
-- **Bot health in the Unraid dashboard** - The container reports healthy/unhealthy via a built-in HEALTHCHECK, plus hardened alert delivery and blocking dependency audits in CI (v0.16.0)
+- **Four broken buttons fixed** - Array threshold options no longer fail silently *after* saving the value; Stop buttons on memory alerts now work even with memory management disabled; "Re-mute 1h" means one hour rather than sixty
+- **Command autocomplete** - Type `/` in Telegram to see every command, built from the features your install actually has enabled
+- **`/manage` panels have Back and Refresh** - Status, Resources, Server and Disks are no longer dead ends
+- **`/pull` keeps your GPU** - nvidia device access, custom runtimes and supplementary groups now survive a container update
+- **Failures are visible** - A handler that crashes replies instead of going quiet, and no button can spin forever
+- **Top memory users on pressure alerts** - Memory warnings list the top 5 memory-consuming containers, largest first, with a one-tap 🔄 Restart for containers that just need a bounce (v0.18.0)
+
+> **Note:** UPS monitoring is documented below but not yet implemented — there is no UPS alert in this release. See the [changelog](CHANGELOG.md#0190---2026-08-02).
 
 See the [changelog](CHANGELOG.md) for full details.
 
@@ -350,7 +353,7 @@ unraid:
   polling:
     system: 30   # CPU/memory poll interval
     array: 300   # Array status poll interval
-    ups: 60      # UPS status poll interval
+    # ups: 60    # NOT IMPLEMENTED - no UPS monitoring exists yet; this key is ignored
 
   thresholds:
     cpu_temp: 80         # Alert above this temp (C)
@@ -358,7 +361,7 @@ unraid:
     memory_usage: 90     # Alert above this %
     disk_temp: 50        # Alert above this temp (C)
     array_usage: 85      # Alert above this %
-    ups_battery: 30      # Alert below this %
+    # ups_battery: 30    # NOT IMPLEMENTED - see above
 ```
 
 ### Image-Update Detection

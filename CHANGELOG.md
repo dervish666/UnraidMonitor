@@ -2,6 +2,31 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.19.0] - 2026-08-02
+
+Bug-fix release from a multi-lens audit of the inline-button surface. Four of the
+fixes below are for buttons that were reachable from a default install and did
+nothing — or the wrong thing — during exactly the incidents they exist for.
+
+### Fixed
+- **Array capacity threshold options failed after saving.** `_UNRAID_METRICS` is keyed on the picker's metric name (`capacity`) while the button carries the setter's key (`array_usage`), so `_apply_threshold` persisted the new value and *then* raised `KeyError` before confirming — the user saw a spinning button and no reply, with the config already changed. Added the reverse mapping plus a guard that rejects an unknown metric before writing. The whole `arr_set`/`srv_set` family was untested; it now has coverage including a picker→setter round-trip.
+- **Stop buttons on Unraid "Memory Critical" alerts did nothing** unless `memory_management.enabled` was true. The alert renders them whenever Unraid monitoring is on, but the `mem_kill:` handler was registered only alongside the pressure-monitoring loop. `MemoryMonitor` is now built regardless (the object is inert until `start()`), so the buttons work in both configurations; `bg.memory_monitor` remains the single signal for starting the kill loop and for reporting the feature as enabled.
+- **"Re-mute 1h" muted for 60 hours.** The container branch of `_remute_keyboard` emitted seconds (3600/86400) into `mute_callback`'s minutes API, which clamps rather than rejects — so 1h became 60h and 24h became the 30-day maximum. Now 60/1440, matching the server and array branches.
+- **`/pull` silently dropped nvidia GPU access.** `_extract_run_config` preserved `Devices` (Intel QuickSync `/dev/dri`) but not `DeviceRequests`, `Runtime` or `GroupAdd`, so an nvidia container came back healthy and no longer transcoding — and the rollback path reused the same config, so it could not undo it. All three are now carried across.
+- **`/manage` Status, Resources, Server and Disks were one-way doors.** Editing a message without `reply_markup` makes Telegram drop the keyboard entirely; those four panels had no way back short of re-typing `/manage`. Each now carries Refresh + Back, like Ignores, Mutes and Features already did.
+
+### Added
+- **Telegram command menu** (`src/bot/command_menu.py`) — typing `/` now autocompletes. The menu is derived from the `Command` filters actually registered on the dispatcher, so an install without Docker, Unraid or an LLM key never advertises a command it cannot run. It is published after *all* registration (including `/health`, which is registered in `start_monitoring` rather than `register_commands`), since the menu is a snapshot taken at call time. Hyphenated commands (`/mute-server`, `/cancel-kill`) still work when typed but are logged as ineligible, since Telegram rejects the whole call if any menu name contains a hyphen.
+- **Global error handler** (`dp.errors`) — an exception inside a handler now logs with a traceback and replies "⚠️ That failed (…)" instead of vanishing. For a button it answers the callback first so the client stops spinning, in its own guard — an expired callback query must not take the explanation down with it.
+- **Catch-all callback handler** — any callback no other handler claims is answered with "That button is no longer available." A stale keyboard or a prefix mismatch can no longer leave a button spinning indefinitely.
+
+### Changed
+- `safe_edit` treats Telegram's "message is not modified" as a benign no-op (returns `False`) rather than raising — a Refresh that finds nothing changed is not an error. Other `TelegramBadRequest` failures still propagate.
+- `/cancel-kill` still reports "Memory management is not enabled" when the pressure loop is off, now that the monitor object exists either way.
+
+### Known gaps
+- **UPS monitoring does not exist** despite being documented in the README (`ups` poll interval, `ups_battery` threshold), the user guide ("UPS battery below threshold") and the server-mute confirmation text. There is no UPS query, monitor or alert in `src/`, and `config.py` does not parse either key. Unraid's GraphQL API exposes `upsDevices`; wiring it up is the obvious next release. Same for SMART, which `/disks` is documented as showing but does not.
+
 ## [0.18.1] - 2026-07-18
 
 ### Security

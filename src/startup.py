@@ -22,6 +22,7 @@ from src.alerts.recent_errors import RecentErrorsBuffer
 from src.alerts.mute_manager import MuteManager
 from src.alerts.server_mute_manager import ServerMuteManager
 from src.alerts.array_mute_manager import ArrayMuteManager
+from src.bot.command_menu import publish_command_menu
 from src.bot.telegram_bot import register_commands
 from src.restart import restart_bot
 from src.analysis.pattern_analyzer import PatternAnalyzer
@@ -309,6 +310,29 @@ async def _send_startup_notification(
         write_announced_version(ANNOUNCED_VERSION_PATH, BOT_VERSION)
 
 
+def build_memory_monitor(
+    memory_config: Any,
+    docker_client: Any,
+    chat_id_store: ChatIdStore,
+    bot: Bot,
+) -> MemoryMonitor:
+    """Build the MemoryMonitor regardless of ``memory_config.enabled``.
+
+    The object is inert until ``start()`` is called, and the Stop/Restart buttons
+    on Unraid memory alerts need something to act on even when the pressure loop
+    is off -- they used to be rendered with no registered handler, so tapping one
+    did nothing at all. ``bg.memory_monitor`` remains the single signal for "the
+    pressure loop is running", both for starting it and for reporting the feature
+    as enabled on the status card and /health.
+    """
+    return MemoryMonitor(
+        docker_client=docker_client,
+        config=memory_config,
+        on_alert=make_memory_alert_handler(chat_id_store, bot, escape_markdown),
+        on_ask_restart=make_ask_restart_handler(chat_id_store, bot, escape_markdown),
+    )
+
+
 async def _start_background_monitors(
     bg: _BackgroundTasks,
     resource_monitor: ResourceMonitor | None,
@@ -450,24 +474,14 @@ async def start_monitoring(
     if uc.client:
         uc.resource_monitor_ref[0] = resource_monitor
 
-    memory_monitor = None
     memory_config = config.memory_management
-    if memory_config.enabled:
-        on_memory_alert = make_memory_alert_handler(
-            chat_id_store, bot, escape_markdown,
-        )
-        on_ask_restart = make_ask_restart_handler(
-            chat_id_store, bot, escape_markdown,
-        )
-        memory_monitor = MemoryMonitor(
-            docker_client=monitor.shared_client,  # type: ignore[arg-type]
-            config=memory_config,
-            on_alert=on_memory_alert,
-            on_ask_restart=on_ask_restart,
-        )
-        logger.info("Memory monitoring enabled")
+    memory_monitor = build_memory_monitor(
+        memory_config, monitor.shared_client, chat_id_store, bot,
+    )
 
-    bg.memory_monitor = memory_monitor
+    if memory_config.enabled:
+        bg.memory_monitor = memory_monitor
+        logger.info("Memory monitoring enabled")
 
     image_update_monitor = None
     if config.image_updates.enabled:
@@ -551,7 +565,7 @@ async def start_monitoring(
             monitor=monitor,
             log_watcher=log_watcher,
             resource_monitor=resource_monitor,
-            memory_monitor=memory_monitor,
+            memory_monitor=bg.memory_monitor,
             unraid_client=uc.client,
             unraid_system_monitor=uc.system_monitor,
             unraid_array_monitor=uc.array_monitor,
@@ -561,6 +575,10 @@ async def start_monitoring(
         ),
         AiogramCommand("health"),
     )
+
+    # Publish last: the menu is a snapshot of what is registered right now, and
+    # /health is registered here rather than in register_commands().
+    await publish_command_menu(bot, dp)
 
     await _start_background_monitors(bg, resource_monitor, uc, chat_id_store, bot)
 
@@ -574,6 +592,6 @@ async def start_monitoring(
     await _send_startup_notification(
         bot, chat_id_store, state, log_watching_config, uc,
         image_update_monitor=image_update_monitor, auto_heal_config=config.auto_heal,
-        resource_monitor=resource_monitor, memory_monitor=memory_monitor,
+        resource_monitor=resource_monitor, memory_monitor=bg.memory_monitor,
         log_watcher=log_watcher, monitor=monitor,
     )

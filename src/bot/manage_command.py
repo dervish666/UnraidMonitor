@@ -50,6 +50,18 @@ def _back_button() -> list[InlineKeyboardButton]:
     return [InlineKeyboardButton(text="⬅️ Back", callback_data="manage:back")]
 
 
+def _panel_keyboard(section: str) -> InlineKeyboardMarkup:
+    """Return the Refresh + Back row for a read-only /manage panel.
+
+    Editing a message without reply_markup makes Telegram drop the keyboard
+    entirely, which turns a panel into a dead end -- every leaf panel needs one.
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔄 Refresh", callback_data=f"manage:{section}"),
+        *_back_button(),
+    ]])
+
+
 def manage_command(
     system_monitor: "UnraidSystemMonitor | None" = None,
 ) -> Callable[[Message], Awaitable[None]]:
@@ -111,7 +123,7 @@ def manage_status_callback(
 
         summary = format_status_summary(state)
         if callback.message:
-            await safe_edit(callback.message, summary)
+            await safe_edit(callback.message, summary, reply_markup=_panel_keyboard("status"))
 
     return handler
 
@@ -124,18 +136,19 @@ def manage_resources_callback(
     async def handler(callback: CallbackQuery) -> None:
         await callback.answer()
 
+        keyboard = _panel_keyboard("resources")
         if not resource_monitor:
             if callback.message:
-                await safe_edit(callback.message, "Resource monitoring not enabled.")
+                await safe_edit(callback.message, "Resource monitoring not enabled.", reply_markup=keyboard)
             return
 
         summary = await format_resources_summary(resource_monitor)
         if summary:
             if callback.message:
-                await safe_edit(callback.message, summary)
+                await safe_edit(callback.message, summary, reply_markup=keyboard)
         else:
             if callback.message:
-                await safe_edit(callback.message, "📊 No running containers found")
+                await safe_edit(callback.message, "📊 No running containers found", reply_markup=keyboard)
 
     return handler
 
@@ -148,18 +161,19 @@ def manage_server_callback(
     async def handler(callback: CallbackQuery) -> None:
         await callback.answer()
 
+        keyboard = _panel_keyboard("server")
         if not system_monitor:
             if callback.message:
-                await safe_edit(callback.message, "🖥️ Unraid monitoring not configured.")
+                await safe_edit(callback.message, "🖥️ Unraid monitoring not configured.", reply_markup=keyboard)
             return
 
         response = await format_server_detailed(system_monitor)
         if response:
             if callback.message:
-                await safe_edit(callback.message, response)
+                await safe_edit(callback.message, response, reply_markup=keyboard)
         else:
             if callback.message:
-                await safe_edit(callback.message, "🖥️ Unraid server unavailable.")
+                await safe_edit(callback.message, "🖥️ Unraid server unavailable.", reply_markup=keyboard)
 
     return handler
 
@@ -172,18 +186,19 @@ def manage_disks_callback(
     async def handler(callback: CallbackQuery) -> None:
         await callback.answer()
 
+        keyboard = _panel_keyboard("disks")
         if not system_monitor:
             if callback.message:
-                await safe_edit(callback.message, "💾 Unraid monitoring not configured.")
+                await safe_edit(callback.message, "💾 Unraid monitoring not configured.", reply_markup=keyboard)
             return
 
         response = await format_disks(system_monitor)
         if response:
             if callback.message:
-                await safe_edit(callback.message, response)
+                await safe_edit(callback.message, response, reply_markup=keyboard)
         else:
             if callback.message:
-                await safe_edit(callback.message, "💾 Disk status unavailable.")
+                await safe_edit(callback.message, "💾 Disk status unavailable.", reply_markup=keyboard)
 
     return handler
 

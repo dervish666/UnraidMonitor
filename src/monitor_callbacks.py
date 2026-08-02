@@ -262,9 +262,11 @@ def _remute_keyboard(
         prefix = "srv_mute"
     else:
         prefix = f"mute:{key}"
+        # Minutes, not seconds -- mute_callback clamps rather than rejects, so
+        # 3600 here silently meant a 60-hour mute.
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔇 Re-mute 1h", callback_data=f"{prefix}:3600"),
-            InlineKeyboardButton(text="🔇 Re-mute 24h", callback_data=f"{prefix}:86400"),
+            InlineKeyboardButton(text="🔇 Re-mute 1h", callback_data=f"{prefix}:60"),
+            InlineKeyboardButton(text="🔇 Re-mute 24h", callback_data=f"{prefix}:1440"),
         ]])
 
     return InlineKeyboardMarkup(inline_keyboard=[[

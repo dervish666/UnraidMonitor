@@ -1,5 +1,6 @@
 """Shared formatting utility functions."""
 
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any
@@ -9,6 +10,8 @@ from aiogram.exceptions import TelegramBadRequest
 
 from src.constants import MAX_CONTAINER_NAME_LENGTH
 from src.utils.telegram_format import strip_html_tags
+
+logger = logging.getLogger(__name__)
 
 # Valid Docker container name pattern (alphanumeric, dash, underscore, dot, colon)
 # Docker allows: [a-zA-Z0-9][a-zA-Z0-9_.-]* but we also allow colons for compose names
@@ -61,6 +64,11 @@ async def safe_edit(
     except TelegramBadRequest as e:
         if "can't parse entities" in str(e):
             return await message.edit_text(_plain_fallback(text, parse_mode), **kwargs)  # type: ignore[union-attr]
+        if "message is not modified" in str(e):
+            # Benign: a Refresh that found nothing changed. The message already
+            # shows what we wanted it to.
+            logger.debug("Edit skipped: message content unchanged")
+            return False
         raise
 
 

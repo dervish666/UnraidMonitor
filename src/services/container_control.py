@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 import docker
+from docker.types import DeviceRequest
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +280,17 @@ class ContainerController:
                 f"{d['PathOnHost']}:{d['PathInContainer']}:{d.get('CgroupPermissions', 'rwm')}"
                 for d in host_config["Devices"]
             ]
+        if host_config.get("DeviceRequests"):
+            # GPU access (nvidia et al). Distinct from Devices above, which covers
+            # /dev passthrough like Intel QuickSync -- losing this silently brings
+            # the container back healthy but without hardware acceleration.
+            run_config["device_requests"] = [
+                DeviceRequest(**req) for req in host_config["DeviceRequests"]
+            ]
+        if host_config.get("Runtime") and host_config["Runtime"] != "runc":
+            run_config["runtime"] = host_config["Runtime"]
+        if host_config.get("GroupAdd"):
+            run_config["group_add"] = host_config["GroupAdd"]
         if host_config.get("Dns"):
             run_config["dns"] = host_config["Dns"]
         if host_config.get("DnsSearch"):

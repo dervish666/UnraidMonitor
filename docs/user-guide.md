@@ -213,7 +213,7 @@ These commands require `UNRAID_API_KEY` to be configured.
 
 **`/array`** — Shows array state (started/stopped), total capacity, usage, and a summary of disk health.
 
-**`/disks`** — Detailed per-disk information: capacity, usage, temperature, and SMART status.
+**`/disks`** — Detailed per-disk information: capacity, usage, temperature, and array status (`DISK_OK` / `DISK_DSBL`). SMART attributes are not read.
 
 ### Server Alerts
 
@@ -223,7 +223,8 @@ The bot automatically monitors and alerts on:
 - Memory usage exceeding threshold
 - Disk temperatures exceeding threshold
 - Array usage exceeding threshold
-- UPS battery below threshold
+
+_UPS battery alerts are **not implemented** — the bot does not read UPS state. Unraid's own notification system still covers this._
 
 All thresholds are configurable in the `unraid.thresholds` section of `config.yaml`.
 

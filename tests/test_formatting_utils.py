@@ -144,6 +144,28 @@ class TestSafeEdit:
             "text", parse_mode="Markdown", reply_markup=keyboard
         )
 
+    @pytest.mark.asyncio
+    async def test_unchanged_content_is_not_an_error(self):
+        """A Refresh that found nothing new must not surface as a failure."""
+        message = AsyncMock()
+        message.edit_text = AsyncMock(
+            side_effect=TelegramBadRequest(
+                method=MagicMock(), message="message is not modified"
+            )
+        )
+
+        assert await safe_edit(message, "same text") is False
+
+    @pytest.mark.asyncio
+    async def test_other_bad_requests_still_raise(self):
+        message = AsyncMock()
+        message.edit_text = AsyncMock(
+            side_effect=TelegramBadRequest(method=MagicMock(), message="message to edit not found")
+        )
+
+        with pytest.raises(TelegramBadRequest):
+            await safe_edit(message, "text")
+
 
 class TestEscapeMarkdown:
     """Tests for escape_markdown."""

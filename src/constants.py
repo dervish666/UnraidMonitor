@@ -112,6 +112,13 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.19.0": [
+        "Four broken buttons fixed - array threshold options no longer fail silently after saving, Stop buttons on memory alerts now work even with memory management off, and \"Re-mute 1h\" means 1 hour rather than 60",
+        "Commands now autocomplete - type / in Telegram to see every command this bot actually has enabled",
+        "/manage panels have Back and Refresh buttons, so Status, Resources, Server and Disks are no longer dead ends",
+        "/pull keeps your GPU - nvidia device access, custom runtimes and extra groups now survive a container update",
+        "A button that fails now says so instead of spinning forever",
+    ],
     "0.18.0": [
         "Memory warnings now show your top 5 memory users, and Stop buttons are sorted so the biggest win is always the top button",
         "New memory restart list - pick containers (like Plex) that just need a bounce to give memory back, and pressure alerts offer a one-tap 🔄 Restart. Set it up in /manage → Features",

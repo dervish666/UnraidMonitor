@@ -555,6 +555,11 @@ _METRIC_TO_SET_KEY: dict[str, str] = {
     "cpu_usage": "cpu_usage",
 }
 
+# Buttons carry the set-key (what UnraidConfig.set_threshold expects), while
+# _UNRAID_METRICS is keyed on the picker's metric name -- these differ for
+# capacity/array_usage, so _apply_threshold has to map back.
+_SET_KEY_TO_METRIC: dict[str, str] = {v: k for k, v in _METRIC_TO_SET_KEY.items()}
+
 
 async def _show_threshold_picker(
     callback: CallbackQuery,
@@ -612,9 +617,18 @@ async def _apply_threshold(
         await callback.answer("Invalid metric")
         return
 
+    # Resolve display metadata before persisting: raising after the write leaves
+    # the config changed with the user told nothing, which is how the array
+    # capacity button used to fail.
+    metric_key = _SET_KEY_TO_METRIC.get(metric, metric)
+    if metric_key not in _UNRAID_METRICS:
+        logger.error(f"No display metadata for threshold metric {metric!r}")
+        await callback.answer("Unknown metric")
+        return
+
     unraid_config.set_threshold(metric, value)
 
-    _, unit, label, _, config_attr = _UNRAID_METRICS[metric]
+    _, unit, label, _, config_attr = _UNRAID_METRICS[metric_key]
     actual = getattr(unraid_config, config_attr)
 
     if value == 0:
