@@ -855,3 +855,101 @@ async def test_every_panel_refresh_points_at_its_own_section():
         await handler(callback)
 
         assert _button_data(_keyboard_of(callback))[0] == f"manage:{section}"
+
+
+# ---------------------------------------------------------------------------
+# Unraid notification relay toggle (Features panel)
+# ---------------------------------------------------------------------------
+
+
+def _unraid_config(**kwargs):
+    from unittest.mock import MagicMock as _MM
+    from src.config import UnraidConfig
+
+    cfg = UnraidConfig(enabled=True, **kwargs)
+    cfg._persist = _MM()
+    return cfg
+
+
+def test_features_panel_hides_relay_when_unraid_is_off():
+    from src.bot.manage_command import _build_features_view
+    from src.config import UnraidConfig
+
+    text, keyboard = _build_features_view(None, None, None, UnraidConfig(enabled=False))
+
+    assert "Unraid notifications" not in text
+    assert not any("notif" in b.callback_data for row in keyboard.inline_keyboard for b in row)
+
+
+def test_features_panel_offers_enable_when_relay_is_off():
+    from src.bot.manage_command import _build_features_view
+
+    text, keyboard = _build_features_view(None, None, None, _unraid_config())
+    data = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+
+    assert "⚪ Off" in text
+    assert "feat:notif:on" in data
+
+
+def test_features_panel_shows_level_button_when_relay_is_on():
+    from src.bot.manage_command import _build_features_view
+
+    text, keyboard = _build_features_view(
+        None, None, None, _unraid_config(notifications_enabled=True)
+    )
+    data = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+
+    assert "WARNING+" in text
+    assert "feat:notif:off" in data
+    assert "feat:notif:level" in data
+
+
+@pytest.mark.asyncio
+async def test_relay_level_button_cycles_and_persists():
+    from src.bot.manage_command import feat_notifications_callback
+
+    cfg = _unraid_config(notifications_enabled=True)
+    handler = feat_notifications_callback(cfg)
+
+    for expected in ("ALERT", "INFO", "WARNING"):
+        callback = AsyncMock()
+        callback.data = "feat:notif:level"
+        callback.message = AsyncMock()
+        await handler(callback)
+        assert cfg.notifications_min_importance == expected
+
+    assert cfg._persist.called
+
+
+@pytest.mark.asyncio
+async def test_relay_enable_persists_and_restarts():
+    from src.bot.manage_command import feat_notifications_callback
+
+    cfg = _unraid_config()
+    restarted = []
+
+    async def restart_cb():
+        restarted.append(True)
+
+    callback = AsyncMock()
+    callback.data = "feat:notif:on"
+    callback.message = AsyncMock()
+
+    await feat_notifications_callback(cfg, restart_cb=restart_cb)(callback)
+
+    assert cfg.notifications_enabled is True
+    assert restarted == [True]
+
+
+@pytest.mark.asyncio
+async def test_relay_buttons_are_safe_without_unraid_config():
+    from src.bot.manage_command import feat_notifications_callback
+
+    callback = AsyncMock()
+    callback.data = "feat:notif:on"
+    callback.message = AsyncMock()
+
+    await feat_notifications_callback(None)(callback)
+
+    callback.answer.assert_awaited_once()
+    assert "not configured" in callback.answer.call_args[0][0]

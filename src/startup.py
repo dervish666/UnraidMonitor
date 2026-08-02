@@ -29,6 +29,7 @@ from src.analysis.pattern_analyzer import PatternAnalyzer
 from src.unraid.client import UnraidClientWrapper
 from src.unraid.monitors.system_monitor import UnraidSystemMonitor
 from src.unraid.monitors.array_monitor import ArrayMonitor
+from src.unraid.monitors.notification_monitor import UnraidNotificationMonitor
 from src.alert_proxy import AlertManagerProxy
 from src.background import _BackgroundTasks
 from src.monitor_callbacks import (
@@ -42,6 +43,7 @@ from src.bot.health_command import BOT_VERSION, build_status_lines
 from src.constants import (
     WHATS_NEW,
     ANNOUNCED_VERSION_PATH,
+    ANNOUNCED_NOTIFICATIONS_PATH,
     ANNOUNCED_UPDATES_PATH,
     LLM_REQUEST_TIMEOUT_SECONDS,
     OLLAMA_REQUEST_TIMEOUT_SECONDS,
@@ -55,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 class _UnraidComponents:
     __slots__ = (
-        "client", "system_monitor", "array_monitor",
+        "client", "system_monitor", "array_monitor", "notification_monitor",
         "server_mute_manager", "array_mute_manager",
         "resource_monitor_ref",
     )
@@ -64,6 +66,7 @@ class _UnraidComponents:
         self.client: UnraidClientWrapper | None = None
         self.system_monitor: UnraidSystemMonitor | None = None
         self.array_monitor: ArrayMonitor | None = None
+        self.notification_monitor: UnraidNotificationMonitor | None = None
         self.server_mute_manager: ServerMuteManager | None = None
         self.array_mute_manager: ArrayMuteManager | None = None
         self.resource_monitor_ref: list[ResourceMonitor | None] = [None]
@@ -204,6 +207,19 @@ def _init_unraid(
             on_alert=on_server_alert,
             mute_manager=uc.array_mute_manager,
         )
+
+        if unraid_config.notifications_enabled:
+            uc.notification_monitor = UnraidNotificationMonitor(
+                client=uc.client,
+                config=unraid_config,
+                on_alert=on_server_alert,
+                mute_manager=uc.server_mute_manager,
+                state_path=ANNOUNCED_NOTIFICATIONS_PATH,
+            )
+            logger.info(
+                f"Unraid notification relay enabled "
+                f"(>= {unraid_config.notifications_min_importance})"
+            )
     else:
         if not unraid_config.enabled:
             logger.info("Unraid monitoring disabled in config")
@@ -293,6 +309,7 @@ async def _send_startup_notification(
         monitor=monitor, log_watcher=log_watcher, resource_monitor=resource_monitor,
         memory_monitor=memory_monitor, unraid_client=uc.client,
         unraid_system_monitor=uc.system_monitor, unraid_array_monitor=uc.array_monitor,
+        unraid_notification_monitor=uc.notification_monitor,
         image_update_monitor=image_update_monitor, auto_heal_config=auto_heal_config,
     )
     parts = [f"🟢 *Bot started* - v{BOT_VERSION}", "", *status_lines]
@@ -360,6 +377,8 @@ async def _start_background_monitors(
                 logger.info("Unraid system monitoring started")
             if uc.array_monitor:
                 bg.add_task(asyncio.create_task(uc.array_monitor.start()))
+            if uc.notification_monitor:
+                bg.add_task(asyncio.create_task(uc.notification_monitor.start()))
                 logger.info("Unraid array monitoring started")
         except Exception as e:
             logger.error(f"Failed to connect to Unraid: {e}")
@@ -547,6 +566,7 @@ async def start_monitoring(
     bg.unraid_client = uc.client
     bg.unraid_system_monitor = uc.system_monitor
     bg.unraid_array_monitor = uc.array_monitor
+    bg.unraid_notification_monitor = uc.notification_monitor
 
     bg.mute_managers = [mute_manager]
     if uc.server_mute_manager:
@@ -569,6 +589,7 @@ async def start_monitoring(
             unraid_client=uc.client,
             unraid_system_monitor=uc.system_monitor,
             unraid_array_monitor=uc.array_monitor,
+            unraid_notification_monitor=uc.notification_monitor,
             alert_manager=alert_manager,
             image_update_monitor=image_update_monitor,
             auto_heal_config=config.auto_heal,

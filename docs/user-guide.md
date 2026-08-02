@@ -224,7 +224,25 @@ The bot automatically monitors and alerts on:
 - Disk temperatures exceeding threshold
 - Array usage exceeding threshold
 
-_UPS battery alerts are **not implemented** — the bot does not read UPS state. Unraid's own notification system still covers this._
+_UPS battery alerts are **not implemented** — the bot does not read UPS state. If your UPS is connected over USB, Unraid raises its own notifications for it, which the notification relay (below) will forward._
+
+### Parity Operations
+
+While a parity sync or disk rebuild is running, the target disk legitimately reports as invalid. The bot reports this as progress ("🔄 Parity Operation Running — 45%") rather than a disk fault, and sends a message when it completes, is cancelled, or fails. A genuinely failed disk still alerts normally during a sync.
+
+### Unraid Notifications (opt-in)
+
+The bot can forward Unraid's own notification feed — the one behind the bell icon in the web UI — into Telegram: SMART warnings, disk errors, share-full warnings, parity results, plugin updates.
+
+Turn it on with `/manage` → ⚙️ Features → 🔔. A second button sets how much gets through:
+
+| Level | Forwards |
+|---|---|
+| `WARNING` (default) | Warnings and alerts |
+| `ALERT` | Alerts only — the quietest setting |
+| `INFO` | Everything, including routine notices like "Backup done" |
+
+Enabling or disabling restarts the bot; changing the level applies immediately. On first run it records what is already in the feed rather than replaying your backlog, and it remembers what it has sent across restarts.
 
 All thresholds are configurable in the `unraid.thresholds` section of `config.yaml`.
 

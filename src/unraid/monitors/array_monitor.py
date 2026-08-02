@@ -11,6 +11,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# A parity sync or disk rebuild is *writing* to its target, so the array reports
+# the target as invalid/new until it finishes. There is no per-disk "being
+# rebuilt" flag in the API -- a running parity operation is the only signal that
+# these are expected rather than a fault. Every other status (DISK_DSBL,
+# DISK_WRONG, DISK_NP_MISSING...) still alerts, sync or no sync.
+_REBUILD_EXPECTED_STATUSES = {"DISK_INVALID", "DISK_NEW"}
+
+# Measured against a live server mid-sync on 2026-08-02: `running`, `paused` and
+# `errors` all came back null while `status` correctly read RUNNING at 45%.
+# Trust `status`; treat the booleans as absent.
+_PARITY_ACTIVE_STATUSES = {"RUNNING", "PAUSED"}
+
 
 class ArrayMonitor:
     """Monitors Unraid array disks and capacity, triggering alerts on problems."""
@@ -37,6 +49,7 @@ class ArrayMonitor:
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._alerted_disks: set[str] = set()  # Track disks that have been alerted
+        self._parity_active = False  # Whether a parity op was running last poll
 
     @property
     def is_running(self) -> bool:
@@ -92,12 +105,71 @@ class ArrayMonitor:
         # Check array capacity
         await self._check_capacity(status)
 
+        # Resolve this first: a running sync/rebuild explains disk statuses that
+        # would otherwise read as faults.
+        rebuilding = await self._check_parity_operation(status.get("parityCheckStatus") or {})
+
         # Check all disk types
-        await self._check_disks(status.get("disks", []), "Data Disk")
-        await self._check_disks(status.get("parities", []), "Parity Disk")
-        await self._check_disks(status.get("caches", []), "Cache Disk")
+        await self._check_disks(status.get("disks", []), "Data Disk", rebuilding)
+        await self._check_disks(status.get("parities", []), "Parity Disk", rebuilding)
+        await self._check_disks(status.get("caches", []), "Cache Disk", rebuilding)
 
         return status
+
+    async def _check_parity_operation(self, parity_check: dict[str, Any]) -> bool:
+        """Report parity sync/check progress and completion.
+
+        Args:
+            parity_check: The ``parityCheckStatus`` dict (may be empty).
+
+        Returns:
+            True while a parity operation is running or paused.
+        """
+        state = str(parity_check.get("status") or "").upper()
+        active = state in _PARITY_ACTIVE_STATUSES
+
+        if active and not self._parity_active:
+            progress = parity_check.get("progress")
+            speed = parity_check.get("speed")
+            lines = [
+                "A parity sync or disk rebuild is under way.",
+                "The array is **not** fully protected until it completes.",
+            ]
+            if progress is not None:
+                lines.insert(0, f"Progress: {progress}%")
+            if speed:
+                lines.insert(1 if progress is not None else 0, f"Speed: {speed} MB/s")
+            if state == "PAUSED":
+                lines.insert(0, "Currently PAUSED.")
+            await self._on_alert(
+                title="🔄 Parity Operation Running",
+                message="\n".join(lines),
+                alert_type="array",
+            )
+
+        elif self._parity_active and not active:
+            errors = parity_check.get("errors")
+            # errors is frequently null on a live server -- "unknown" is honest,
+            # "0 errors" would be an invention.
+            error_line = (
+                f"Errors: {errors}" if errors is not None else "Error count: not reported"
+            )
+            outcome = {
+                "COMPLETED": "✅ Parity Operation Complete",
+                "CANCELLED": "⚠️ Parity Operation Cancelled",
+                "FAILED": "🔴 Parity Operation Failed",
+            }.get(state, "✅ Parity Operation Finished")
+            await self._on_alert(
+                title=outcome,
+                message=f"Final status: {state or 'unknown'}\n{error_line}",
+                alert_type="array",
+            )
+            # Let a genuine fault on the rebuilt disk alert now it is no longer
+            # excused by the sync.
+            self._alerted_disks = {k for k in self._alerted_disks if not k.endswith(":status")}
+
+        self._parity_active = active
+        return active
 
     async def _check_capacity(self, status: dict[str, Any]) -> None:
         """Check array capacity and alert if threshold exceeded.
@@ -134,12 +206,19 @@ class ArrayMonitor:
         except (ValueError, TypeError) as e:
             logger.warning(f"Failed to parse capacity: {e}")
 
-    async def _check_disks(self, disks: list[dict[str, Any]], disk_type: str) -> None:
+    async def _check_disks(
+        self,
+        disks: list[dict[str, Any]],
+        disk_type: str,
+        rebuilding: bool = False,
+    ) -> None:
         """Check disk temperatures and status.
 
         Args:
             disks: List of disk dicts.
             disk_type: Type of disk (e.g., "Data Disk", "Parity Disk").
+            rebuilding: True while a parity sync/rebuild is running, which makes
+                DISK_INVALID/DISK_NEW on the target expected rather than a fault.
         """
         for disk in disks:
             disk_name = disk.get("name", "Unknown")
@@ -171,6 +250,16 @@ class ArrayMonitor:
             # Check disk status
             status = disk.get("status", "")
             status_key = f"{disk_key}:status"
+
+            if rebuilding and status in _REBUILD_EXPECTED_STATUSES:
+                # Expected while the sync writes to this disk. Deliberately not
+                # added to _alerted_disks, so a real fault appearing later still
+                # alerts.
+                logger.debug(
+                    f"{disk_type} {disk_name} is {status} during a parity operation - expected"
+                )
+                continue
+
             if status and status != "DISK_OK":
                 # Only alert if we haven't already alerted for this disk
                 if status_key not in self._alerted_disks:

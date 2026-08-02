@@ -14,12 +14,19 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Container Control** - Start, stop, restart, and pull containers with inline confirmation buttons
 - **Image-Update Detection** - Opt-in daily digest of containers with newer images available, with Pull buttons
 - **Auto-Heal** - Opt-in automatic restart of unhealthy containers (HEALTHCHECK failures) with storm guard
-- **Unraid Server Monitoring** - CPU/memory, temperatures, and array health
+- **Unraid Server Monitoring** - CPU/memory, temperatures, array health, and parity-operation progress
+- **Unraid Notification Relay** - Opt-in forwarding of Unraid's own notification feed (SMART, disk errors, share full) with an adjustable importance floor
 - **Memory Pressure Management** - Automatic container priority handling during high memory
 - **Mute System** - Temporarily silence alerts per container, server, or array
 - **Natural Language Chat** - Ask questions naturally instead of using commands
 - **Interactive Dashboard** - `/manage` hub for status, resources, server, disks, ignores, mutes, and a Features panel to toggle optional monitors
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
+
+## What's New in v0.20.0
+
+- **No more false parity alarms** - A parity sync or disk rebuild is reported as progress ("45% complete"), not as a disk problem, and you're told when it finishes. A genuinely failed disk still alerts during a sync
+- **Unraid notifications in Telegram** - Opt-in relay of Unraid's own notification feed (SMART, disk errors, share full, parity results) so everything lands in one place. Enable in `/manage` → ⚙️ Features
+- **Control how chatty it is** - The notification button cycles WARNING+ (default), ALERT only, or everything including INFO, and applies instantly
 
 ## What's New in v0.19.0
 
@@ -30,7 +37,7 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Failures are visible** - A handler that crashes replies instead of going quiet, and no button can spin forever
 - **Top memory users on pressure alerts** - Memory warnings list the top 5 memory-consuming containers, largest first, with a one-tap 🔄 Restart for containers that just need a bounce (v0.18.0)
 
-> **Note:** UPS monitoring is documented below but not yet implemented — there is no UPS alert in this release. See the [changelog](CHANGELOG.md#0190---2026-08-02).
+> **Note:** UPS monitoring is **not implemented**. Unraid's API exposes it, but it is fed by `apcupsd` over a USB data link — with no cable there is nothing to read. If a UPS is connected, its events arrive via the notification relay above. See the [changelog](CHANGELOG.md).
 
 See the [changelog](CHANGELOG.md) for full details.
 
@@ -351,8 +358,9 @@ unraid:
   verify_ssl: false  # Set true if using valid SSL cert
 
   polling:
-    system: 30   # CPU/memory poll interval
-    array: 300   # Array status poll interval
+    system: 30          # CPU/memory poll interval
+    array: 300          # Array status poll interval
+    notifications: 300  # Unraid notification feed poll interval
     # ups: 60    # NOT IMPLEMENTED - no UPS monitoring exists yet; this key is ignored
 
   thresholds:
@@ -362,7 +370,20 @@ unraid:
     disk_temp: 50        # Alert above this temp (C)
     array_usage: 85      # Alert above this %
     # ups_battery: 30    # NOT IMPLEMENTED - see above
+
+  notifications:
+    enabled: false           # Relay Unraid's own notifications into Telegram
+    min_importance: WARNING  # WARNING (default), ALERT, or INFO for everything
 ```
+
+Unraid's notification feed is what sits behind the bell icon in the web UI: SMART
+warnings, disk errors, share-full warnings, parity results, plugin updates.
+Relaying it means one place to look instead of two. It is off by default and
+floored at `WARNING`, because the feed also carries routine INFO chatter
+(backup finished, parity-check tuning pausing and resuming).
+
+Toggle it from Telegram with `/manage` → ⚙️ Features. Enabling or disabling
+restarts the bot; changing the importance floor applies immediately.
 
 ### Image-Update Detection
 

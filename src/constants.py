@@ -63,6 +63,17 @@ HEARTBEAT_MAX_AGE_SECONDS = 180
 # ---------------------------------------------------------------------------
 UNRAID_POLL_SYSTEM_SECONDS = 30
 UNRAID_POLL_ARRAY_SECONDS = 300
+UNRAID_POLL_NOTIFICATIONS_SECONDS = 300
+
+# Unraid's own notification feed, ordered least to most urgent. The relay sends
+# anything at or above the configured floor.
+NOTIFICATION_IMPORTANCE_LEVELS = ("INFO", "WARNING", "ALERT")
+UNRAID_NOTIFICATION_MIN_IMPORTANCE = "WARNING"
+# How many notification ids to remember for dedup. Unraid ids embed a unix
+# timestamp so they never repeat; this only bounds the state file.
+NOTIFICATION_DEDUP_HISTORY = 500
+# Cap per poll so a backlog can't produce a hundred Telegram messages at once.
+NOTIFICATION_MAX_PER_POLL = 10
 UNRAID_CPU_TEMP_THRESHOLD = 80
 UNRAID_CPU_USAGE_THRESHOLD = 95
 UNRAID_MEMORY_USAGE_THRESHOLD = 90
@@ -103,6 +114,7 @@ DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 IMAGE_UPDATE_POLL_INTERVAL_HOURS = 24
 IMAGE_UPDATE_MAX_SHOWN = 10  # cap Pull buttons per digest message
 ANNOUNCED_UPDATES_PATH = "data/announced_updates.json"  # dedup map surviving restarts
+ANNOUNCED_NOTIFICATIONS_PATH = "data/announced_notifications.json"  # relayed Unraid notification ids
 
 # Auto-heal defaults
 AUTOHEAL_MAX_RESTARTS = 3
@@ -112,6 +124,11 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.20.0": [
+        "No more false parity alarms - a parity sync or disk rebuild is now reported as progress (\"45% complete\"), not as a disk problem, and you get a message when it finishes. A genuinely failed disk still alerts during a sync",
+        "Unraid's own notifications can now reach Telegram - SMART warnings, disk errors, share-full and parity results in the same place as everything else. Off by default; turn it on in /manage → Features",
+        "Set how chatty it is - the notification button cycles WARNING+ (default), ALERT only, or everything including INFO, and applies instantly",
+    ],
     "0.19.0": [
         "Four broken buttons fixed - array threshold options no longer fail silently after saving, Stop buttons on memory alerts now work even with memory management off, and \"Re-mute 1h\" means 1 hour rather than 60",
         "Commands now autocomplete - type / in Telegram to see every command this bot actually has enabled",

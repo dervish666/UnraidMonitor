@@ -63,6 +63,7 @@ from src.bot.manage_command import (
     manage_delete_mute_callback,
     manage_features_callback,
     feat_image_toggle_callback,
+    feat_notifications_callback,
     feat_heal_open_callback,
     feat_heal_toggle_callback,
     feat_heal_save_callback,
@@ -295,6 +296,7 @@ def _register_manage_commands(
     memory_config: Any | None = None,
     protected_containers: list[str] | None = None,
     restart_cb: Callable[[], Awaitable[None]] | None = None,
+    unraid_config: Any | None = None,
 ) -> None:
     """Register /manage dashboard command and all its sub-callbacks."""
     dp.message.register(manage_command(unraid_system_monitor), Command("manage"))
@@ -318,11 +320,19 @@ def _register_manage_commands(
     heal_selection = ContainerSelectionState()
     memres_selection = ContainerSelectionState()
     dp.callback_query.register(
-        manage_features_callback(image_update_monitor, auto_heal_config, memory_config),
+        manage_features_callback(
+            image_update_monitor, auto_heal_config, memory_config, unraid_config,
+        ),
         F.data == "manage:features",
     )
     dp.callback_query.register(
         feat_image_toggle_callback(image_updates_config, restart_cb), F.data.startswith("feat:img:"),
+    )
+    dp.callback_query.register(
+        feat_notifications_callback(
+            unraid_config, image_update_monitor, auto_heal_config, memory_config, restart_cb,
+        ),
+        F.data.startswith("feat:notif:"),
     )
     dp.callback_query.register(
         feat_heal_open_callback(state, auto_heal_config, heal_selection, protected_containers),
@@ -453,6 +463,7 @@ def register_commands(
                 memory_config=memory_config,
                 protected_containers=protected_containers,
                 restart_cb=restart_cb,
+                unraid_config=unraid_config,
             )
 
         if registry is not None:

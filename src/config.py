@@ -47,6 +47,9 @@ from src.constants import (
     UNRAID_DISK_TEMP_THRESHOLD,
     UNRAID_MEMORY_USAGE_THRESHOLD,
     UNRAID_POLL_ARRAY_SECONDS,
+    UNRAID_POLL_NOTIFICATIONS_SECONDS,
+    UNRAID_NOTIFICATION_MIN_IMPORTANCE,
+    NOTIFICATION_IMPORTANCE_LEVELS,
     UNRAID_POLL_SYSTEM_SECONDS,
 )
 
@@ -485,6 +488,13 @@ class UnraidConfig:
     disk_temp_threshold: int = UNRAID_DISK_TEMP_THRESHOLD
     array_usage_threshold: int = UNRAID_ARRAY_USAGE_THRESHOLD
 
+    # Relay of Unraid's own notification feed. Off by default: Unraid emits a
+    # lot of INFO chatter (backup done, parity tuning pause/resume), so this is
+    # opt-in and floored at WARNING unless the user says otherwise.
+    notifications_enabled: bool = False
+    notifications_min_importance: str = UNRAID_NOTIFICATION_MIN_IMPORTANCE
+    poll_notifications_seconds: int = UNRAID_POLL_NOTIFICATIONS_SECONDS
+
     config_path: str | None = None
 
     @classmethod
@@ -492,7 +502,22 @@ class UnraidConfig:
         """Create UnraidConfig from YAML dict."""
         polling = data.get("polling", {})
         thresholds = data.get("thresholds", {})
+        notifications = data.get("notifications", {})
+        importance = str(
+            notifications.get("min_importance", UNRAID_NOTIFICATION_MIN_IMPORTANCE)
+        ).upper()
+        if importance not in NOTIFICATION_IMPORTANCE_LEVELS:
+            logger.warning(
+                f"Unknown unraid.notifications.min_importance {importance!r}; "
+                f"falling back to {UNRAID_NOTIFICATION_MIN_IMPORTANCE}"
+            )
+            importance = UNRAID_NOTIFICATION_MIN_IMPORTANCE
         return cls(
+            notifications_enabled=notifications.get("enabled", False),
+            notifications_min_importance=importance,
+            poll_notifications_seconds=max(
+                polling.get("notifications", UNRAID_POLL_NOTIFICATIONS_SECONDS), 30
+            ),
             enabled=data.get("enabled", False),
             host=data.get("host", ""),
             port=data.get("port", 80),
@@ -550,7 +575,33 @@ class UnraidConfig:
         thresholds["cpu_temp"] = self.cpu_temp_threshold
         thresholds["cpu_usage"] = self.cpu_usage_threshold
 
+        notifications = unraid.setdefault("notifications", {})
+        notifications["enabled"] = self.notifications_enabled
+        notifications["min_importance"] = self.notifications_min_importance
+
         atomic_yaml_write(data, path)
+
+    def set_notifications_enabled(self, enabled: bool) -> None:
+        """Toggle the Unraid notification relay and persist to config.yaml.
+
+        Takes effect after a restart -- the monitor is only constructed at
+        startup when enabled.
+        """
+        self.notifications_enabled = enabled
+        self._persist()
+
+    def set_notifications_min_importance(self, importance: str) -> None:
+        """Set the minimum importance to relay and persist to config.yaml.
+
+        Applies live: the running monitor reads this off the shared config
+        object on every poll.
+        """
+        importance = importance.upper()
+        if importance not in NOTIFICATION_IMPORTANCE_LEVELS:
+            logger.warning(f"Ignoring unknown notification importance {importance!r}")
+            return
+        self.notifications_min_importance = importance
+        self._persist()
 
 
 def load_yaml_config(path: str) -> dict[str, Any]:

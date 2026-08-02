@@ -5,6 +5,10 @@ from typing import Any, Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
+from src.constants import (
+    NOTIFICATION_IMPORTANCE_LEVELS,
+    UNRAID_NOTIFICATION_MIN_IMPORTANCE,
+)
 from src.utils.formatting import format_mute_expiry, safe_edit, escape_markdown
 from src.bot.commands import format_status_summary
 from src.bot.resources_command import format_resources_summary
@@ -531,10 +535,18 @@ def _memory_restart_state(memory_config: Any) -> str:
     return "⚪ Off"
 
 
+def _notifications_state(unraid_config: Any) -> str:
+    """State label for the Unraid notification relay, including its floor."""
+    if unraid_config is not None and unraid_config.notifications_enabled:
+        return f"✅ On ({unraid_config.notifications_min_importance}+)"
+    return "⚪ Off"
+
+
 def _build_features_view(
     image_update_monitor: Any,
     auto_heal_config: Any,
     memory_config: Any = None,
+    unraid_config: Any = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build the Features panel text and keyboard."""
     image_on = image_update_monitor is not None
@@ -558,6 +570,13 @@ def _build_features_view(
         if not memory_config.enabled:
             text += "\n_(Memory management is disabled in config, so no alerts will fire.)_"
 
+    if unraid_config is not None and unraid_config.enabled:
+        text += (
+            f"\n\n🔔 *Unraid notifications* — {_notifications_state(unraid_config)}\n"
+            "_Forwards Unraid's own notification feed (SMART, disk errors, "
+            "share full, parity results). Raise the level if it gets chatty._"
+        )
+
     if image_on:
         image_button = InlineKeyboardButton(
             text="⚪ Disable image updates", callback_data="feat:img:off",
@@ -575,6 +594,21 @@ def _build_features_view(
         rows.append([InlineKeyboardButton(
             text="🧠 Configure memory restarts", callback_data="feat:memres",
         )])
+    if unraid_config is not None and unraid_config.enabled:
+        if unraid_config.notifications_enabled:
+            rows.append([
+                InlineKeyboardButton(
+                    text="⚪ Disable notifications", callback_data="feat:notif:off",
+                ),
+                InlineKeyboardButton(
+                    text=f"🔔 {unraid_config.notifications_min_importance}+",
+                    callback_data="feat:notif:level",
+                ),
+            ])
+        else:
+            rows.append([InlineKeyboardButton(
+                text="🔔 Enable Unraid notifications", callback_data="feat:notif:on",
+            )])
     rows.append(_back_button())
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -583,6 +617,7 @@ def manage_features_callback(
     image_update_monitor: Any = None,
     auto_heal_config: Any = None,
     memory_config: Any = None,
+    unraid_config: Any = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the Features panel (manage:features)."""
 
@@ -590,9 +625,67 @@ def manage_features_callback(
         await callback.answer()
         if callback.message:
             text, keyboard = _build_features_view(
-                image_update_monitor, auto_heal_config, memory_config,
+                image_update_monitor, auto_heal_config, memory_config, unraid_config,
             )
             await safe_edit(callback.message, text, reply_markup=keyboard)
+
+    return handler
+
+
+def feat_notifications_callback(
+    unraid_config: Any,
+    image_update_monitor: Any = None,
+    auto_heal_config: Any = None,
+    memory_config: Any = None,
+    restart_cb: Callable[[], Awaitable[None]] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for the notification relay buttons (feat:notif:on|off|level).
+
+    Enabling or disabling needs a restart -- the monitor is only constructed at
+    startup. Cycling the importance floor applies live, because the running
+    monitor reads it off this same config object on every poll.
+    """
+
+    async def handler(callback: CallbackQuery) -> None:
+        action = (callback.data or "").rsplit(":", 1)[-1]
+        if unraid_config is None:
+            await callback.answer("Unraid monitoring is not configured")
+            return
+
+        if action == "level":
+            levels = list(NOTIFICATION_IMPORTANCE_LEVELS)
+            try:
+                current = levels.index(unraid_config.notifications_min_importance)
+            except ValueError:
+                current = levels.index(UNRAID_NOTIFICATION_MIN_IMPORTANCE)
+            new_level = levels[(current + 1) % len(levels)]
+            unraid_config.set_notifications_min_importance(new_level)
+            await callback.answer(f"Now relaying {new_level} and above")
+            if callback.message:
+                text, keyboard = _build_features_view(
+                    image_update_monitor, auto_heal_config, memory_config, unraid_config,
+                )
+                await safe_edit(callback.message, text, reply_markup=keyboard)
+            return
+
+        enable = action == "on"
+        unraid_config.set_notifications_enabled(enable)
+        await callback.answer()
+
+        if restart_cb is not None:
+            if callback.message:
+                verb = "Enabling" if enable else "Disabling"
+                await safe_edit(
+                    callback.message,
+                    f"♻️ {verb} Unraid notifications — restarting to apply…",
+                )
+            await restart_cb()
+        elif callback.message:
+            word = "enabled" if enable else "disabled"
+            await safe_edit(
+                callback.message,
+                f"Unraid notifications {word}. Restart the bot to apply.",
+            )
 
     return handler
 

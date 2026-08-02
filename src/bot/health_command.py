@@ -52,6 +52,7 @@ def build_status_lines(
     unraid_client: Any = None,
     unraid_system_monitor: "UnraidSystemMonitor | None" = None,
     unraid_array_monitor: "ArrayMonitor | None" = None,
+    unraid_notification_monitor: Any = None,
     image_update_monitor: Any = None,
     auto_heal_config: Any = None,
 ) -> list[str]:
@@ -93,6 +94,10 @@ def build_status_lines(
             lines.append(f"    System: {'✅' if unraid_system_monitor.is_running else '🔴'}")
         if unraid_array_monitor:
             lines.append(f"    Array: {'✅' if unraid_array_monitor.is_running else '🔴'}")
+        if unraid_notification_monitor:
+            lines.append(
+                f"    Notifications: {'✅' if unraid_notification_monitor.is_running else '🔴'}"
+            )
     else:
         lines.append("  Unraid: ⚪ Not configured")
 
@@ -111,6 +116,7 @@ def health_command(
     unraid_client: "UnraidClientWrapper | None" = None,
     unraid_system_monitor: "UnraidSystemMonitor | None" = None,
     unraid_array_monitor: "ArrayMonitor | None" = None,
+    unraid_notification_monitor: Any = None,
     alert_manager: object | None = None,
     image_update_monitor: Any = None,
     auto_heal_config: Any = None,
@@ -136,6 +142,7 @@ def health_command(
             unraid_client=unraid_client,
             unraid_system_monitor=unraid_system_monitor,
             unraid_array_monitor=unraid_array_monitor,
+            unraid_notification_monitor=unraid_notification_monitor,
             image_update_monitor=image_update_monitor,
             auto_heal_config=auto_heal_config,
         ))

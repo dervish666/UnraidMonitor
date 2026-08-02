@@ -2,6 +2,30 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.20.0] - 2026-08-02
+
+Both changes were designed and verified against a live Unraid server (API
+introspection plus real query responses) rather than against the published
+schema, which caught two things the schema alone would not have.
+
+### Fixed
+- **A parity sync was reported as a disk failure.** A sync or rebuild writes to its target, so the array reports that disk as `DISK_INVALID` until it completes — and `array_monitor.py` alerted on anything that wasn't `DISK_OK`. Confirmed live: a server 45% through a parity sync was sending "💾 Parity Disk Problem — Status: DISK_INVALID, Expected: DISK_OK", while Unraid's own feed described the same event as "Parity Sync/Data Rebuild (25.3% completed)". The monitor now requests `parityCheckStatus` (from the `array` query it was already making) and reports progress instead. Suppression is deliberately narrow — only `DISK_INVALID`/`DISK_NEW`, only while an operation is running; a `DISK_DSBL` mid-sync still alerts, and a disk still faulty *after* the sync alerts then.
+- **The end of a parity operation was never announced.** `DISK_INVALID` → `DISK_OK` silently cleared the dedup flag, so you were told a rebuild started but never that it finished. Completion, cancellation and failure now each send a message with the error count — reported as "not reported" rather than `0` when the API returns null, which it does in practice.
+
+### Added
+- **Unraid notification relay** (`src/unraid/monitors/notification_monitor.py`) — forwards Unraid's own notification feed (SMART, disk errors, share-full, parity results, plugin updates) into Telegram, so there is one place to look instead of two. Opt-in, off by default.
+  - **Importance floor**, default `WARNING`. The feed carries a lot of routine INFO chatter (backup finished, parity-tuning pause/resume) that would be noise in a chat window.
+  - `/manage` → ⚙️ Features → 🔔 enables it (needs a restart, like image updates) and a second button cycles the floor `WARNING → ALERT → INFO`, which applies **live** — the running monitor reads it off the shared config object each poll.
+  - **Primes on first run** rather than replaying the existing backlog into your chat.
+  - Dedup on the notification `id` (which embeds a unix timestamp, so ids never repeat), persisted to `data/announced_notifications.json` and bounded at 500 entries, so a restart doesn't re-announce.
+  - Capped at 10 relayed per poll with the remainder announced as a count — never silently dropped. A failed send is not marked as seen, so it is retried.
+  - An unrecognised importance from a future Unraid release is treated as urgent and relayed, rather than dropped by a filter that has not heard of it.
+- `UnraidClientWrapper.get_notifications()` and GraphQL variable support in `_execute_query`.
+- Config: `unraid.notifications.{enabled,min_importance}` and `unraid.polling.notifications`. An unknown `min_importance` logs a warning and falls back to `WARNING` rather than silently disabling the filter.
+
+### Notes
+- **UPS monitoring is still not implemented and is not in this release.** The schema supports it (`upsDevices` is present on current Unraid API versions), but it is fed by `apcupsd` over USB — with no USB data link there is nothing to read, and a monitor would report "no UPS" forever. If a UPS is connected later, its events arrive through the notification relay above with no code change.
+
 ## [0.19.0] - 2026-08-02
 
 Bug-fix release from a multi-lens audit of the inline-button surface. Four of the

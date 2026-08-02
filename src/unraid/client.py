@@ -43,9 +43,30 @@ ARRAY_STATUS_QUERY = """
             parities {
                 name size temp status
             }
+            parityCheckStatus {
+                status progress speed errors correcting
+            }
         }
     }
 """
+
+NOTIFICATIONS_QUERY = """
+    query($limit: Int!) {
+        notifications {
+            list(filter: {type: UNREAD, offset: 0, limit: $limit}) {
+                id
+                title
+                subject
+                description
+                importance
+                link
+                timestamp
+                formattedTimestamp
+            }
+        }
+    }
+"""
+
 
 class UnraidConnectionError(Exception):
     """Raised when Unraid client is not connected."""
@@ -180,11 +201,14 @@ class UnraidClientWrapper:
         except Exception as e:
             logger.error(f"Unraid reconnect failed: {e}")
 
-    async def _execute_query(self, query: str) -> dict[str, Any]:
+    async def _execute_query(
+        self, query: str, variables: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Execute a GraphQL query, reconnecting once if needed.
 
         Args:
             query: GraphQL query string.
+            variables: Optional GraphQL variables.
 
         Returns:
             Query result data.
@@ -198,7 +222,9 @@ class UnraidClientWrapper:
         self._ensure_connected()
         assert self._session is not None
 
-        payload = {"query": query}
+        payload: dict[str, Any] = {"query": query}
+        if variables:
+            payload["variables"] = variables
 
         try:
             async with self._session.post(self._base_url, json=payload) as response:
@@ -267,5 +293,20 @@ class UnraidClientWrapper:
         """
         data = await self._execute_query(ARRAY_STATUS_QUERY)
         result: dict[str, Any] = data.get("array", {})
+        return result
+
+    async def get_notifications(self, limit: int = 25) -> list[dict[str, Any]]:
+        """Get unread notifications from Unraid's own notification feed.
+
+        Args:
+            limit: Maximum notifications to fetch, newest first.
+
+        Returns:
+            List of notification dicts (id, title, subject, description,
+            importance, link, timestamp, formattedTimestamp).
+        """
+        data = await self._execute_query(NOTIFICATIONS_QUERY, {"limit": limit})
+        notifications = data.get("notifications") or {}
+        result: list[dict[str, Any]] = notifications.get("list") or []
         return result
 
