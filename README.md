@@ -23,6 +23,29 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Interactive Dashboard** - `/manage` hub for status, resources, server, disks, ignores, mutes, and a Features panel to toggle optional monitors
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
 
+## Screenshots
+
+| | |
+|---|---|
+| <img src="screenshots/setup-wizard.png" alt="Setup wizard classifying containers into priority, protected, watched and killable" width="420"> | <img src="screenshots/log-error-alert.png" alt="Log error alert for plex with Ignore Similar, Mute, Logs and Diagnose buttons" width="420"> |
+| **Setup wizard.** Scans your containers on first run and sorts them into priority, protected, watched and killable. Re-run any time with `/setup`. | **Log error alert.** Errors in a watched container, with the latest line and one tap to ignore, mute, read the logs or diagnose. |
+| <img src="screenshots/ai-diagnosis.png" alt="AI diagnosis explaining that SABnzbd received SIGTERM and exited cleanly" width="420"> | <img src="screenshots/resource-alert.png" alt="Resource alert showing plex at 527 percent CPU against a 400 percent threshold" width="420"> |
+| **AI diagnosis.** `/diagnose` reads the logs and tells you what happened and why, instead of handing you a wall of text. | **Resource alert.** CPU and memory against your thresholds, and you can change the threshold from the alert itself. |
+| <img src="screenshots/image-updates.png" alt="Digest listing sonarr and rreading-glasses-db with newer images and Pull buttons" width="420"> | <img src="screenshots/natural-language.png" alt="The bot answering a request for a status update written as a fairy tale" width="420"> |
+| **Image updates.** An opt-in daily digest of containers running behind their registry, each with a Pull button. | **Natural language.** Ask in plain English. It reads real server state, and it will humour you. |
+
+## What's New in v0.21.2
+
+- **Replying to an alert now picks the right container** - `/mute`, `/ignore` and `/diagnose` read the container name off the alert you replied to. Replying to a restart-loop alert used to mute a container called "4" (the crash count) and tell you it had worked. Reply-to-alert `/diagnose` had never worked on anything but resource alerts
+- **The 🔄 Restart button on an alert asks first** - It restarted immediately on one tap, while `/restart` has always wanted a ✅. Alerts stay in your chat for days, so a stale one was a mis-tap away from bouncing a container
+- **A full array no longer texts you every five minutes** - The capacity warning now fires once per crossing and re-arms when usage drops back under the threshold
+- **Fewer slow leaks** - The Unraid client stopped leaking a connection on every network drop, and your runtime `/model` choice survives a crash mid-save
+
+## What's New in v0.21.1
+
+- **Memory was reported as ~98% when the real figure was ~55%** - The percentage came from one Unraid API field and the gigabytes from another, and those two mean different things. `/server`, the Memory Critical alert body and the figures handed to the AI were all wrong together. Alert thresholds read the percentage, so no false alerts were firing
+- **`/server detailed` now shows the total and the reclaimable disk cache** - "55% used" next to "0.5 GB free" was baffling without them
+
 ## What's New in v0.21.0
 
 - **UPS monitoring, over the network** - The bot reads your UPS from a [NUT](https://networkupstools.org/) server, so the UPS does not have to be plugged into the machine running the bot. Alerts on mains loss, low battery, overload and bypass
@@ -55,6 +78,7 @@ See the [changelog](CHANGELOG.md) for full details.
 
 ## Table of Contents
 
+- [Screenshots](#screenshots)
 - [Installation](#installation)
   - [Unraid Community Apps](#unraid-community-apps-recommended)
   - [Docker on Unraid (Manual)](#docker-on-unraid-manual)
