@@ -142,6 +142,11 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.21.1": [
+        "Memory readings were wrong. The bot reported your server as using almost all its RAM when Unraid's own dashboard said about half. It was counting the disk cache as used memory, which Linux frees the moment anything needs it",
+        "/server now shows the real figure and lists the reclaimable cache separately, so \"55% used but almost nothing free\" finally makes sense",
+        "Memory alerts were never affected: they always used the percentage, which was correct. Only the gigabyte figure was wrong",
+    ],
     "0.21.0": [
         "UPS monitoring, over the network. The bot now reads your UPS from a NUT server, so the UPS does not have to be plugged into the machine running the bot. It alerts when the mains drops, when the battery gets low, and when the UPS is overloaded or on bypass",
         "New /ups command shows battery, runtime left, load and input voltage",

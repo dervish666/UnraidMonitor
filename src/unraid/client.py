@@ -21,7 +21,7 @@ SYSTEM_METRICS_QUERY = """
         }
         metrics {
             cpu { percentTotal }
-            memory { total used free percentTotal }
+            memory { total used free available buffcache percentTotal }
         }
     }
 """
@@ -272,9 +272,27 @@ class UnraidClientWrapper:
         cpu_percent = cpu_metrics.get("percentTotal", 0)
 
         mem_metrics = metrics.get("memory", {})
-        memory_percent = mem_metrics.get("percentTotal", 0)
-        memory_used = mem_metrics.get("used", 0)
-        memory_total = mem_metrics.get("total", 0)
+        memory_total = mem_metrics.get("total") or 0
+        memory_available = mem_metrics.get("available")
+        memory_cached = mem_metrics.get("buffcache") or 0
+
+        # Unraid's `used` is Linux's raw "not free", so it counts the page
+        # cache. On a media server that is most of RAM and reads as ~99%
+        # forever, which is why it disagreed with Unraid's own dashboard by
+        # 43 points on a live server (30.6 GB "used" of 31.1 GB, while the
+        # dashboard and `percentTotal` both said 55%). `available` is what the
+        # kernel says a new process could actually get; total - available is
+        # the basis `percentTotal` already uses, so derive the byte figure the
+        # same way and the two stop contradicting each other.
+        if memory_available is not None and memory_total:
+            memory_used = max(memory_total - memory_available, 0)
+        else:
+            # Older API versions without `available`: raw used is all there is.
+            memory_used = mem_metrics.get("used") or 0
+
+        memory_percent = mem_metrics.get("percentTotal")
+        if memory_percent is None:
+            memory_percent = (memory_used / memory_total * 100) if memory_total else 0
 
         return {
             "cpu_percent": cpu_percent,
@@ -282,6 +300,8 @@ class UnraidClientWrapper:
             "memory_percent": memory_percent,
             "memory_used": memory_used,
             "memory_total": memory_total,
+            "memory_available": memory_available or 0,
+            "memory_cached": memory_cached,
             "uptime": uptime,
         }
 

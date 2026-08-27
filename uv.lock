@@ -2002,7 +2002,7 @@ wheels = [
 
 [[package]]
 name = "unraid-monitor-bot"
-version = "0.21.0"
+version = "0.21.1"
 source = { virtual = "." }
 dependencies = [
     { name = "aiogram" },

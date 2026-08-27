@@ -102,6 +102,8 @@ async def format_server_detailed(system_monitor: "UnraidSystemMonitor") -> str |
     temp = metrics.get("cpu_temperature")
     memory = metrics.get("memory_percent") or 0
     memory_gb = (metrics.get("memory_used") or 0) / (1024**3)
+    memory_total_gb = (metrics.get("memory_total") or 0) / (1024**3)
+    memory_cached_gb = (metrics.get("memory_cached") or 0) / (1024**3)
     uptime = format_uptime(metrics.get("uptime", ""))
 
     lines = [
@@ -112,10 +114,14 @@ async def format_server_detailed(system_monitor: "UnraidSystemMonitor") -> str |
     if temp is not None:
         lines.append(f"*CPU Temp:* {temp:.1f}°C")
 
-    lines.extend([
-        f"\n*Memory:* {memory:.1f}% ({memory_gb:.1f} GB)",
-        f"\n*Uptime:* {uptime}",
-    ])
+    if memory_total_gb > 0:
+        lines.append(f"\n*Memory:* {memory:.1f}% ({memory_gb:.1f} of {memory_total_gb:.1f} GB)")
+    else:
+        lines.append(f"\n*Memory:* {memory:.1f}%")
+    if memory_cached_gb >= 0.1:
+        # Worth naming: it is why "free" looks tiny next to this percentage.
+        lines.append(f"*Disk cache:* {memory_cached_gb:.1f} GB (reclaimable)")
+    lines.append(f"\n*Uptime:* {uptime}")
     if array:
         state = array.get("state", "Unknown")
         capacity_kb = array.get("capacity", {}).get("kilobytes", {})

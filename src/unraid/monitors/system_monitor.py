@@ -122,11 +122,16 @@ class UnraidSystemMonitor:
         memory_percent = metrics.get("memory_percent", 0)
         if memory_percent > self._config.memory_usage_threshold:
             memory_gb = metrics.get("memory_used", 0) / (1024**3)
+            memory_total_gb = metrics.get("memory_total", 0) / (1024**3)
+            used_line = (
+                f"Used: {memory_gb:.1f} of {memory_total_gb:.1f} GB"
+                if memory_total_gb else f"Used: {memory_gb:.1f} GB"
+            )
             await self._rate_limited_alert(
                 key="memory",
                 title="Memory Critical",
                 message=f"Usage: {memory_percent:.1f}% (threshold: {self._config.memory_usage_threshold}%)\n"
-                        f"Used: {memory_gb:.1f} GB",
+                        f"{used_line}",
                 alert_type="server",
             )
 

@@ -410,3 +410,107 @@ def test_safe_body_truncates_long_bodies():
 
     wrapper = UnraidClientWrapper(host="192.168.1.100", api_key="key")
     assert len(wrapper._safe_body("a" * 5000)) == 200
+
+
+# ---------------------------------------------------------------------------
+# Memory derivation
+#
+# Unraid's `used` counts the page cache, so on a real server it read 30.6 of
+# 31.1 GB (98%) while the dashboard and `percentTotal` both said 55%. The byte
+# figure and the percentage must come from the same basis or /server prints
+# "55.1% (30.6 GB)" against a 31 GB total, and the AI narrates the bytes.
+# ---------------------------------------------------------------------------
+
+GIB = 1024**3
+
+
+def _memory_metrics(**memory):
+    return {
+        "info": {"os": {"uptime": "5 days", "hostname": "tower"}},
+        "metrics": {"cpu": {"percentTotal": 10.0}, "memory": memory},
+    }
+
+
+async def _metrics_from(payload):
+    from src.unraid.client import UnraidClientWrapper
+
+    with patch("src.unraid.client.aiohttp.ClientSession") as MockSession, \
+         patch("src.unraid.client.aiohttp.TCPConnector"):
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value={"data": payload})
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=_make_post_context(mock_response))
+        MockSession.return_value = mock_session
+
+        wrapper = UnraidClientWrapper(host="192.168.1.100", api_key="test-key")
+        await wrapper.connect()
+        return await wrapper.get_system_metrics()
+
+
+@pytest.mark.asyncio
+async def test_memory_used_excludes_the_page_cache():
+    # The real numbers off a live Tower on 2026-08-27.
+    metrics = await _metrics_from(_memory_metrics(
+        total=int(31.06 * GIB), used=int(30.57 * GIB), free=int(0.49 * GIB),
+        available=int(13.94 * GIB), buffcache=int(16.17 * GIB),
+        percentTotal=55.135523978074886,
+    ))
+    used_gb = metrics["memory_used"] / GIB
+    assert 17.0 < used_gb < 17.2, f"expected ~17.1 GB, got {used_gb:.2f}"
+    assert metrics["memory_used"] < int(30.0 * GIB), "raw `used` leaked through"
+
+
+@pytest.mark.asyncio
+async def test_memory_bytes_and_percent_agree():
+    metrics = await _metrics_from(_memory_metrics(
+        total=int(31.06 * GIB), used=int(30.57 * GIB), free=int(0.49 * GIB),
+        available=int(13.94 * GIB), buffcache=int(16.17 * GIB),
+        percentTotal=55.135523978074886,
+    ))
+    derived = metrics["memory_used"] / metrics["memory_total"] * 100
+    assert abs(derived - metrics["memory_percent"]) < 1.0, (
+        f"byte figure says {derived:.1f}% but memory_percent says "
+        f"{metrics['memory_percent']:.1f}%"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cache_is_reported_separately():
+    metrics = await _metrics_from(_memory_metrics(
+        total=int(31.06 * GIB), used=int(30.57 * GIB), free=int(0.49 * GIB),
+        available=int(13.94 * GIB), buffcache=int(16.17 * GIB), percentTotal=55.1,
+    ))
+    assert abs(metrics["memory_cached"] / GIB - 16.17) < 0.05
+    assert abs(metrics["memory_available"] / GIB - 13.94) < 0.05
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_raw_used_when_available_is_absent():
+    # Older API versions do not expose `available`; raw used is all there is.
+    metrics = await _metrics_from(_memory_metrics(
+        total=32 * GIB, used=16 * GIB, free=16 * GIB, percentTotal=50.0,
+    ))
+    assert metrics["memory_used"] == 16 * GIB
+    assert metrics["memory_percent"] == 50.0
+
+
+@pytest.mark.asyncio
+async def test_percent_is_derived_when_the_api_omits_it():
+    metrics = await _metrics_from(_memory_metrics(
+        total=32 * GIB, used=30 * GIB, free=2 * GIB, available=8 * GIB,
+    ))
+    assert metrics["memory_used"] == 24 * GIB
+    assert abs(metrics["memory_percent"] - 75.0) < 0.01
+
+
+@pytest.mark.asyncio
+async def test_missing_memory_block_does_not_crash():
+    metrics = await _metrics_from({
+        "info": {"os": {"uptime": "1 day"}},
+        "metrics": {"cpu": {"percentTotal": 5.0}},
+    })
+    assert metrics["memory_used"] == 0
+    assert metrics["memory_total"] == 0
+    assert metrics["memory_percent"] == 0

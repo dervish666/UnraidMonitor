@@ -2,6 +2,22 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.21.1] - 2026-08-27
+
+### Fixed
+- **Memory usage was reported as ~98% when the real figure was ~55%.** `get_system_metrics()` took the percentage from Unraid's `percentTotal` but the byte figure from its `used` field, and those mean different things. `used` is Linux's raw "not free", so it counts the page cache; on a live Tower that was 16.2 GiB of cache, making `used` read 30.6 of 31.1 GB while `percentTotal` and Unraid's own dashboard both said 55%. Nothing in the code compared the two, so a self-contradictory `/server` line ("Memory: 55.1% (30.6 GB)" against a 31 GB total) went unnoticed through five audits.
+  - `memory_used` is now derived as `total - available`, the same basis `percentTotal` uses. Verified live: 17.37 of 31.06 GiB, 55.9%, drift between the byte figure and the percentage now 0.00 points.
+  - Falls back to the raw `used` field on older API versions that do not expose `available`, and derives the percentage itself if `percentTotal` is missing.
+  - Fixes all three consumers at once: the `/server detailed` line, the Memory Critical alert body, and the figures handed to the LLM for natural-language answers.
+- **Alert thresholds were never affected.** They read `memory_percent`, which was always correct, so no spurious Memory Critical alerts were firing. Only the displayed gigabytes were wrong.
+
+### Added
+- `/server detailed` now reports the total alongside the used figure, and names the reclaimable disk cache on its own line. Without it, "55% used" next to 0.5 GB free is baffling.
+- `memory_available` and `memory_cached` on the metrics dict.
+
+### Notes
+- **Found by asking the bot for a status update as a fairy tale.** The story said "30.8 of 31.1 gigabytes occupied by the bustling townsfolk", Sam checked it against the Unraid dashboard, and the claim did not hold. Unit tests, strict mypy and five full audits had all passed over it, because every one of them checked the code against itself. Making the bot narrate its own numbers in prose turned out to be a cheap and effective smoke test.
+
 ## [0.21.0] - 2026-08-27
 
 UPS monitoring, finally, and over the network rather than over a USB cable.
