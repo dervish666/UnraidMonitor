@@ -623,7 +623,7 @@ Audit remediation release — all 16 items from the June 6 codebase audit (`audi
   - Manage runtime ignores (view and remove)
   - Manage active mutes (view and remove container, server, and array mutes)
 
-## [0.6.0] - 2025-01-27
+## [0.6.0] - 2026-01-27
 
 ### Added
 - Quick action buttons on all alerts (Restart, Logs, Diagnose, Mute)
@@ -637,7 +637,7 @@ Audit remediation release — all 16 items from the June 6 codebase audit (`audi
 - Crash alerts include Restart button for one-tap recovery
 - All alerts include Mute buttons (1h and 24h options)
 
-## [0.5.0] - 2025-01-26
+## [0.5.0] - 2026-01-26
 
 ### Added
 - Unraid server monitoring via GraphQL API
@@ -648,7 +648,7 @@ Audit remediation release — all 16 items from the June 6 codebase audit (`audi
 - `/mute-server` and `/mute-array` commands
 - Array mute manager for disk/parity alerts
 
-## [0.4.0] - 2025-01-25
+## [0.4.0] - 2026-01-25
 
 ### Added
 - `/mute` and `/unmute` commands for container alert control
@@ -658,7 +658,7 @@ Audit remediation release — all 16 items from the June 6 codebase audit (`audi
 - Recent errors buffer for ignore pattern selection
 - Persistent mute storage in JSON files
 
-## [0.3.0] - 2025-01-24
+## [0.3.0] - 2026-01-24
 
 ### Added
 - Resource monitoring with CPU/memory threshold alerts
@@ -669,7 +669,7 @@ Audit remediation release — all 16 items from the June 6 codebase audit (`audi
 ### Changed
 - Alerts now include resource context (memory/CPU usage)
 
-## [0.2.0] - 2025-01-23
+## [0.2.0] - 2026-01-23
 
 ### Added
 - AI-powered diagnostics with `/diagnose` command
@@ -679,7 +679,7 @@ Audit remediation release — all 16 items from the June 6 codebase audit (`audi
 - Protected containers list to prevent accidental control
 - Confirmation prompts for destructive actions
 
-## [0.1.0] - 2025-01-22
+## [0.1.0] - 2026-01-22
 
 ### Added
 - Initial release
