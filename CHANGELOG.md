@@ -2,6 +2,25 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.21.2] - 2026-08-27
+
+Quick wins from the sixth full audit. Three of these are features that looked like they worked.
+
+### Fixed
+- **Replying to an alert picked the wrong container, or none at all.** `/mute`, `/ignore` and `/diagnose` all extract a container name from the alert you replied to, against patterns that had drifted from what `AlertManager` actually sends. Replying `/mute 1h` to a restart-loop alert muted a container called **"4"** (the crash count, matched out of "Crashed 4 times in the last 10 minutes") and cheerfully reported success. An auto-heal alert yielded **"was"**, out of "Container was unhealthy". Unhealthy alerts yielded nothing at all.
+  - The patterns are now anchored to the start of a line and require the label's colon and real case, which is what kills both the "4" and the "was".
+  - Every alert type that names a container is covered: crash, restart loop, log errors, CPU/memory, unhealthy, and all three auto-heal variants.
+- **Reply-to-alert `/diagnose` had never worked on anything except resource alerts.** It kept its own private copy of the patterns requiring literal `*` characters. Telegram strips formatting before handing text back in `Message.text` (the markup arrives separately in `entities`), so those patterns matched nothing in production. Its tests passed the whole time, because they fed it raw source strings with the asterisks still in. There is now one shared `extract_alert_container()` and `tests/test_alert_reply_extraction.py` drives real `AlertManager` sends through a render step, so changing a headline in `manager.py` fails a test instead of quietly breaking a feature.
+- **The 🔄 Restart button on an alert now asks first.** It restarted the container on a single tap, while `/restart` has always required a ✅/❌. Alerts sit in the chat for days, which makes a stale one a mis-tap waiting to happen. Same `build_confirmation()` and `ctrl_confirm:` handler as the command.
+- **A full array texted you every five minutes, forever.** The capacity alert had no dedup, unlike the disk temperature and disk status checks next to it. It now alerts once per crossing and re-arms when usage drops back under the threshold.
+- **The Unraid client leaked an HTTP session on every network drop.** `connect()` assigned a fresh `aiohttp.ClientSession` without closing the dead one, and only shutdown ever closed anything, so a bad afternoon on the NAS leaked one session and its sockets per reconnect on a process that runs for months.
+- **`data/model_selection.json` was written non-atomically**, the one persistence site that had skipped the tempfile + `os.replace` house pattern. A crash mid-write lost your runtime `/model` choice.
+- **A failed startup-failure notification left no trace.** The one message you most need was sent inside `except Exception: pass`.
+- **Startup logged "Unraid array monitoring started" for the notification relay** and nothing for the array monitor, which is unhelpful in exactly the moment you are reading logs.
+
+### Security
+- **`config/.env` could be baked into a published Docker image.** `.dockerignore` excluded `.env` and `config/config.yaml` but not `config/.env`, which is where `.env.example` tells you to put your Telegram token and LLM keys, and the Dockerfile copies the whole `config/` directory. One `docker buildx build --push` from a configured machine would have shipped them to Docker Hub. Found by audit rather than by leak, and the build machine has never held a `config/.env` (checked), so nothing that shipped from here carried one. Anyone who built their own image from a configured checkout should rebuild and rotate.
+
 ## [0.21.1] - 2026-08-27
 
 ### Fixed

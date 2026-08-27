@@ -137,6 +137,16 @@ class UnraidClientWrapper:
 
         connector = aiohttp.TCPConnector(ssl=ssl_context)
 
+        # A reconnect lands here with the dead session still assigned. Closing it
+        # first stops one session (and its TCPConnector sockets) leaking per
+        # network drop on a process that runs for months.
+        if self._session is not None:
+            try:
+                await self._session.close()
+            except Exception as e:
+                logger.debug(f"Ignoring error closing previous Unraid session: {e}")
+            self._session = None
+
         # Create session with required headers for Unraid's CSRF protection
         self._session = aiohttp.ClientSession(
             connector=connector,

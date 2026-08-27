@@ -51,8 +51,8 @@ class TestRestartCallback:
     """Tests for restart_callback handler."""
 
     @pytest.mark.asyncio
-    async def test_restart_success(self, state, mock_callback):
-        """Test successful container restart."""
+    async def test_restart_asks_for_confirmation_first(self, state, mock_callback):
+        """The alert button must confirm, not restart -- same as /restart."""
         controller = MagicMock()
         controller.is_protected = MagicMock(return_value=False)
         controller.restart = AsyncMock(return_value="✅ Restarted plex")
@@ -62,9 +62,13 @@ class TestRestartCallback:
 
         await handler(mock_callback)
 
-        mock_callback.answer.assert_called_once_with("Restarting plex...")
-        controller.restart.assert_called_once_with("plex")
-        mock_callback.message.answer.assert_called_once_with("✅ Restarted plex")
+        controller.restart.assert_not_called()
+        mock_callback.message.answer.assert_called_once()
+        kwargs = mock_callback.message.answer.call_args.kwargs
+        assert "Restart plex?" in mock_callback.message.answer.call_args.args[0]
+        buttons = kwargs["reply_markup"].inline_keyboard[0]
+        assert buttons[0].callback_data == "ctrl_confirm:restart:plex"
+        assert buttons[1].callback_data == "ctrl_cancel"
 
     @pytest.mark.asyncio
     async def test_restart_container_not_found(self, state, mock_callback):
@@ -103,8 +107,9 @@ class TestRestartCallback:
 
         await handler(mock_callback)
 
-        mock_callback.answer.assert_called_once_with("Restarting my:container:with:colons...")
-        controller.restart.assert_called_once_with("my:container:with:colons")
+        controller.restart.assert_not_called()
+        buttons = mock_callback.message.answer.call_args.kwargs["reply_markup"].inline_keyboard[0]
+        assert buttons[0].callback_data == "ctrl_confirm:restart:my:container:with:colons"
 
     @pytest.mark.asyncio
     async def test_restart_no_callback_data(self, state, mock_callback):
@@ -130,9 +135,10 @@ class TestRestartCallback:
 
         await handler(mock_callback)
 
-        # Should find radarr via partial match
-        mock_callback.answer.assert_called_once_with("Restarting radarr...")
-        controller.restart.assert_called_once_with("radarr")
+        # Should find radarr via partial match, then confirm before restarting
+        controller.restart.assert_not_called()
+        buttons = mock_callback.message.answer.call_args.kwargs["reply_markup"].inline_keyboard[0]
+        assert buttons[0].callback_data == "ctrl_confirm:restart:radarr"
 
 
 class TestLogsCallback:

@@ -25,6 +25,7 @@ from src.constants import (
 )
 from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
+from src.bot.control_commands import build_confirmation
 from src.services.diagnostic import DiagnosticService
 from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes, format_bytes
 from src.utils.sanitize import sanitize_logs_for_display
@@ -179,15 +180,19 @@ def restart_callback(
             await callback.answer(f"{actual_name} is protected", show_alert=True)
             return
 
-        # Acknowledge button press
-        await callback.answer(f"Restarting {actual_name}...")
+        await callback.answer()
 
-        # Perform restart
-        message = await controller.restart(actual_name)
-
-        # Send result message (message already contains emoji indicator)
+        # Ask first. Alerts stay in the chat for days, and a mis-tap on an old
+        # one used to restart a container outright -- while /restart has always
+        # required a ✅/❌. Same confirmation, same ctrl_confirm: handler.
+        info = state.get(actual_name)
+        confirm_text, keyboard = build_confirmation(
+            "restart", actual_name, info.status if info else "unknown"
+        )
         if callback.message:
-            await callback.message.answer(message)
+            await callback.message.answer(
+                confirm_text, parse_mode="Markdown", reply_markup=keyboard
+            )
 
     return handler
 

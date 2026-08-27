@@ -120,7 +120,7 @@ async def test_diagnose_reply_to_crash_alert():
 
     # Simulate reply to crash alert
     reply_msg = MagicMock()
-    reply_msg.text = """🔴 *CONTAINER CRASHED:* overseerr
+    reply_msg.text = """🔴 CONTAINER CRASHED: overseerr
 
 Exit code: 1
 Image: linuxserver/overseerr:latest"""

@@ -295,16 +295,28 @@ class TestFormatMuteExpiry:
 
 
 class TestExtractContainerFromAlert:
-    """Tests for extract_container_from_alert."""
+    """Tests for extract_container_from_alert.
+
+    Inputs here are the *rendered* text Telegram hands back on a reply, with
+    formatting stripped. End-to-end coverage against what AlertManager really
+    sends lives in test_alert_reply_extraction.py.
+    """
 
     def test_errors_in_pattern(self):
-        assert extract_container_from_alert("ERRORS IN: plex") == "plex"
+        assert extract_container_from_alert("⚠️ ERRORS IN: plex") == "plex"
 
     def test_crashed_pattern(self):
-        assert extract_container_from_alert("CRASHED: radarr") == "radarr"
+        assert extract_container_from_alert("🔴 CONTAINER CRASHED: radarr") == "radarr"
 
     def test_high_usage_pattern(self):
-        assert extract_container_from_alert("HIGH CPU USAGE: sonarr") == "sonarr"
+        assert extract_container_from_alert("⚠️ HIGH CPU USAGE: sonarr") == "sonarr"
+
+    def test_unhealthy_pattern(self):
+        assert extract_container_from_alert("🏥 UNHEALTHY: jellyfin") == "jellyfin"
+
+    def test_autoheal_pattern(self):
+        text = "🔧 Auto-restarted: sabnzbd\n\nContainer was unhealthy - auto-restarted (attempt 1/3)."
+        assert extract_container_from_alert(text) == "sabnzbd"
 
     def test_container_pattern(self):
         assert extract_container_from_alert("Container: jellyfin") == "jellyfin"
@@ -317,6 +329,18 @@ class TestExtractContainerFromAlert:
 
     def test_container_with_dashes(self):
         assert extract_container_from_alert("CRASHED: my-app-v2") == "my-app-v2"
+
+    def test_restart_loop_beats_the_crash_count_in_the_body(self):
+        """Regression: "Crashed 4 times" used to be extracted as container "4"."""
+        text = "🔄🔴 RESTART LOOP: plex\n\nCrashed 4 times in the last 10 minutes!\nExit code: 1"
+        assert extract_container_from_alert(text) == "plex"
+
+    def test_autoheal_body_is_not_mistaken_for_a_name(self):
+        """Regression: "Container was unhealthy" used to be extracted as "was"."""
+        assert extract_container_from_alert("Container was unhealthy - auto-restarted.") is None
+
+    def test_server_alert_yields_nothing(self):
+        assert extract_container_from_alert("🖥️ SERVER ALERT: Memory Critical\n\nAt 96%") is None
 
 
 class TestTruncateCallbackData:

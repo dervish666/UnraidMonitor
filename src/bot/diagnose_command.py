@@ -2,7 +2,6 @@
 
 import html
 import logging
-import re
 from typing import Callable, Awaitable
 
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,30 +9,24 @@ from aiogram.enums import ChatAction
 
 from src.state import ContainerStateManager
 from src.services.diagnostic import DiagnosticService
-from src.utils.formatting import safe_reply
+from src.utils.formatting import extract_alert_container, safe_reply
 from src.utils.telegram_format import markdown_to_telegram_html
 
 logger = logging.getLogger(__name__)
 
-# Patterns to extract container name from various alert types
-_ALERT_PATTERNS = [
-    (re.compile(r"\*CONTAINER CRASHED:\*\s+([\w.\-]+)"), "Container crash alert"),
-    (re.compile(r"\*ERRORS IN:\s+([\w.\-]+)\*"), "Error alert (container still running with errors)"),
-    (re.compile(r"\*RESTART LOOP:\s+([\w.\-]+)\*"), "Restart loop alert"),
-    (re.compile(r"HIGH .+ USAGE[:\s]+([\w.\-]+)", re.IGNORECASE), "High resource usage alert"),
-]
-
 
 def _extract_from_reply(reply_message: Message) -> tuple[str | None, str]:
-    """Extract container name and alert context from an alert message."""
+    """Extract container name and alert context from an alert message.
+
+    Shares one pattern list with /mute and /ignore (`utils.formatting`). The
+    copy that used to live here required literal asterisks, which Telegram
+    strips before handing `Message.text` back, so reply-to-alert /diagnose
+    only ever worked on resource alerts.
+    """
     if not reply_message or not reply_message.text:
         return None, ""
 
-    for pattern, alert_type in _ALERT_PATTERNS:
-        match = pattern.search(reply_message.text)
-        if match:
-            return match.group(1), alert_type
-    return None, ""
+    return extract_alert_container(reply_message.text)
 
 
 def diagnose_command(

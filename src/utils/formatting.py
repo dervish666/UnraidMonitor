@@ -116,13 +116,53 @@ def strip_log_timestamps(line: str) -> str:
     return _LOG_TIMESTAMP_RE.sub("", line).strip()
 
 
-# Patterns to extract container name from various alert types
-_ALERT_PATTERNS = [
-    re.compile(r"ERRORS IN[:\s]+([\w.\-]+)", re.IGNORECASE),
-    re.compile(r"CRASHED[:\s]+([\w.\-]+)", re.IGNORECASE),
-    re.compile(r"HIGH .+ USAGE[:\s]+([\w.\-]+)", re.IGNORECASE),
-    re.compile(r"Container[:\s]+([\w.\-]+)", re.IGNORECASE),
+# Patterns to extract a container name from an alert the user replied to.
+#
+# Telegram hands back `Message.text` with formatting *stripped* -- the markup
+# lives in `entities`. So an alert sent as "⚠️ *ERRORS IN:* plex" arrives here
+# as "⚠️ ERRORS IN: plex". Patterns therefore match the rendered text, and
+# tolerate stray asterisks only so raw-source strings still work in tests.
+#
+# Two rules earn their keep, both learned the hard way:
+#   1. Anchor to the start of a line. Unanchored + case-insensitive "CRASHED"
+#      matched "Crashed 4 times in the last 10 minutes" in the body of a
+#      restart-loop alert and extracted the container name "4".
+#   2. Require the colon, and match the label's real case. Same reason.
+# Order matters: RESTART LOOP is checked before CONTAINER CRASHED because both
+# alerts come from the same sender and share vocabulary.
+_NAME = r"([\w.\\-]+)"
+_ALERT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(rf"^[^\w\n]*\**RESTART LOOP:\**\s+{_NAME}", re.M), "Restart loop alert"),
+    (re.compile(rf"^[^\w\n]*\**(?:CONTAINER )?CRASHED:\**\s+{_NAME}", re.M), "Container crash alert"),
+    (re.compile(rf"^[^\w\n]*\**ERRORS IN:\**\s+{_NAME}", re.M), "Error alert (container still running with errors)"),
+    (re.compile(rf"^[^\w\n]*\**HIGH \w+ USAGE:\**\s+{_NAME}", re.M), "High resource usage alert"),
+    (re.compile(rf"^[^\w\n]*\**UNHEALTHY:\**\s+{_NAME}", re.M), "Failing health check alert"),
+    (re.compile(rf"^[^\w\n]*\**Auto-heal gave up:\**\s+{_NAME}", re.M), "Auto-heal gave up alert"),
+    (re.compile(rf"^[^\w\n]*\**Auto-heal failed:\**\s+{_NAME}", re.M), "Auto-heal failed alert"),
+    (re.compile(rf"^[^\w\n]*\**Auto-restarted:\**\s+{_NAME}", re.M), "Auto-heal restart alert"),
+    (re.compile(rf"^[^\w\n]*\**Container:\**\s+{_NAME}", re.M), "Container status message"),
 ]
+
+
+def extract_alert_container(text: str) -> tuple[str | None, str]:
+    """Extract the container name and a description of the alert it came from.
+
+    Args:
+        text: The rendered text of the alert being replied to.
+
+    Returns:
+        (container_name, alert_description), or (None, "") if nothing matched.
+    """
+    if not text:
+        return None, ""
+    for pattern, description in _ALERT_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            # Markdown escapes survive if a caller passes raw source text.
+            name = match.group(1).replace("\\", "")
+            if name:
+                return name, description
+    return None, ""
 
 
 def extract_container_from_alert(text: str) -> str | None:
@@ -134,11 +174,7 @@ def extract_container_from_alert(text: str) -> str | None:
     Returns:
         Container name if found, None otherwise.
     """
-    for pattern in _ALERT_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            return match.group(1)
-    return None
+    return extract_alert_container(text)[0]
 
 
 def format_bytes(bytes_val: int) -> str:

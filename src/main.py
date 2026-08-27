@@ -141,8 +141,8 @@ async def main() -> None:
                 for cid in chat_id_store.get_all_chat_ids():
                     try:
                         await bot.send_message(cid, f"⚠️ Monitor startup failed: {e}\nBot is still responsive.")
-                    except Exception:
-                        pass
+                    except Exception as notify_error:
+                        logger.warning(f"Could not tell chat {cid} that monitor startup failed: {notify_error}")
 
         bg.add_task(asyncio.create_task(_start_monitors_safe()))
 

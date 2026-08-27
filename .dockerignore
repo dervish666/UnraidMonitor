@@ -16,3 +16,4 @@ data/
 *.md
 tests/
 config/config.yaml
+config/.env

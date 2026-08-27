@@ -179,6 +179,7 @@ class ArrayMonitor:
         """
         capacity = status.get("capacity", {})
         kilobytes = capacity.get("kilobytes", {})
+        capacity_key = "array:capacity"
 
         try:
             used = int(kilobytes.get("used", 0))
@@ -189,20 +190,31 @@ class ArrayMonitor:
 
             usage_percent = (used / total) * 100
 
-            if usage_percent > self._config.array_usage_threshold:
-                used_tb = used / (1024**3)  # Convert KB to TB
-                total_tb = total / (1024**3)
-                free_tb = (total - used) / (1024**3)
+            if usage_percent <= self._config.array_usage_threshold:
+                # Re-arm so the next genuine crossing alerts again.
+                self._alerted_disks.discard(capacity_key)
+                return
 
-                await self._on_alert(
-                    title="💾 Array Capacity Warning",
-                    message=(
-                        f"Usage: {usage_percent:.1f}% (threshold: {self._config.array_usage_threshold}%)\n"
-                        f"Used: {used_tb:.2f} TB / {total_tb:.2f} TB\n"
-                        f"Free: {free_tb:.2f} TB"
-                    ),
-                    alert_type="array",
-                )
+            # Disk temp and status both remember what they've alerted on;
+            # capacity didn't, so a full array texted the user on every poll
+            # (every 5 minutes by default) until someone freed space.
+            if capacity_key in self._alerted_disks:
+                return
+
+            used_tb = used / (1024**3)  # Convert KB to TB
+            total_tb = total / (1024**3)
+            free_tb = (total - used) / (1024**3)
+
+            await self._on_alert(
+                title="💾 Array Capacity Warning",
+                message=(
+                    f"Usage: {usage_percent:.1f}% (threshold: {self._config.array_usage_threshold}%)\n"
+                    f"Used: {used_tb:.2f} TB / {total_tb:.2f} TB\n"
+                    f"Free: {free_tb:.2f} TB"
+                ),
+                alert_type="array",
+            )
+            self._alerted_disks.add(capacity_key)
         except (ValueError, TypeError) as e:
             logger.warning(f"Failed to parse capacity: {e}")
 

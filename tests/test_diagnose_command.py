@@ -83,13 +83,16 @@ async def test_diagnose_command_container_not_found():
     assert "No container found" in response
 
 
+# Reply texts below are what Telegram actually delivers: formatting stripped,
+# markup carried separately in `entities`. The asterisks these tests used to
+# carry are why reply-to-alert /diagnose silently matched nothing in production.
 @pytest.mark.asyncio
 async def test_diagnose_extracts_from_errors_in_alert():
     """Test /diagnose extracts container from ERRORS IN alert."""
     from src.bot.diagnose_command import _extract_from_reply
 
     reply = MagicMock()
-    reply.text = "⚠️ *ERRORS IN: overseerr*\n\nRecent errors detected..."
+    reply.text = "⚠️ ERRORS IN: overseerr\n\nRecent errors detected..."
     name, _ctx = _extract_from_reply(reply)
     assert name == "overseerr"
 
@@ -100,7 +103,7 @@ async def test_diagnose_extracts_from_restart_loop_alert():
     from src.bot.diagnose_command import _extract_from_reply
 
     reply = MagicMock()
-    reply.text = "🔄 *RESTART LOOP: plex*\n\n3 restarts in 5 minutes"
+    reply.text = "🔄🔴 RESTART LOOP: plex\n\nCrashed 3 times in the last 10 minutes!"
     name, _ctx = _extract_from_reply(reply)
     assert name == "plex"
 
@@ -111,7 +114,7 @@ async def test_diagnose_extracts_from_crash_alert():
     from src.bot.diagnose_command import _extract_from_reply
 
     reply = MagicMock()
-    reply.text = "🔴 *CONTAINER CRASHED:* overseerr\n\nExit code: 1"
+    reply.text = "🔴 CONTAINER CRASHED: overseerr\n\nExit code: 1"
     name, _ctx = _extract_from_reply(reply)
     assert name == "overseerr"
 

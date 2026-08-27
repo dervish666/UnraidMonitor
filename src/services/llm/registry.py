@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -458,9 +460,23 @@ class ProviderRegistry:
         if self._feature_models:
             data["features"] = dict(self._feature_models)
 
+        # Atomic write, matching version_store/base_mute_manager: a crash
+        # mid-write must not leave a half-written selection behind.
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+            parent = Path(path).parent
+            parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=str(parent), prefix=".tmp_model_", suffix=".json")
+            try:
+                os.fchmod(fd, 0o644)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, path)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError as unlink_exc:
+                    logger.warning("Could not remove temp file %s: %s", tmp, unlink_exc)
+                raise
         except OSError as exc:
             logger.error("Failed to persist model selection: %s", exc)
 

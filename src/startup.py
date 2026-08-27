@@ -438,9 +438,10 @@ async def _start_background_monitors(
                 logger.info("Unraid system monitoring started")
             if uc.array_monitor:
                 bg.add_task(asyncio.create_task(uc.array_monitor.start()))
+                logger.info("Unraid array monitoring started")
             if uc.notification_monitor:
                 bg.add_task(asyncio.create_task(uc.notification_monitor.start()))
-                logger.info("Unraid array monitoring started")
+                logger.info("Unraid notification relay started")
         except Exception as e:
             logger.error(f"Failed to connect to Unraid: {e}")
             for cid in chat_id_store.get_all_chat_ids():
