@@ -66,7 +66,8 @@ def make_server_alert_handler(
             return
 
         safe_title = escape_markdown_fn(title)
-        alert_text = f"\U0001f5a5️ *SERVER ALERT:* {safe_title}\n\n{message}"
+        prefix = "\U0001f50c *UPS ALERT:*" if alert_type == "ups" else "\U0001f5a5️ *SERVER ALERT:*"
+        alert_text = f"{prefix} {safe_title}\n\n{message}"
         keyboard = None
 
         # Enhance memory alerts with per-container stats and kill buttons
@@ -97,6 +98,14 @@ def make_server_alert_handler(
                         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
             except Exception as e:
                 logger.warning(f"Failed to get container stats for server alert: {e}")
+
+        # UPS alerts get their own mute category, so silencing a noisy UPS
+        # does not also silence CPU and array alerts.
+        if alert_type == "ups" and server_mute_manager is not None:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🔇 Mute 1h", callback_data="ups_mute:60"),
+                InlineKeyboardButton(text="🔇 Mute 24h", callback_data="ups_mute:1440"),
+            ]])
 
         # Add mute and threshold buttons to array alerts
         if alert_type == "array" and array_mute_manager is not None:

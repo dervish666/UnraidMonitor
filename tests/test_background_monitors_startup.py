@@ -36,10 +36,11 @@ class _FakeClient:
 
 
 class _FakeUnraid:
-    def __init__(self, client, system_monitor, array_monitor) -> None:
+    def __init__(self, client, system_monitor, array_monitor, ups_monitor=None) -> None:
         self.client = client
         self.system_monitor = system_monitor
         self.array_monitor = array_monitor
+        self.ups_monitor = ups_monitor
 
 
 async def _cancel(bg: _BackgroundTasks) -> None:

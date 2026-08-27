@@ -37,6 +37,10 @@ from src.constants import (
     NL_MAX_CONVERSATION_EXCHANGES,
     NL_MAX_TOOL_ITERATIONS,
     NL_PROCESSOR_MAX_TOKENS,
+    NUT_BATTERY_CHARGE_THRESHOLD,
+    NUT_DEFAULT_PORT,
+    NUT_LOAD_THRESHOLD,
+    NUT_POLL_SECONDS,
     PATTERN_ANALYZER_CONTEXT_LINES,
     PATTERN_ANALYZER_MAX_TOKENS,
     RESOURCE_POLL_INTERVAL_SECONDS,
@@ -634,6 +638,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     unraid_api_key: str | None = None
+    nut_username: str | None = None
+    nut_password: str | None = None
     ollama_host: str | None = None
     default_model: str | None = None
     config_path: str = "config/config.yaml"
@@ -661,6 +667,82 @@ class Settings(BaseSettings):
                     f"TELEGRAM_ALLOWED_USERS must be comma-separated integers, got: {v}"
                 )
         raise ValueError(f"TELEGRAM_ALLOWED_USERS must be a string or list, got: {type(v)}")
+
+
+@dataclass
+class NutConfig:
+    """Configuration for UPS monitoring via a NUT server.
+
+    On by default. It stays dormant unless a host resolves, and a host that
+    never answers is logged rather than alerted about, so enabling it for
+    everyone does not spam the majority who run no UPS.
+    """
+
+    enabled: bool = True
+    host: str = ""
+    port: int = NUT_DEFAULT_PORT
+    ups_name: str = ""
+    poll_seconds: int = NUT_POLL_SECONDS
+    battery_charge_threshold: int = NUT_BATTERY_CHARGE_THRESHOLD
+    load_threshold: int = NUT_LOAD_THRESHOLD
+    config_path: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "NutConfig":
+        thresholds = data.get("thresholds", {}) or {}
+        return cls(
+            enabled=data.get("enabled", True),
+            host=str(data.get("host", "") or "").strip(),
+            port=max(1, min(int(data.get("port", NUT_DEFAULT_PORT)), 65535)),
+            ups_name=str(data.get("ups_name", "") or "").strip(),
+            poll_seconds=max(int(data.get("poll_seconds", NUT_POLL_SECONDS)), 10),
+            battery_charge_threshold=max(
+                1, min(int(thresholds.get("battery_charge", NUT_BATTERY_CHARGE_THRESHOLD)), 100)
+            ),
+            load_threshold=max(
+                1, min(int(thresholds.get("load", NUT_LOAD_THRESHOLD)), 200)
+            ),
+        )
+
+    def resolve_host(self, unraid_host: str = "") -> str:
+        """Pick the NUT host to talk to.
+
+        An explicit nut.host always wins. Otherwise fall back to the Unraid
+        server, since the Unraid NUT plugin runs upsd on that box, and the bot
+        usually sits in a container that cannot see it as localhost.
+        """
+        return self.host or (unraid_host or "").strip()
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Toggle UPS monitoring and persist to config.yaml.
+
+        Takes effect after a restart: the monitor is only built at startup.
+        """
+        self.enabled = enabled
+        self._persist()
+
+    def _persist(self) -> None:
+        """Write current NUT settings back to config.yaml."""
+        if not self.config_path:
+            return
+        path = Path(self.config_path)
+        if not path.exists():
+            return
+
+        data = load_yaml_config(str(path))
+        section = data.setdefault("nut", {})
+        section["enabled"] = self.enabled
+        if self.host:
+            section["host"] = self.host
+        section["port"] = self.port
+        if self.ups_name:
+            section["ups_name"] = self.ups_name
+        section["poll_seconds"] = self.poll_seconds
+        thresholds = section.setdefault("thresholds", {})
+        thresholds["battery_charge"] = self.battery_charge_threshold
+        thresholds["load"] = self.load_threshold
+
+        atomic_yaml_write(data, path)
 
 
 class AppConfig:
@@ -702,6 +784,8 @@ class AppConfig:
         self._image_updates.config_path = settings.config_path
         self._auto_heal = AutoHealConfig.from_dict(self._yaml_config.get("auto_heal", {}))
         self._auto_heal.config_path = settings.config_path
+        self._nut = NutConfig.from_dict(self._yaml_config.get("nut", {}))
+        self._nut.config_path = settings.config_path
 
     @property
     def ignored_containers(self) -> list[str]:
@@ -781,6 +865,11 @@ class AppConfig:
     def unraid(self) -> UnraidConfig:
         """Get Unraid configuration."""
         return self._unraid
+
+    @property
+    def nut(self) -> NutConfig:
+        """Get NUT / UPS configuration."""
+        return self._nut
 
     @property
     def memory_management(self) -> MemoryConfig:

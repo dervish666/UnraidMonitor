@@ -542,11 +542,24 @@ def _notifications_state(unraid_config: Any) -> str:
     return "⚪ Off"
 
 
+def _ups_state(nut_config: Any, ups_monitor: Any) -> str:
+    """State label for UPS monitoring, saying plainly when it cannot see a UPS."""
+    if nut_config is None or not nut_config.enabled:
+        return "⚪ Off"
+    if ups_monitor is None:
+        return "⚪ On, no NUT host set"
+    if ups_monitor.is_available:
+        return "✅ On"
+    return "⚠️ On, server unreachable"
+
+
 def _build_features_view(
     image_update_monitor: Any,
     auto_heal_config: Any,
     memory_config: Any = None,
     unraid_config: Any = None,
+    nut_config: Any = None,
+    ups_monitor: Any = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build the Features panel text and keyboard."""
     image_on = image_update_monitor is not None
@@ -575,6 +588,14 @@ def _build_features_view(
             f"\n\n🔔 *Unraid notifications* — {_notifications_state(unraid_config)}\n"
             "_Forwards Unraid's own notification feed (SMART, disk errors, "
             "share full, parity results). Raise the level if it gets chatty._"
+        )
+
+    if nut_config is not None:
+        text += (
+            f"\n\n\U0001f50c *UPS monitoring* — {_ups_state(nut_config, ups_monitor)}\n"
+            "_Reads your UPS from a NUT server and alerts on mains loss, low "
+            "battery and overload. On by default; it stays quiet if there is no "
+            "NUT server to talk to._"
         )
 
     if image_on:
@@ -609,6 +630,15 @@ def _build_features_view(
             rows.append([InlineKeyboardButton(
                 text="🔔 Enable Unraid notifications", callback_data="feat:notif:on",
             )])
+    if nut_config is not None:
+        if nut_config.enabled:
+            rows.append([InlineKeyboardButton(
+                text="⚪ Disable UPS monitoring", callback_data="feat:ups:off",
+            )])
+        else:
+            rows.append([InlineKeyboardButton(
+                text="\U0001f50c Enable UPS monitoring", callback_data="feat:ups:on",
+            )])
     rows.append(_back_button())
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -618,6 +648,8 @@ def manage_features_callback(
     auto_heal_config: Any = None,
     memory_config: Any = None,
     unraid_config: Any = None,
+    nut_config: Any = None,
+    ups_monitor: Any = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the Features panel (manage:features)."""
 
@@ -626,6 +658,7 @@ def manage_features_callback(
         if callback.message:
             text, keyboard = _build_features_view(
                 image_update_monitor, auto_heal_config, memory_config, unraid_config,
+                nut_config, ups_monitor,
             )
             await safe_edit(callback.message, text, reply_markup=keyboard)
 
@@ -638,6 +671,8 @@ def feat_notifications_callback(
     auto_heal_config: Any = None,
     memory_config: Any = None,
     restart_cb: Callable[[], Awaitable[None]] | None = None,
+    nut_config: Any = None,
+    ups_monitor: Any = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the notification relay buttons (feat:notif:on|off|level).
 
@@ -664,6 +699,7 @@ def feat_notifications_callback(
             if callback.message:
                 text, keyboard = _build_features_view(
                     image_update_monitor, auto_heal_config, memory_config, unraid_config,
+                    nut_config, ups_monitor,
                 )
                 await safe_edit(callback.message, text, reply_markup=keyboard)
             return
@@ -866,6 +902,9 @@ def feat_heal_save_callback(
     selection_state: ContainerSelectionState,
     image_update_monitor: Any = None,
     memory_config: Any = None,
+    unraid_config: Any = None,
+    nut_config: Any = None,
+    ups_monitor: Any = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the picker Save button (fh_save).
 
@@ -892,7 +931,8 @@ def feat_heal_save_callback(
         await callback.answer(answer)
         if callback.message:
             text, keyboard = _build_features_view(
-                image_update_monitor, auto_heal_config, memory_config,
+                image_update_monitor, auto_heal_config, memory_config, unraid_config,
+                nut_config, ups_monitor,
             )
             await safe_edit(callback.message, text, reply_markup=keyboard)
 
@@ -938,6 +978,9 @@ def feat_memres_save_callback(
     selection_state: ContainerSelectionState,
     image_update_monitor: Any = None,
     auto_heal_config: Any = None,
+    unraid_config: Any = None,
+    nut_config: Any = None,
+    ups_monitor: Any = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the memory-restart picker Save button (mr_save).
 
@@ -963,8 +1006,46 @@ def feat_memres_save_callback(
         await callback.answer(answer)
         if callback.message:
             text, keyboard = _build_features_view(
-                image_update_monitor, auto_heal_config, memory_config,
+                image_update_monitor, auto_heal_config, memory_config, unraid_config,
+                nut_config, ups_monitor,
             )
             await safe_edit(callback.message, text, reply_markup=keyboard)
+
+    return handler
+
+
+def feat_ups_toggle_callback(
+    nut_config: Any,
+    restart_cb: Callable[[], Awaitable[None]] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for the UPS monitoring toggle (feat:ups:on|off).
+
+    The monitor is only built at startup, so the setting is persisted and the
+    bot restarts to apply it, exactly like the notification relay.
+    """
+
+    async def handler(callback: CallbackQuery) -> None:
+        if nut_config is None:
+            await callback.answer("UPS monitoring is not configured")
+            return
+
+        enable = (callback.data or "").rsplit(":", 1)[-1] == "on"
+        nut_config.set_enabled(enable)
+        await callback.answer()
+
+        if restart_cb is not None:
+            if callback.message:
+                verb = "Enabling" if enable else "Disabling"
+                await safe_edit(
+                    callback.message,
+                    f"♻️ {verb} UPS monitoring — restarting to apply…",
+                )
+            await restart_cb()
+        elif callback.message:
+            word = "enabled" if enable else "disabled"
+            await safe_edit(
+                callback.message,
+                f"UPS monitoring {word}. Restart the bot to apply.",
+            )
 
     return handler

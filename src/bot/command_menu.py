@@ -36,6 +36,7 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
     "server": "Unraid server overview",
     "array": "Array status and disk health",
     "disks": "Individual disk usage details",
+    "ups": "UPS status, battery and runtime",
     "mute": "Mute alerts for a container",
     "unmute": "Unmute a container",
     "mutes": "List active mutes",

@@ -2,6 +2,39 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.21.0] - 2026-08-27
+
+UPS monitoring, finally, and over the network rather than over a USB cable.
+
+### Added
+- **UPS monitoring via NUT** (`src/nut/`). The bot reads UPS state from a [Network UPS Tools](https://networkupstools.org/) server over TCP 3493, so the UPS does not have to be plugged into the machine running the bot. This is what unblocked the feature: `apcupsd` needs a local USB data link, NUT does not, and NUT covers 199 manufacturers against apcupsd's much narrower set.
+  - `src/nut/client.py` speaks the protocol directly (`LIST UPS`, `LIST VAR`, optional `USERNAME`/`PASSWORD`, `LOGOUT`) in about 150 lines. **Deliberately not a dependency:** every Python NUT client on PyPI (PyNUT, nut2, pynut3) is GPLv3, and this project is MIT and ships a public Docker image, so importing one would relicense the lot. None of them are async either.
+  - `src/nut/monitor.py` alerts on the status flags that mean something: `OB` (mains lost), `LB` (low battery), `RB` (replace battery, nagged daily rather than every poll), `OVER`, `BYPASS`, `OFF`, `FSD`, `ALARM`. Returning to mains sends a recovery message with how long you were on battery.
+  - **`CAL` is deliberately not an alert.** A runtime calibration puts the UPS on battery on purpose, the same reasoning that stopped a parity sync reading as a failed disk in v0.20.0.
+  - Threshold alerts for battery charge (only while actually on battery, so recharging after an outage stays quiet) and for UPS load, with the watts worked out from `ups.realpower.nominal` when the UPS reports it.
+- **`/ups`** shows model, status, battery percentage, runtime left, load and input voltage. `/ups detailed` dumps every variable the UPS exposes.
+- **UPS mute category.** Mute buttons on UPS alerts silence UPS alerts only; `/mute-server` still mutes everything, which finally makes its long-standing "system, array, and UPS" wording true. Re-adds the category removed in v0.13.0 when there was nothing behind it.
+- Config: a `nut:` block with `enabled`, `host`, `port`, `ups_name`, `poll_seconds` and `thresholds.{battery_charge,load}`. Credentials go in `config/.env` as `NUT_USERNAME` / `NUT_PASSWORD`, alongside the other secrets, and are only needed if your `upsd` gates reads.
+- `/manage` → ⚙️ Features gains a UPS row with an enable/disable button, and `/health` reports the UPS monitor's state.
+
+### Changed
+- **On by default, quiet by default.** With no `nut.host` set it falls back to your Unraid host, because the Unraid NUT plugin runs `upsd` on that box and the bot is usually in a container that cannot reach it as `localhost`. If nothing answers, it logs one line and never alerts: most installs have no UPS, and a default-on feature must not message them about it.
+- **An unreadable UPS reports as unavailable, never as healthy.** A poll that could not reach `upsd` is tracked separately from a poll that found nothing wrong. `/ups` and `/health` both say "Unavailable" with the underlying error, and losing a previously-working server alerts after three consecutive failures rather than on the first dropped poll. An empty reading that renders as blanks would look like a healthy UPS forever.
+- Bad NUT credentials stop the monitor loop after one alert instead of retrying and filling the log with the same rejection.
+
+### Security
+- **aiohttp floor raised to 3.14.3** for PYSEC-2026-3545, an out-of-bounds heap read in the C response parser that a malformed server response can trigger in the client. The bot is an aiohttp client, so this one applies. The other two in that batch do not: PYSEC-2026-3546 is server-side request smuggling and PYSEC-2026-3547 needs WebSockets, while the bot long-polls over HTTP and runs no aiohttp server. Verified by reading the advisories rather than by taking the fix-available column at face value.
+- **Dev-only pins** for `cryptography>=50.0.0` (PYSEC-2026-3552, a PKCS#7 S/MIME padding oracle, reached only through `types-docker` -> `types-paramiko`) and `pip>=26.2` (PYSEC-2026-3721, needs a malicious package index). Neither package is in the Docker image. Pinned so `pip-audit` stays clean without an ignore list, which is the policy set in v0.18.1.
+- `requirements.txt` aiohttp and aiogram floors realigned with `pyproject.toml`; they had drifted to 3.13.5 and 3.4.0.
+
+### Fixed
+- **The Features panel dropped rows after an unrelated save.** Saving the auto-heal or memory-restart container picker rebuilt the panel without `unraid_config`, so the Unraid notification row vanished until you reopened `/manage`. Pre-existing since v0.20.0; found while adding the UPS row, which would have had the same problem.
+
+### Notes
+- `upsd` binds to `127.0.0.1` only by default. A containerised bot needs `LISTEN 0.0.0.0 3493` in `upsd.conf` before it can connect. This is the setup step most likely to trip people up.
+- The orphaned `unraid.polling.ups` and `unraid.thresholds.ups_battery` keys are still ignored. UPS settings live under `nut:` now.
+- 74 new tests. The client's happy paths run against a real asyncio TCP server speaking the documented protocol rather than a mocked socket, since the parsing is the part most likely to be wrong and a mock would only replay its own assumptions.
+
 ## [0.20.0] - 2026-08-02
 
 Both changes were designed and verified against a live Unraid server (API

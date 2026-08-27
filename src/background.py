@@ -13,6 +13,7 @@ from src.unraid.client import UnraidClientWrapper
 from src.unraid.monitors.system_monitor import UnraidSystemMonitor
 from src.unraid.monitors.array_monitor import ArrayMonitor
 from src.unraid.monitors.notification_monitor import UnraidNotificationMonitor
+from src.nut.monitor import UpsMonitor
 
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class _BackgroundTasks:
         self.unraid_system_monitor: UnraidSystemMonitor | None = None
         self.unraid_array_monitor: ArrayMonitor | None = None
         self.unraid_notification_monitor: UnraidNotificationMonitor | None = None
+        self.ups_monitor: UpsMonitor | None = None
         self.mute_managers: list[Any] = []
         self._tasks: list[asyncio.Task[Any]] = []
 
@@ -55,6 +57,8 @@ class _BackgroundTasks:
             await self.unraid_array_monitor.stop()
         if self.unraid_notification_monitor is not None:
             self.unraid_notification_monitor.stop()
+        if self.ups_monitor is not None:
+            await self.ups_monitor.stop()
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:

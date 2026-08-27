@@ -16,11 +16,21 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Auto-Heal** - Opt-in automatic restart of unhealthy containers (HEALTHCHECK failures) with storm guard
 - **Unraid Server Monitoring** - CPU/memory, temperatures, array health, and parity-operation progress
 - **Unraid Notification Relay** - Opt-in forwarding of Unraid's own notification feed (SMART, disk errors, share full) with an adjustable importance floor
+- **UPS Monitoring (NUT)** - Reads your UPS over the network from a [NUT](https://networkupstools.org/) server: mains loss, low battery, overload and bypass alerts, plus `/ups` for battery and runtime
 - **Memory Pressure Management** - Automatic container priority handling during high memory
 - **Mute System** - Temporarily silence alerts per container, server, or array
 - **Natural Language Chat** - Ask questions naturally instead of using commands
 - **Interactive Dashboard** - `/manage` hub for status, resources, server, disks, ignores, mutes, and a Features panel to toggle optional monitors
 - **Sectioned Help** - `/help` with navigable category buttons instead of a text wall
+
+## What's New in v0.21.0
+
+- **UPS monitoring, over the network** - The bot reads your UPS from a [NUT](https://networkupstools.org/) server, so the UPS does not have to be plugged into the machine running the bot. Alerts on mains loss, low battery, overload and bypass
+- **New `/ups` command** - Model, status, battery percentage, runtime left, load and input voltage. `/ups detailed` dumps every variable
+- **On by default, quiet by default** - With no NUT server to talk to it logs one line and stays silent, rather than nagging the majority of installs that have no UPS. Turn it off in `/manage` -> ⚙️ Features
+- **A UPS it cannot read says "unavailable", never "healthy"** - A monitor that lost contact with `upsd` knows nothing, and reporting that as an OK would be worse than useless
+
+> **Setup gotcha:** `upsd` binds to `127.0.0.1` only by default. If the bot runs in a container you need `LISTEN 0.0.0.0 3493` in `upsd.conf` before it can connect. See [Configure NUT](#5-configure-nut-for-ups-monitoring-optional).
 
 ## What's New in v0.20.0
 
@@ -37,7 +47,7 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Failures are visible** - A handler that crashes replies instead of going quiet, and no button can spin forever
 - **Top memory users on pressure alerts** - Memory warnings list the top 5 memory-consuming containers, largest first, with a one-tap 🔄 Restart for containers that just need a bounce (v0.18.0)
 
-> **Note:** UPS monitoring is **not implemented**. Unraid's API exposes it, but it is fed by `apcupsd` over a USB data link — with no cable there is nothing to read. If a UPS is connected, its events arrive via the notification relay above. See the [changelog](CHANGELOG.md).
+> **Note on UPS support:** UPS monitoring reads from a NUT server, not from Unraid's API. Unraid exposes `upsDevices`, but that data comes from `apcupsd` over a local USB link, which is no use to a bot in a container and no use at all without the cable. NUT works over TCP, so it covers both cases. See the [changelog](CHANGELOG.md).
 
 See the [changelog](CHANGELOG.md) for full details.
 
@@ -123,6 +133,10 @@ DEFAULT_MODEL=
 
 # Optional - enables Unraid server monitoring
 UNRAID_API_KEY=your_unraid_api_key_here
+
+# Optional - only if your NUT server requires a login for reads
+NUT_USERNAME=
+NUT_PASSWORD=
 ```
 
 #### Step 3: Add the container in Unraid
@@ -154,6 +168,8 @@ Go to **Docker** → **Add Container** and configure:
 | `OLLAMA_HOST` | (optional) Ollama URL, e.g., `http://192.168.1.100:11434` |
 | `DEFAULT_MODEL` | (optional) Override default model, e.g., `qwen2.5:7b` |
 | `UNRAID_API_KEY` | (optional) Unraid server monitoring |
+| `NUT_USERNAME` | (optional) Only if your NUT server gates reads |
+| `NUT_PASSWORD` | (optional) Only if your NUT server gates reads |
 | `PUID` | (optional) Runtime user ID for file ownership (default: `99` — Unraid's `nobody`) |
 | `PGID` | (optional) Runtime group ID for file ownership (default: `100` — Unraid's `users`) |
 | `TZ` | Your timezone (e.g., `Europe/London`) |
@@ -247,6 +263,37 @@ Required for Unraid server monitoring (CPU, memory, temps, array status).
 1. In Unraid web UI, go to **Settings** → **Management Access**
 2. Generate an API key
 3. Add it as `UNRAID_API_KEY`
+
+### 5. Configure NUT for UPS monitoring (optional)
+
+Needed only if you have a UPS. NUT talks over the network, so the UPS can hang
+off any machine on the LAN, not necessarily the one running the bot.
+
+1. **Install a NUT server.** On Unraid, install the **NUT** plugin from Community
+   Apps and point it at your UPS. On another Linux box, install `nut` and
+   configure `ups.conf` for your model. Check it works locally first:
+
+   ```bash
+   upsc myups
+   ```
+
+2. **Let the bot reach it.** This is the step people miss. `upsd` binds to
+   `127.0.0.1` only by default, which a container cannot reach. Add this to
+   `upsd.conf` and restart `upsd`:
+
+   ```
+   LISTEN 0.0.0.0 3493
+   ```
+
+   Then confirm from another machine: `upsc myups@<your-nut-host>`.
+
+3. **Point the bot at it** (optional). If your NUT server runs on the same box
+   as Unraid, the bot uses your `unraid.host` automatically. Otherwise set
+   `nut.host` in `config.yaml`.
+
+4. **Credentials** (optional). Most `upsd` setups allow anonymous reads, since
+   `upsd.users` normally gates only `SET` and instant commands. If yours does
+   not, set `NUT_USERNAME` and `NUT_PASSWORD` in `config/.env`.
 
 ---
 
@@ -361,7 +408,7 @@ unraid:
     system: 30          # CPU/memory poll interval
     array: 300          # Array status poll interval
     notifications: 300  # Unraid notification feed poll interval
-    # ups: 60    # NOT IMPLEMENTED - no UPS monitoring exists yet; this key is ignored
+    # ups: 60    # IGNORED - UPS polling lives under the `nut:` section below
 
   thresholds:
     cpu_temp: 80         # Alert above this temp (C)
@@ -369,7 +416,7 @@ unraid:
     memory_usage: 90     # Alert above this %
     disk_temp: 50        # Alert above this temp (C)
     array_usage: 85      # Alert above this %
-    # ups_battery: 30    # NOT IMPLEMENTED - see above
+    # ups_battery: 30    # IGNORED - see `nut.thresholds.battery_charge` below
 
   notifications:
     enabled: false           # Relay Unraid's own notifications into Telegram
@@ -384,6 +431,38 @@ floored at `WARNING`, because the feed also carries routine INFO chatter
 
 Toggle it from Telegram with `/manage` → ⚙️ Features. Enabling or disabling
 restarts the bot; changing the importance floor applies immediately.
+
+### UPS Monitoring (NUT)
+
+Reads your UPS from a [NUT](https://networkupstools.org/) server over TCP 3493.
+Enabled by default, but it does nothing until a host resolves, and it never
+alerts about a NUT server it has never reached.
+
+```yaml
+nut:
+  enabled: true          # Master switch (also toggled from /manage -> Features)
+  host: ""               # Blank falls back to unraid.host
+  port: 3493
+  ups_name: ""           # Blank auto-picks when upsd serves exactly one UPS
+  poll_seconds: 60
+
+  thresholds:
+    battery_charge: 50   # Warn below this %, but only while on battery
+    load: 80             # Warn above this % of rated capacity
+```
+
+You get an alert when the mains drops (`OB`), when the battery gets low (`LB`),
+when the battery needs replacing (`RB`, nagged once a day rather than every
+poll), and on `OVER`, `BYPASS`, `OFF`, `FSD` and `ALARM`. Coming back to mains
+sends a recovery message with how long you ran on battery.
+
+A runtime calibration (`CAL`) is **not** alerted on. It puts the UPS on battery
+deliberately, the same reason a parity sync is not reported as a failed disk.
+
+If the bot cannot reach `upsd`, `/ups` and `/health` say **unavailable** and
+name the error. They never render a UPS it cannot read as healthy. Losing a
+server that was previously working sends an alert after three consecutive
+failed polls, so one dropped poll does not wake you up.
 
 ### Image-Update Detection
 
@@ -438,6 +517,8 @@ auto_heal:
 | `/server detailed` | Full metrics including per-core temps |
 | `/array` | Array status and disk health |
 | `/disks` | Detailed disk information |
+| `/ups` | UPS status, battery, runtime and load |
+| `/ups detailed` | Every variable the UPS reports |
 
 ### Alert Management
 
@@ -608,6 +689,22 @@ This means the container can't access the Docker socket.
 - If using Ollama, ensure the server is reachable and has models pulled
 - The bot works without AI — you'll get basic alerts, but `/diagnose` and natural language chat won't work
 
+### UPS monitoring not working
+
+Run `/health` first. It says exactly which of these you have.
+
+- **"UPS: ⚪ Disabled"** - either `nut.enabled` is false, or no host resolved.
+  Set `nut.host` in `config.yaml`, or turn it on in `/manage` -> ⚙️ Features
+- **"UPS: ⚠️ Unavailable"** - the bot found a host but cannot read it. The error
+  is printed alongside. By far the most common cause is `upsd` listening on
+  `127.0.0.1` only: add `LISTEN 0.0.0.0 3493` to `upsd.conf` and restart it
+- **`ACCESS-DENIED`** - your `upsd` gates reads. Set `NUT_USERNAME` and
+  `NUT_PASSWORD` in `config/.env`
+- **`DRIVER-NOT-CONNECTED`** - `upsd` is running but its driver is not talking
+  to the UPS. This is a NUT problem, not a bot problem. Check `upsc myups` on
+  the NUT host
+- **"serves N UPS devices"** - more than one UPS, so set `nut.ups_name` to pick
+
 ### Unraid monitoring not working
 
 - Verify `UNRAID_API_KEY` is set
@@ -663,6 +760,7 @@ data/
 - Telegram Bot Token
 - (Optional) LLM provider for AI features: Anthropic API key, OpenAI API key, or Ollama instance
 - (Optional) Unraid API key for server monitoring
+- (Optional) A NUT server for UPS monitoring
 
 ---
 

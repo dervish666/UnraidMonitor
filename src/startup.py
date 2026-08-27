@@ -30,6 +30,8 @@ from src.unraid.client import UnraidClientWrapper
 from src.unraid.monitors.system_monitor import UnraidSystemMonitor
 from src.unraid.monitors.array_monitor import ArrayMonitor
 from src.unraid.monitors.notification_monitor import UnraidNotificationMonitor
+from src.nut.client import NutClient
+from src.nut.monitor import UpsMonitor
 from src.alert_proxy import AlertManagerProxy
 from src.background import _BackgroundTasks
 from src.monitor_callbacks import (
@@ -59,7 +61,7 @@ class _UnraidComponents:
     __slots__ = (
         "client", "system_monitor", "array_monitor", "notification_monitor",
         "server_mute_manager", "array_mute_manager",
-        "resource_monitor_ref",
+        "resource_monitor_ref", "ups_monitor", "server_alert_handler",
     )
 
     def __init__(self) -> None:
@@ -70,6 +72,9 @@ class _UnraidComponents:
         self.server_mute_manager: ServerMuteManager | None = None
         self.array_mute_manager: ArrayMuteManager | None = None
         self.resource_monitor_ref: list[ResourceMonitor | None] = [None]
+        self.ups_monitor: UpsMonitor | None = None
+        # Reused by the UPS monitor, which is independent of Unraid.
+        self.server_alert_handler: Any | None = None
 
 
 async def _build_provider_registry(
@@ -193,6 +198,7 @@ def _init_unraid(
             server_mute_manager=uc.server_mute_manager,
             unraid_config=config.unraid,
         )
+        uc.server_alert_handler = on_server_alert
 
         uc.system_monitor = UnraidSystemMonitor(
             client=uc.client,
@@ -227,6 +233,58 @@ def _init_unraid(
             logger.warning("UNRAID_API_KEY not set - Unraid monitoring disabled")
 
     return uc
+
+
+def _init_nut(
+    config: AppConfig,
+    settings: Settings,
+    chat_id_store: ChatIdStore,
+    bot: Bot,
+    uc: _UnraidComponents,
+) -> None:
+    """Build the UPS monitor when a NUT host can be worked out.
+
+    On by default, and independent of Unraid: NUT runs over the network, so a
+    plain Docker host with a UPS elsewhere on the LAN works the same. With no
+    host to try, nothing is built and nothing alerts.
+    """
+    nut_config = config.nut
+    if not nut_config.enabled:
+        logger.info("UPS monitoring disabled in config")
+        return
+
+    host = nut_config.resolve_host(config.unraid.host)
+    if not host:
+        logger.info(
+            "UPS monitoring on, but no NUT host is set and no Unraid host to "
+            "fall back to. Set nut.host in config.yaml to enable it."
+        )
+        return
+
+    if uc.server_mute_manager is None:
+        uc.server_mute_manager = ServerMuteManager(json_path="data/server_mutes.json")
+
+    if uc.server_alert_handler is None:
+        uc.server_alert_handler = make_server_alert_handler(
+            chat_id_store, bot, config, escape_markdown, uc.resource_monitor_ref,
+            array_mute_manager=uc.array_mute_manager,
+            server_mute_manager=uc.server_mute_manager,
+            unraid_config=config.unraid,
+        )
+
+    client = NutClient(
+        host=host,
+        port=nut_config.port,
+        username=settings.nut_username,
+        password=settings.nut_password,
+    )
+    uc.ups_monitor = UpsMonitor(
+        client=client,
+        config=nut_config,
+        on_alert=uc.server_alert_handler,
+        mute_manager=uc.server_mute_manager,
+    )
+    logger.info(f"UPS monitoring configured against {client.target}")
 
 
 def _init_alert_infrastructure(
@@ -369,6 +427,9 @@ async def _start_background_monitors(
     if bg.image_update_monitor is not None:
         bg.add_task(asyncio.create_task(bg.image_update_monitor.start()))
 
+    if uc.ups_monitor is not None:
+        bg.add_task(asyncio.create_task(uc.ups_monitor.start()))
+
     if uc.client:
         try:
             await uc.client.connect()
@@ -436,6 +497,7 @@ async def start_monitoring(
     )
 
     uc = _init_unraid(config, settings, chat_id_store, bot)
+    _init_nut(config, settings, chat_id_store, bot, uc)
 
     monitor = DockerEventMonitor(
         state_manager=state,
@@ -490,7 +552,7 @@ async def start_monitoring(
 
     bg.resource_monitor = resource_monitor
 
-    if uc.client:
+    if uc.client or uc.ups_monitor is not None:
         uc.resource_monitor_ref[0] = resource_monitor
 
     memory_config = config.memory_management
@@ -538,6 +600,8 @@ async def start_monitoring(
         server_mute_manager=uc.server_mute_manager,
         array_mute_manager=uc.array_mute_manager,
         array_monitor=uc.array_monitor,
+        nut_config=config.nut,
+        ups_monitor=uc.ups_monitor,
         unraid_config=config.unraid if uc.array_mute_manager else None,
         memory_monitor=memory_monitor,
         memory_config=config.memory_management,
@@ -567,6 +631,7 @@ async def start_monitoring(
     bg.unraid_system_monitor = uc.system_monitor
     bg.unraid_array_monitor = uc.array_monitor
     bg.unraid_notification_monitor = uc.notification_monitor
+    bg.ups_monitor = uc.ups_monitor
 
     bg.mute_managers = [mute_manager]
     if uc.server_mute_manager:
@@ -590,6 +655,7 @@ async def start_monitoring(
             unraid_system_monitor=uc.system_monitor,
             unraid_array_monitor=uc.array_monitor,
             unraid_notification_monitor=uc.notification_monitor,
+            ups_monitor=uc.ups_monitor,
             alert_manager=alert_manager,
             image_update_monitor=image_update_monitor,
             auto_heal_config=config.auto_heal,

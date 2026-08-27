@@ -10,6 +10,7 @@ This guide walks you through everything the bot can do, from first-run setup to 
 - [Understanding Alerts](#understanding-alerts)
 - [Container Management](#container-management)
 - [Unraid Server Monitoring](#unraid-server-monitoring)
+- [UPS Monitoring](#ups-monitoring)
 - [Alert Control](#alert-control)
 - [AI Features](#ai-features)
 - [Optional Features](#optional-features)
@@ -224,7 +225,7 @@ The bot automatically monitors and alerts on:
 - Disk temperatures exceeding threshold
 - Array usage exceeding threshold
 
-_UPS battery alerts are **not implemented** — the bot does not read UPS state. If your UPS is connected over USB, Unraid raises its own notifications for it, which the notification relay (below) will forward._
+_UPS alerts are separate and come from a NUT server rather than Unraid's API. See [UPS Monitoring](#ups-monitoring)._
 
 ### Parity Operations
 
@@ -248,6 +249,86 @@ All thresholds are configurable in the `unraid.thresholds` section of `config.ya
 
 ---
 
+## UPS Monitoring
+
+The bot reads your UPS from a [NUT](https://networkupstools.org/) (Network UPS Tools) server. NUT works over the network, so the UPS does not have to be plugged into the machine running the bot. That also means it works when the UPS is attached to a different box entirely.
+
+### Setting it up
+
+You need a NUT server somewhere on your network. On Unraid, that is the **NUT** plugin from Community Apps. Check it works there first:
+
+```bash
+upsc myups
+```
+
+Then let the bot reach it. `upsd` listens on `127.0.0.1` only by default, which a container cannot get to, so add this to `upsd.conf` and restart `upsd`:
+
+```
+LISTEN 0.0.0.0 3493
+```
+
+That one line is the most common reason UPS monitoring does not work.
+
+If your NUT server runs on the same machine as Unraid, the bot finds it automatically from your `unraid.host` setting. Otherwise set `nut.host` in `config.yaml`. If `upsd` requires a login for reads, which most do not, put `NUT_USERNAME` and `NUT_PASSWORD` in `config/.env`.
+
+### Checking on it
+
+**`/ups`** shows the current state:
+
+```
+🔌 UPS Status
+
+APC Back-UPS 1500
+✅ On line, mains present (OL)
+
+Battery: 100% • 1h 12m left
+Load: 34% (about 306W of 900W)
+Input: 241.0V
+```
+
+**`/ups detailed`** dumps every variable the UPS reports, which is useful when you want a value the summary does not show.
+
+### What it alerts on
+
+| Situation | What you get |
+|---|---|
+| Mains lost (`OB`) | Alert with battery percentage and runtime left |
+| Mains back (`OL`) | Recovery message saying how long you ran on battery |
+| Low battery (`LB`) | Separate, louder alert. This is the shut-things-down moment |
+| Replace battery (`RB`) | Once a day, not every poll |
+| Overloaded (`OVER`) | Alert. Runtime on battery will be shorter than you expect |
+| On bypass (`BYPASS`) | Alert. There is no battery protection while this is set |
+| Battery below 50% | Only while actually on battery, so recharging stays quiet |
+| Load above 80% | Alert, with watts when the UPS reports its rated capacity |
+
+A runtime calibration (`CAL`) does **not** alert. Calibration puts the UPS on battery deliberately, the same way a parity sync writes to a disk deliberately.
+
+### When it cannot see the UPS
+
+If the bot cannot reach `upsd`, `/ups` and `/health` both say **unavailable** and print the error. They never show a UPS the bot cannot read as healthy, because a monitor that has lost contact knows nothing, and "no alerts" would otherwise look like good news.
+
+Losing a NUT server that was previously working sends an alert after three failed polls in a row, so one dropped poll in the middle of the night does not wake you up.
+
+### Turning it off
+
+UPS monitoring is on by default, but it does nothing at all until it finds a NUT server, and it never alerts about one it has never reached. If you want it off entirely, `/manage` → **⚙️ Features** → **⚪ Disable UPS monitoring**. The bot restarts to apply it.
+
+**In `config.yaml`:**
+
+```yaml
+nut:
+  enabled: true
+  host: ""            # blank falls back to unraid.host
+  port: 3493
+  ups_name: ""        # blank auto-picks when there is only one UPS
+  poll_seconds: 60
+  thresholds:
+    battery_charge: 50
+    load: 80
+```
+
+---
+
 ## Alert Control
 
 ### Muting Alerts
@@ -257,6 +338,8 @@ Temporarily silence alerts without fixing the underlying issue.
 **`/mute radarr 2h`** — Mute radarr alerts for 2 hours.
 
 Duration formats: `30m` (minutes), `2h` (hours), `1d` (days), `1w` (weeks).
+
+UPS alerts carry their own **🔇 Mute 1h** and **🔇 Mute 24h** buttons, which silence UPS alerts only and leave CPU and array alerts alone. `/mute-server` still mutes everything, UPS included. `/unmute-server` clears the lot.
 
 **`/unmute radarr`** — Remove the mute early.
 
@@ -365,7 +448,7 @@ Per-feature overrides let you spend on a capable model where it matters (chat) a
 
 ## Optional Features
 
-Two monitors are off by default. You can turn them on from Telegram — open **`/manage`** and tap **⚙️ Features** — or by editing `config.yaml`.
+Two monitors are off by default and one, UPS monitoring, is on. You can toggle any of them from Telegram — open **`/manage`** and tap **⚙️ Features** — or by editing `config.yaml`.
 
 ### Image-Update Detection
 

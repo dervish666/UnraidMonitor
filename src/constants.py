@@ -81,6 +81,24 @@ UNRAID_DISK_TEMP_THRESHOLD = 50
 UNRAID_ARRAY_USAGE_THRESHOLD = 85
 
 # ---------------------------------------------------------------------------
+# NUT (Network UPS Tools) defaults
+# ---------------------------------------------------------------------------
+NUT_DEFAULT_PORT = 3493
+NUT_TIMEOUT_SECONDS = 5.0
+NUT_POLL_SECONDS = 60
+# Warn when the battery falls below this while running on battery.
+NUT_BATTERY_CHARGE_THRESHOLD = 50
+# Warn when the UPS load exceeds this percentage of its rated capacity.
+NUT_LOAD_THRESHOLD = 80
+# Consecutive poll failures before a previously-reachable NUT server is
+# reported as lost. One dropped poll is normal; three is a real outage.
+NUT_UNAVAILABLE_AFTER_FAILURES = 3
+# Status flags that get their own alert. CAL is deliberately absent: a runtime
+# calibration puts the UPS on battery on purpose, the same reasoning that keeps
+# a parity sync from reading as a disk failure.
+NUT_ALERT_FLAGS = ("OB", "LB", "RB", "OVER", "BYPASS", "OFF", "FSD", "ALARM")
+
+# ---------------------------------------------------------------------------
 # Threshold picker step options (used by alert callback buttons)
 # ---------------------------------------------------------------------------
 CPU_THRESHOLD_STEPS = [90, 120, 150, 200, 300, 400]
@@ -124,6 +142,12 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.21.0": [
+        "UPS monitoring, over the network. The bot now reads your UPS from a NUT server, so the UPS does not have to be plugged into the machine running the bot. It alerts when the mains drops, when the battery gets low, and when the UPS is overloaded or on bypass",
+        "New /ups command shows battery, runtime left, load and input voltage",
+        "On by default. If it cannot find a NUT server it stays quiet rather than nagging you, and you can turn it off in /manage \u2192 \u2699\ufe0f Features",
+        "A UPS it cannot read is reported as \"unavailable\", never as healthy. Silence from a monitor is not the same as good news",
+    ],
     "0.20.0": [
         "No more false parity alarms - a parity sync or disk rebuild is now reported as progress (\"45% complete\"), not as a disk problem, and you get a message when it finishes. A genuinely failed disk still alerts during a sync",
         "Unraid's own notifications can now reach Telegram - SMART warnings, disk errors, share-full and parity results in the same place as everything else. Off by default; turn it on in /manage → Features",

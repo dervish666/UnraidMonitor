@@ -11,7 +11,9 @@ logger = logging.getLogger(__name__)
 class ServerMuteManager(BaseMuteManager):
     """Manages mutes for Unraid server alerts (separate from container mutes)."""
 
-    CATEGORIES = ("server", "array")
+    # "ups" is muted by /mute-server along with the rest, and on its own
+    # from the mute buttons on a UPS alert.
+    CATEGORIES = ("server", "array", "ups")
 
     def is_server_muted(self) -> bool:
         """Check if server (system) alerts are muted."""
@@ -20,6 +22,10 @@ class ServerMuteManager(BaseMuteManager):
     def is_array_muted(self) -> bool:
         """Check if array/disk alerts are muted."""
         return self._is_muted("array")
+
+    def is_ups_muted(self) -> bool:
+        """Check if UPS alerts are muted."""
+        return self._is_muted("ups")
 
     def mute_server(self, duration: timedelta) -> datetime:
         """Mute all server alerts (system, array, UPS)."""
@@ -36,6 +42,19 @@ class ServerMuteManager(BaseMuteManager):
         expiry = self._add_mute("array", duration)
         logger.info(f"Muted array alerts until {expiry}")
         return expiry
+
+    def mute_ups(self, duration: timedelta) -> datetime:
+        """Mute just UPS alerts."""
+        expiry = self._add_mute("ups", duration)
+        logger.info(f"Muted UPS alerts until {expiry}")
+        return expiry
+
+    def unmute_ups(self) -> bool:
+        """Unmute UPS alerts."""
+        removed = self._remove_mute("ups")
+        if removed:
+            logger.info("Unmuted UPS alerts")
+        return removed
 
     def unmute_server(self) -> bool:
         """Unmute all server alerts."""

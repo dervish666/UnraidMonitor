@@ -55,6 +55,7 @@ def build_status_lines(
     unraid_notification_monitor: Any = None,
     image_update_monitor: Any = None,
     auto_heal_config: Any = None,
+    ups_monitor: Any = None,
 ) -> list[str]:
     lines: list[str] = ["*Monitors:*"]
     if monitor:
@@ -88,6 +89,17 @@ def build_status_lines(
         lines.append(f"  Auto-heal: ✅ {len(auto_heal_config.containers)} container(s)")
     else:
         lines.append("  Auto-heal: ⚪ Disabled")
+    if ups_monitor is not None:
+        if not ups_monitor.is_running:
+            lines.append("  UPS: 🔴 Stopped")
+        elif ups_monitor.is_available:
+            lines.append(f"  UPS: ✅ {ups_monitor.ups_name or 'connected'}")
+        else:
+            # Never "OK": a monitor that cannot reach upsd knows nothing.
+            reason = ups_monitor.last_error or "no reading yet"
+            lines.append(f"  UPS: ⚠️ Unavailable ({reason})")
+    else:
+        lines.append("  UPS: ⚪ Disabled")
     if unraid_client:
         lines.append(f"  Unraid: {'✅ Connected' if unraid_client.is_connected else '🔴 Disconnected'}")
         if unraid_system_monitor:
@@ -120,6 +132,7 @@ def health_command(
     alert_manager: object | None = None,
     image_update_monitor: Any = None,
     auto_heal_config: Any = None,
+    ups_monitor: Any = None,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /health command handler."""
 
@@ -145,6 +158,7 @@ def health_command(
             unraid_notification_monitor=unraid_notification_monitor,
             image_update_monitor=image_update_monitor,
             auto_heal_config=auto_heal_config,
+            ups_monitor=ups_monitor,
         ))
 
         # Alert queue depth

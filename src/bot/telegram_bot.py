@@ -64,6 +64,7 @@ from src.bot.manage_command import (
     manage_features_callback,
     feat_image_toggle_callback,
     feat_notifications_callback,
+    feat_ups_toggle_callback,
     feat_heal_open_callback,
     feat_heal_toggle_callback,
     feat_heal_save_callback,
@@ -81,6 +82,10 @@ from src.bot.unraid_commands import (
     disks_command,
     mute_array_command,
     unmute_array_command,
+)
+from src.bot.ups_command import (
+    ups_command,
+    ups_mute_callback,
 )
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
@@ -218,14 +223,19 @@ def _register_unraid_commands(
     array_mute_manager: Any | None,
     array_monitor: Any | None,
     unraid_config: Any | None,
+    ups_monitor: Any | None = None,
 ) -> None:
-    """Register Unraid server/array/disk commands and alert button callbacks."""
+    """Register Unraid server/array/disk/UPS commands and alert button callbacks."""
     if unraid_system_monitor is not None:
         dp.message.register(server_command(unraid_system_monitor), Command("server"))
         dp.message.register(array_command(unraid_system_monitor), Command("array"))
         dp.message.register(disks_command(unraid_system_monitor), Command("disks"))
 
+    if ups_monitor is not None:
+        dp.message.register(ups_command(ups_monitor), Command("ups"))
+
     if server_mute_manager is not None:
+        dp.callback_query.register(ups_mute_callback(server_mute_manager), F.data.startswith("ups_mute:"))
         dp.message.register(mute_server_command(server_mute_manager), Command("mute-server"))
         dp.message.register(unmute_server_command(server_mute_manager), Command("unmute-server"))
         dp.callback_query.register(server_mute_callback(server_mute_manager), F.data.startswith("srv_mute:"))
@@ -297,6 +307,8 @@ def _register_manage_commands(
     protected_containers: list[str] | None = None,
     restart_cb: Callable[[], Awaitable[None]] | None = None,
     unraid_config: Any | None = None,
+    nut_config: Any | None = None,
+    ups_monitor: Any | None = None,
 ) -> None:
     """Register /manage dashboard command and all its sub-callbacks."""
     dp.message.register(manage_command(unraid_system_monitor), Command("manage"))
@@ -322,6 +334,7 @@ def _register_manage_commands(
     dp.callback_query.register(
         manage_features_callback(
             image_update_monitor, auto_heal_config, memory_config, unraid_config,
+            nut_config, ups_monitor,
         ),
         F.data == "manage:features",
     )
@@ -329,8 +342,12 @@ def _register_manage_commands(
         feat_image_toggle_callback(image_updates_config, restart_cb), F.data.startswith("feat:img:"),
     )
     dp.callback_query.register(
+        feat_ups_toggle_callback(nut_config, restart_cb), F.data.startswith("feat:ups:"),
+    )
+    dp.callback_query.register(
         feat_notifications_callback(
             unraid_config, image_update_monitor, auto_heal_config, memory_config, restart_cb,
+            nut_config, ups_monitor,
         ),
         F.data.startswith("feat:notif:"),
     )
@@ -343,7 +360,10 @@ def _register_manage_commands(
         F.data.startswith("fh_tog:"),
     )
     dp.callback_query.register(
-        feat_heal_save_callback(auto_heal_config, heal_selection, image_update_monitor, memory_config),
+        feat_heal_save_callback(
+            auto_heal_config, heal_selection, image_update_monitor, memory_config,
+            unraid_config, nut_config, ups_monitor,
+        ),
         F.data == "fh_save",
     )
     dp.callback_query.register(
@@ -355,7 +375,10 @@ def _register_manage_commands(
         F.data.startswith("mr_tog:"),
     )
     dp.callback_query.register(
-        feat_memres_save_callback(memory_config, memres_selection, image_update_monitor, auto_heal_config),
+        feat_memres_save_callback(
+            memory_config, memres_selection, image_update_monitor, auto_heal_config,
+            unraid_config, nut_config, ups_monitor,
+        ),
         F.data == "mr_save",
     )
 
@@ -385,6 +408,8 @@ def register_commands(
     image_update_monitor: Any | None = None,
     image_updates_config: Any | None = None,
     auto_heal_config: Any | None = None,
+    nut_config: Any | None = None,
+    ups_monitor: Any | None = None,
     restart_cb: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[ContainerController | None, DiagnosticService | None]:
     """Register all command handlers.
@@ -450,7 +475,10 @@ def register_commands(
             dp.message.register(mutes_command(mute_manager, server_mute_manager, array_mute_manager), Command("mutes"))
             dp.message.register(unmute_command(state, mute_manager), Command("unmute"))
 
-        _register_unraid_commands(dp, unraid_system_monitor, server_mute_manager, array_mute_manager, array_monitor, unraid_config)
+        _register_unraid_commands(
+            dp, unraid_system_monitor, server_mute_manager, array_mute_manager,
+            array_monitor, unraid_config, ups_monitor,
+        )
         _register_memory_commands(dp, memory_monitor, protected_containers, memory_config)
 
         if ignore_manager is not None and mute_manager is not None:
@@ -464,6 +492,8 @@ def register_commands(
                 protected_containers=protected_containers,
                 restart_cb=restart_cb,
                 unraid_config=unraid_config,
+                nut_config=nut_config,
+                ups_monitor=ups_monitor,
             )
 
         if registry is not None:

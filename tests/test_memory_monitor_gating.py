@@ -44,6 +44,7 @@ class _FakeUnraid:
     client = None
     system_monitor = None
     array_monitor = None
+    ups_monitor = None
 
 
 async def _cancel(bg: _BackgroundTasks) -> None:
