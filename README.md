@@ -2,6 +2,8 @@
 
 A Telegram bot for monitoring Docker containers and Unraid servers. Get real-time alerts, check container status, view logs, and control containers - all from Telegram.
 
+**[scratch-it.co.uk/unraidmonitorbot](https://scratch-it.co.uk/unraidmonitorbot)** has the illustrated tour. This README is the reference.
+
 ## Features
 
 - **Interactive Setup Wizard** - Guided first-run setup via Telegram with auto-classification of containers
@@ -33,6 +35,8 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 | **AI diagnosis.** `/diagnose` reads the logs and tells you what happened and why, instead of handing you a wall of text. | **Resource alert.** CPU and memory against your thresholds, and you can change the threshold from the alert itself. |
 | <img src="screenshots/image-updates.png" alt="Digest listing sonarr and rreading-glasses-db with newer images and Pull buttons" width="420"> | <img src="screenshots/natural-language.png" alt="The bot answering a request for a status update written as a fairy tale" width="420"> |
 | **Image updates.** An opt-in daily digest of containers running behind their registry, each with a Pull button. | **Natural language.** Ask in plain English. It reads real server state, and it will humour you. |
+| <img src="screenshots/manage-dashboard.png" alt="The /manage dashboard showing server CPU, RAM and uptime with buttons for Status, Resources, Server, Disks, Manage Ignores, Manage Mutes and Features" width="420"> | <img src="screenshots/command-menu.png" alt="Telegram autocomplete listing the bot commands with a one-line description of each" width="420"> |
+| **The `/manage` hub.** Server vitals at the top, then every panel one tap away, feature toggles included. | **Commands, if you want them.** The menu is built from what your install actually has enabled, so it never offers something the bot cannot do. |
 
 ## What's New in v0.21.2
 
