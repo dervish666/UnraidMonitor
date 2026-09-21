@@ -41,6 +41,7 @@ def mute_command(
                         "Examples:\n"
                         "• `/mute plex 2h`\n"
                         "• `/mute radarr 30m`\n"
+                        "• `/mute handbrake 1w` (max 7 days)\n"
                         "• Reply to alert + `/mute 1h`",
                         parse_mode="Markdown",
                     )
@@ -52,6 +53,7 @@ def mute_command(
                     "Examples:\n"
                     "• `/mute plex 2h`\n"
                     "• `/mute radarr 30m`\n"
+                    "• `/mute handbrake 1w` (max 7 days)\n"
                     "• Reply to alert + `/mute 1h`",
                     parse_mode="Markdown",
                 )
@@ -65,7 +67,7 @@ def mute_command(
             else:
                 await message.answer(
                     "Missing duration. Use `/mute <container> <duration>`\n"
-                    "Examples: `2h`, `30m`, `24h`",
+                    "Examples: `2h`, `30m`, `24h`, `1w`",
                     parse_mode="Markdown",
                 )
                 return
@@ -108,7 +110,7 @@ def mute_command(
         if not duration:
             await message.answer(
                 f"Invalid duration: `{duration_str}`\n"
-                "Use format like `15m`, `2h`, `24h`",
+                "Use format like `15m`, `2h`, `24h`, `1w` (max 7 days)",
                 parse_mode="Markdown",
             )
             return

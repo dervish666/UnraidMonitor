@@ -808,3 +808,45 @@ class TestMemRestartCallback:
 
         callback.answer.assert_called_with("plex is a protected container")
         memory_monitor.restart_container.assert_not_called()
+
+
+class TestCpuThresholdLadder:
+    """The CPU picker has to reach the host's real ceiling (8 cores = 800%)."""
+
+    def test_ladder_tops_out_at_core_count(self):
+        from src.constants import cpu_threshold_steps
+
+        assert cpu_threshold_steps(8)[-1] == 800
+        assert cpu_threshold_steps(16)[-1] == 1600
+        assert cpu_threshold_steps(1) == [90, 100]
+        assert max(cpu_threshold_steps(4)) == 400
+
+    @pytest.mark.asyncio
+    async def test_picker_offers_values_above_400_on_eight_cores(self, mock_callback):
+        from src.config import ResourceConfig
+
+        config = ResourceConfig(default_cpu_percent=400)
+        handler = raise_limit_callback(config, cpu_cores=8)
+
+        mock_callback.data = "res_limit:handbrake:cpu:400"
+        await handler(mock_callback)
+
+        markup = mock_callback.message.answer.call_args.kwargs["reply_markup"]
+        labels = [b.text for row in markup.inline_keyboard for b in row]
+        assert "800%" in labels
+        assert "500%" in labels
+        # Nothing at or below the current threshold
+        assert "400%" not in labels
+        # Keyboard stays readable
+        assert all(len(row) <= 4 for row in markup.inline_keyboard)
+
+    @pytest.mark.asyncio
+    async def test_picker_names_the_host_ceiling(self, mock_callback):
+        from src.config import ResourceConfig
+
+        handler = raise_limit_callback(ResourceConfig(), cpu_cores=8)
+        mock_callback.data = "res_limit:handbrake:cpu:80"
+        await handler(mock_callback)
+
+        assert "800%" in mock_callback.message.answer.call_args.args[0]
+        assert "8 cores" in mock_callback.message.answer.call_args.args[0]

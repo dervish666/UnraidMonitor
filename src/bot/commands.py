@@ -189,13 +189,14 @@ async def format_container_details(
         try:
             stats = await resource_monitor.get_container_stats(container.name)
             if stats is not None:
-                cpu_bar = format_progress_bar(stats.cpu_percent)
+                cpu_max = stats.cpu_cores * 100
+                cpu_bar = format_progress_bar(stats.cpu_percent, max_percent=cpu_max)
                 mem_bar = format_progress_bar(stats.memory_percent)
 
                 lines.append("")
                 lines.append("📊 *Resources*")
                 lines.append(
-                    f"CPU:    {stats.cpu_percent:5.1f}% `{cpu_bar}`"
+                    f"CPU:    {stats.cpu_percent:5.1f}% `{cpu_bar}` of {cpu_max}%"
                 )
                 lines.append(
                     f"Memory: {stats.memory_percent:5.1f}% `{mem_bar}` "

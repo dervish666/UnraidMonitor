@@ -317,6 +317,7 @@ Exceeded for: {duration_str}
                 [
                     InlineKeyboardButton(text="🔕 Mute 1h", callback_data=truncate_callback_data("mute:", f"{container_name}:60")),
                     InlineKeyboardButton(text="🔕 Mute 24h", callback_data=truncate_callback_data("mute:", f"{container_name}:1440")),
+                    InlineKeyboardButton(text="🔕 Mute 1w", callback_data=truncate_callback_data("mute:", f"{container_name}:10080")),
                 ],
                 [
                     InlineKeyboardButton(

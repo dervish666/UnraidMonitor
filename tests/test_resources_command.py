@@ -7,8 +7,10 @@ async def test_resources_command_summary():
     """Test /resources shows all containers."""
     from src.bot.resources_command import resources_command
     from src.monitors.resource_monitor import ContainerStats
+    from src.config import ResourceConfig
 
     mock_resource_monitor = MagicMock()
+    mock_resource_monitor._config = ResourceConfig()
     mock_resource_monitor.get_all_stats = AsyncMock(return_value=[
         ContainerStats("plex", 65.0, 78.0, 4_200_000_000, 8_000_000_000),
         ContainerStats("radarr", 12.0, 45.0, 1_200_000_000, 4_000_000_000),

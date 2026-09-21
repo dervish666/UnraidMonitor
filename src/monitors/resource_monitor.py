@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,6 +28,7 @@ class ContainerStats:
     memory_percent: float
     memory_bytes: int
     memory_limit: int
+    cpu_cores: int = 1
     net_rx_bytes: int = 0
     net_tx_bytes: int = 0
     block_read_bytes: int = 0
@@ -73,6 +75,21 @@ def calculate_cpu_percent(stats: dict[str, Any]) -> float:
         return (cpu_delta / system_delta) * num_cpus * 100.0
 
     return 0.0
+
+
+def host_cpu_cores(docker_client: Any) -> int:
+    """Core count of the Docker host, used as the ceiling for CPU percentages.
+
+    Docker sums container CPU across cores, so 800% is full load on an 8-core box.
+    Falls back to this process's own view if the daemon does not answer.
+    """
+    try:
+        ncpu = int(docker_client.info().get("NCPU") or 0)
+        if ncpu > 0:
+            return ncpu
+    except Exception as e:
+        logger.warning(f"Could not read host CPU count from Docker: {e}")
+    return os.cpu_count() or 1
 
 
 def parse_container_stats(name: str, stats: dict[str, Any]) -> ContainerStats:
@@ -125,6 +142,7 @@ def parse_container_stats(name: str, stats: dict[str, Any]) -> ContainerStats:
         memory_percent=round(memory_percent, 1),
         memory_bytes=memory_usage,
         memory_limit=memory_limit,
+        cpu_cores=max(1, int(stats.get("cpu_stats", {}).get("online_cpus", 0) or 0) or (os.cpu_count() or 1)),
         net_rx_bytes=net_rx_bytes,
         net_tx_bytes=net_tx_bytes,
         block_read_bytes=block_read_bytes,

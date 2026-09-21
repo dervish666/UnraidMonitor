@@ -8,14 +8,14 @@ from src.alerts.base_mute_manager import BaseMuteManager
 
 logger = logging.getLogger(__name__)
 
-DURATION_PATTERN = re.compile(r"^(\d+)(m|h|d)$")
+DURATION_PATTERN = re.compile(r"^(\d+)(m|h|d|w)$")
 
 
 def parse_duration(text: str) -> timedelta | None:
-    """Parse duration string like '15m', '2h', or '3d'.
+    """Parse duration string like '15m', '2h', '3d', or '1w'.
 
     Args:
-        text: Duration string (e.g., '15m', '2h', '24h', '3d').
+        text: Duration string (e.g., '15m', '2h', '24h', '3d', '1w').
 
     Returns:
         timedelta if valid, None if invalid.
@@ -39,6 +39,8 @@ def parse_duration(text: str) -> timedelta | None:
         result = timedelta(hours=value)
     elif unit == "d":
         result = timedelta(days=value)
+    elif unit == "w":
+        result = timedelta(weeks=value)
     else:
         return None
 

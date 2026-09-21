@@ -134,3 +134,46 @@ def test_resource_monitor_initialization():
     )
 
     assert monitor.is_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_resource_alert_offers_week_long_mute():
+    """A transcode that runs for weeks needs a mute that outlives 24h."""
+    from src.alerts.manager import AlertManager, ChatIdStore
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    chat_id_store = ChatIdStore()
+    chat_id_store.set_chat_id(12345)
+
+    manager = AlertManager(mock_bot, chat_id_store)
+    await manager.send_resource_alert(
+        container_name="handbrake",
+        metric="cpu",
+        current_value=430.0,
+        threshold=400,
+        duration_seconds=600,
+        memory_bytes=1024 * 1024 * 100,
+        memory_limit=1024 * 1024 * 1024,
+        memory_percent=10.0,
+        cpu_percent=430.0,
+    )
+
+    markup = mock_bot.send_message.call_args.kwargs["reply_markup"]
+    buttons = {b.text: b.callback_data for row in markup.inline_keyboard for b in row}
+    assert buttons["🔕 Mute 1w"] == "mute:handbrake:10080"
+
+
+def test_week_mutes_read_as_weeks():
+    from src.utils.formatting import format_duration_minutes
+
+    assert format_duration_minutes(10080) == "1 week(s)"
+    assert format_duration_minutes(1440) == "1 day(s)"
+
+
+def test_parse_duration_accepts_weeks():
+    from datetime import timedelta
+    from src.alerts.mute_manager import parse_duration
+
+    assert parse_duration("1w") == timedelta(days=7)
+    assert parse_duration("2w") is None  # 7 days is the ceiling

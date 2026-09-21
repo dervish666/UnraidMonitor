@@ -9,18 +9,34 @@ if TYPE_CHECKING:
     from src.monitors.resource_monitor import ResourceMonitor
 
 
-def format_progress_bar(percent: float, width: int = 16) -> str:
-    """Format a progress bar for resource usage."""
-    filled = int(percent / 100 * width)
+def format_progress_bar(percent: float, width: int = 16, max_percent: float = 100) -> str:
+    """Format a progress bar for resource usage.
+
+    CPU is summed across cores, so a full bar is ``cores * 100``, not 100.
+    """
+    scale = max_percent if max_percent > 0 else 100
+    filled = max(0, min(width, int(percent / scale * width)))
     empty = width - filled
     return "█" * filled + "░" * empty
 
 
-def format_summary_line(name: str, cpu: float, mem: float, mem_display: str) -> str:
-    """Format a single container line for summary view."""
+def format_summary_line(
+    name: str,
+    cpu: float,
+    mem: float,
+    mem_display: str,
+    cpu_threshold: float = 100,
+    mem_threshold: float = 100,
+) -> str:
+    """Format a single container line for summary view.
+
+    The warning is relative to each container's own threshold: 70% CPU means
+    nothing on an 8-core box where the alert fires at 400%.
+    """
     # Pad name to 12 chars
     name_padded = name[:12].ljust(12)
-    warning = " ⚠️" if cpu > 70 or mem > 70 else ""
+    near = cpu >= cpu_threshold * 0.8 or mem >= mem_threshold * 0.8
+    warning = " ⚠️" if near else ""
     return f"{name_padded} CPU: {cpu:4.0f}%  MEM: {mem:4.0f}% ({mem_display}){warning}"
 
 
@@ -38,11 +54,14 @@ async def format_resources_summary(resource_monitor: "ResourceMonitor") -> str |
     lines = ["📊 *Container Resources*", ""]
 
     for stats in sorted(stats_list, key=lambda s: s.memory_percent, reverse=True):
+        cpu_threshold, mem_threshold = resource_monitor._config.get_thresholds(stats.name)
         line = format_summary_line(
             stats.name,
             stats.cpu_percent,
             stats.memory_percent,
             stats.memory_display,
+            cpu_threshold,
+            mem_threshold,
         )
         lines.append(f"`{line}`")
 
@@ -87,12 +106,13 @@ def resources_command(
                 container_name
             )
 
-            cpu_bar = format_progress_bar(stats.cpu_percent)
+            cpu_max = stats.cpu_cores * 100
+            cpu_bar = format_progress_bar(stats.cpu_percent, max_percent=cpu_max)
             mem_bar = format_progress_bar(stats.memory_percent)
 
             response = f"""📊 *Resources: {stats.name}*
 
-CPU:    {stats.cpu_percent:5.1f}% `{cpu_bar}` (threshold: {cpu_threshold}%)
+CPU:    {stats.cpu_percent:5.1f}% `{cpu_bar}` of {cpu_max}% ({stats.cpu_cores} cores, threshold: {cpu_threshold}%)
 Memory: {stats.memory_percent:5.1f}% `{mem_bar}` (threshold: {mem_threshold}%)
         {stats.memory_display} / {stats.memory_limit_display} limit"""
 

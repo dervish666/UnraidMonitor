@@ -104,6 +104,20 @@ NUT_ALERT_FLAGS = ("OB", "LB", "RB", "OVER", "BYPASS", "OFF", "FSD", "ALARM")
 CPU_THRESHOLD_STEPS = [90, 120, 150, 200, 300, 400]
 MEMORY_THRESHOLD_STEPS = [85, 90, 95, 99]
 
+
+def cpu_threshold_steps(cores: int) -> list[int]:
+    """CPU threshold options for a host with ``cores`` cores.
+
+    Docker sums CPU across cores, so a container on an 8-core box can legitimately
+    report 800%. The ladder therefore has to run to ``cores * 100``, not stop at 400.
+    """
+    cap = max(1, cores) * 100
+    steps = [s for s in CPU_THRESHOLD_STEPS if s < cap]
+    steps.extend(range(500, min(cap, 900), 100))
+    steps.extend(range(1000, cap, 200))
+    steps.append(cap)
+    return sorted(set(steps))
+
 # ---------------------------------------------------------------------------
 # Alert proxy
 # ---------------------------------------------------------------------------
@@ -142,6 +156,11 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.21.3": [
+        "Mute a container for a week. Resource alerts now have a 🔕 Mute 1w button next to 1h and 24h, for the jobs that legitimately hog the machine for weeks at a time. /mute <name> 1w does the same from the keyboard",
+        "CPU limits now go as high as your server does. Docker counts a container using four whole cores as 400%, so an 8-core machine tops out at 800%. The Raise CPU Limit button used to stop at 400 no matter what your server had; it now offers every step up to your real ceiling and tells you what that ceiling is",
+        "The CPU bar in /resources used to overflow past the end of the line on a busy multi-core container, and the \u26a0\ufe0f marker appeared at a fixed 70% even when the alert was set to fire at 400%. Both now scale to the machine you actually have",
+    ],
     "0.21.1": [
         "Memory readings were wrong. The bot reported your server as using almost all its RAM when Unraid's own dashboard said about half. It was counting the disk cache as used memory, which Linux frees the moment anything needs it",
         "/server now shows the real figure and lists the reclaimable cache separately, so \"55% used but almost nothing free\" finally makes sense",

@@ -2,6 +2,20 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.21.3] - 2026-09-21
+
+### Added
+- **Mute a container for a week.** Resource alerts carry a third mute button, `🔕 Mute 1w`, alongside 1h and 24h. Long transcodes, backups and training runs legitimately peg several cores for weeks, and a 24-hour mute meant re-muting every morning. `/mute <name> 1w` does the same from the keyboard; 7 days remains the ceiling, so `2w` is still rejected.
+- Durations now read as weeks once they are whole weeks ("1 week(s)" rather than "7 day(s)").
+
+### Fixed
+- **The CPU threshold picker stopped at 400% regardless of the host.** Docker sums CPU across cores, so a container using four whole cores reports 400% and an 8-core server tops out at 800%. The `⚙️ Raise CPU Limit` ladder was a hardcoded list ending at 400, which on an 8-core box refused to offer half the available range. It is now generated from the host's core count (`cpu_threshold_steps()`), reaches `cores * 100`, and the prompt names the ceiling: "This host maxes out at 800% (8 cores)". Core count comes from Docker's `NCPU`, falling back to `os.cpu_count()`.
+- **The CPU progress bar in `/resources` and `/status <name>` overflowed.** It divided by a fixed 100, so a container at 400% drew 64 blocks in a 16-block bar. It now scales to `cores * 100` and reports "412.0% of 800% (8 cores)".
+- **The ⚠️ "approaching threshold" marker fired at a fixed 70%.** On a multi-core host that flagged containers using less than one core. It now compares against each container's own configured threshold.
+
+### Notes
+- Crash and log-error alerts deliberately keep 1h/24h only. Muting a crash loop for a week is worse than the noise it saves.
+
 ## [0.21.2] - 2026-08-27
 
 Quick wins from the sixth full audit. Three of these are features that looked like they worked.

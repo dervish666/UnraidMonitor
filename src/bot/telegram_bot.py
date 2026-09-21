@@ -87,6 +87,7 @@ from src.bot.ups_command import (
     ups_command,
     ups_mute_callback,
 )
+from src.monitors.resource_monitor import host_cpu_cores
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 
@@ -467,7 +468,8 @@ def register_commands(
             dp.callback_query.register(mute_callback(state, mute_manager), F.data.startswith("mute:"))
 
         if resource_config is not None:
-            dp.callback_query.register(raise_limit_callback(resource_config), F.data.startswith("res_limit:"))
+            cpu_cores = host_cpu_cores(docker_client)
+            dp.callback_query.register(raise_limit_callback(resource_config, cpu_cores), F.data.startswith("res_limit:"))
             dp.callback_query.register(set_limit_callback(resource_config), F.data.startswith("res_set:"))
 
         if mute_manager is not None:

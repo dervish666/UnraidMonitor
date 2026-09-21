@@ -195,7 +195,9 @@ def format_bytes(bytes_val: int) -> str:
 
 def format_duration_minutes(minutes: int) -> str:
     """Format a duration in minutes to human-readable string."""
-    if minutes >= 1440:
+    if minutes >= 10080 and minutes % 10080 == 0:
+        return f"{minutes // 10080} week(s)"
+    elif minutes >= 1440:
         return f"{minutes // 1440} day(s)"
     elif minutes >= 60:
         return f"{minutes // 60} hour(s)"

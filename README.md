@@ -552,7 +552,7 @@ auto_heal:
 
 | Command | Description |
 |---------|-------------|
-| `/mute <name> <duration>` | Mute container (e.g., `/mute plex 2h`) |
+| `/mute <name> <duration>` | Mute container (e.g., `/mute plex 2h`, `/mute handbrake 1w`; max 7 days) |
 | `/unmute <name>` | Unmute a container |
 | `/mute-server <duration>` | Mute server alerts |
 | `/unmute-server` | Unmute server alerts |
@@ -642,11 +642,13 @@ Exceeded for: 3 minutes
 CPU: 45% (normal)
 
 [📋 Logs] [🔍 Diagnose]
-[🔕 Mute 1h] [🔕 Mute 24h]
+[🔕 Mute 1h] [🔕 Mute 24h] [🔕 Mute 1w]
 [⚙️ Raise MEMORY Limit]
 ```
 
-Tapping **⚙️ Raise Limit** shows threshold options (e.g., 90%, 95%, 99% for memory, or 120%, 200%, 400% for CPU). The new threshold applies immediately.
+Tapping **⚙️ Raise Limit** shows threshold options: 90%, 95%, 99% for memory, and for CPU a ladder that runs to your host's real ceiling. Docker sums CPU across cores, so an 8-core server tops out at 800% and the picker offers every step up to it. The new threshold applies immediately.
+
+**🔕 Mute 1w** is there for the jobs that legitimately peg several cores for weeks (transcodes, backups, training runs). `/mute <name> 1w` does the same from the keyboard; 7 days is the maximum mute.
 
 ### Log Error Alert
 ```

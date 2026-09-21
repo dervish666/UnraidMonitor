@@ -3,6 +3,7 @@
 import asyncio
 import html
 import logging
+import os
 import re
 from datetime import timedelta
 from typing import Callable, Awaitable, Any, TYPE_CHECKING
@@ -16,8 +17,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from src.config import MemoryConfig, ResourceConfig, UnraidConfig
 from src.constants import (
-    CPU_THRESHOLD_STEPS,
     MEMORY_THRESHOLD_STEPS,
+    cpu_threshold_steps,
     UNRAID_ARRAY_USAGE_THRESHOLD,
     UNRAID_CPU_TEMP_THRESHOLD,
     UNRAID_CPU_USAGE_THRESHOLD,
@@ -652,8 +653,16 @@ async def _apply_threshold(
 
 def raise_limit_callback(
     resource_config: ResourceConfig,
+    cpu_cores: int | None = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
-    """Factory for 'Raise Limit' button — shows threshold options."""
+    """Factory for 'Raise Limit' button — shows threshold options.
+
+    Args:
+        resource_config: Config the chosen threshold is written to.
+        cpu_cores: Host core count, which sets the top of the CPU ladder
+            (8 cores -> 800%). Falls back to this process's view of the host.
+    """
+    cores = cpu_cores if cpu_cores and cpu_cores > 0 else (os.cpu_count() or 1)
 
     async def handler(callback: CallbackQuery) -> None:
         # Format: res_limit:container_name:metric:current_threshold
@@ -665,20 +674,24 @@ def raise_limit_callback(
         await callback.answer()
 
         # Build option buttons — only show values above current threshold
-        # CPU uses per-core reporting, so >100% is normal on multi-core systems
-        steps = CPU_THRESHOLD_STEPS if metric == "cpu" else MEMORY_THRESHOLD_STEPS
+        # CPU is summed across cores, so the ladder runs to cores * 100%
+        steps = cpu_threshold_steps(cores) if metric == "cpu" else MEMORY_THRESHOLD_STEPS
         options = [v for v in steps if v > current_threshold]
         if not options:
             options = [steps[-1]]
+        # Keep the keyboard readable on many-core hosts, but always offer the ceiling
+        if len(options) > 8:
+            options = options[:7] + [options[-1]]
 
         buttons: list[list[InlineKeyboardButton]] = []
-        row: list[InlineKeyboardButton] = []
-        for value in options:
-            row.append(InlineKeyboardButton(
-                text=f"{value}%",
-                callback_data=truncate_callback_data("res_set:", f"{container_name}:{metric}:{value}"),
-            ))
-        buttons.append(row)
+        for i in range(0, len(options), 4):
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"{value}%",
+                    callback_data=truncate_callback_data("res_set:", f"{container_name}:{metric}:{value}"),
+                )
+                for value in options[i:i + 4]
+            ])
 
         # Reset to default option
         buttons.append([InlineKeyboardButton(
@@ -688,17 +701,18 @@ def raise_limit_callback(
 
         safe_name = escape_markdown(container_name)
         metric_label = "CPU" if metric == "cpu" else "Memory"
+        ceiling = f"\nThis host maxes out at {cores * 100}% ({cores} cores)" if metric == "cpu" else ""
 
         if callback.message:
             try:
                 await callback.message.answer(
-                    f"⚙️ Set *{metric_label}* threshold for *{safe_name}*\nCurrent: {current_threshold}%",
+                    f"⚙️ Set *{metric_label}* threshold for *{safe_name}*\nCurrent: {current_threshold}%{ceiling}",
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
                 )
             except TelegramBadRequest:
                 await callback.message.answer(
-                    f"Set {metric_label} threshold for {container_name}\nCurrent: {current_threshold}%",
+                    f"Set {metric_label} threshold for {container_name}\nCurrent: {current_threshold}%{ceiling}",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
                 )
 
