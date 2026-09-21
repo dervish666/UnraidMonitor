@@ -23,6 +23,13 @@ dependencies = [
 ai = [
     "anthropic>=0.40.0,<1.0.0",
     "openai>=2.0.0,<3.0.0",
+    # anyio arrives under both SDKs via httpx -> httpcore, which wraps TLS
+    # with anyio's TLSStream. CVE-2026-63374 is an IDNA 2003 host encoding
+    # flaw in exactly that call, so an Ollama host with a non-ASCII domain
+    # is in the affected path. CVE-2026-64847 needs anyio.to_process, which
+    # we never call. Floor raised for the first; CI pip-audit runs with no
+    # ignores.
+    "anyio>=4.14.2",
 ]
 dev = [
     # Dev-only, and neither reaches the Docker image. Pinned so pip-audit

@@ -10,4 +10,8 @@ pydantic-settings>=2.0,<3.0
 anthropic>=0.40.0,<1.0.0
 openai>=2.0.0,<3.0.0
 psutil>=6.1.0,<8.0.0
+# Transitive under anthropic/openai via httpx -> httpcore, which wraps TLS
+# with anyio's TLSStream. Floored for CVE-2026-63374 (IDNA 2003 host
+# encoding in that exact call).
+anyio>=4.14.2
 python-dotenv>=1.0.0,<2.0.0
