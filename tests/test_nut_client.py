@@ -348,3 +348,26 @@ async def test_a_server_that_goes_away_reads_as_unavailable_not_healthy():
     text = format_ups(snapshot)
     assert "Unavailable" in text
     assert "✅" not in text
+
+
+async def test_connection_reset_is_unavailable_not_a_raw_oserror():
+    """A reset must surface as NutUnavailable so the monitor counts the failed
+    poll; a raw OSError slipped past its NutError handling (audit 2026-09-22)."""
+    import socket
+    import struct
+
+    async def reset(reader, writer):
+        await asyncio.sleep(0.05)  # let the client's command arrive unread
+        sock = writer.get_extra_info("socket")
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        writer.transport.abort()
+
+    server = await asyncio.start_server(reset, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        client = NutClient(host="127.0.0.1", port=port)
+        with pytest.raises(NutUnavailable):
+            await client.fetch("myups")
+    finally:
+        server.close()
+        await server.wait_closed()

@@ -2,6 +2,34 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.22.0] - 2026-09-22
+
+Fixes from the seventh audit (logic, performance, maintainability). The theme: alerting that went quiet and never came back. None of these showed up in tests because every test drove one step, never a sequence.
+
+### Fixed
+- **The log watcher hammered Docker whenever a watched container was stopped.** It only paused between retries after an exception, and Docker ends a log stream on a stopped container in about 6 ms, so it re-queried in a tight loop: 498 `containers.get` calls in 3 seconds against a real daemon, each with a blocking call on the event loop, for as long as the container stayed down. It now waits 10 seconds after a stream ends cleanly. Measured after the fix: 1 call.
+- **A log-error alert could silence the crash alert that followed it.** Log errors and crashes shared one `RateLimiter` keyed on the bare container name, with a 15-minute cooldown. Errors usually come just before a crash, so the crash alert was the one dropped. Crashes now use their own key and are still rate-limited.
+- **The memory monitor could stop handling memory pressure for the life of the process.** Four paths: RECOVERING had no way out on renewed pressure; tapping "No" on one restart prompt left a second killed container unprompted and the monitor parked; a cancelled or skipped kill never re-armed when memory climbed back; and after one kill it moved to RECOVERING even if memory was still critical, so it never killed a second container. Every state now handles both directions. Separately, a kill button pressed outside a pressure event (on an Unraid "Memory Critical" alert) no longer excludes that container from auto-kill forever.
+- **Container memory counted page cache on cgroup v2** (Unraid 7). Only the cgroup v1 `cache` key was subtracted; v2 calls it `inactive_file`. Measured on a real server: Plex read 1437 MiB against 1141 in `docker stats`, inflating resource alerts and the largest-first ordering in memory alerts.
+- **"RESTART LOOP" never fired for crashes more than about a minute apart.** Each "recovered" alert wiped the crash history, so a container crashing every 90 seconds peaked at 4 of the 5 crashes needed. You got a "recovered" message every five minutes instead.
+- **Running `/ups` during a network blip could hide a real NUT outage**, and make the next good poll announce a recovery nobody had been told about. `/ups` now reports its own read and leaves availability to the poll loop.
+- **A power cut that started while UPS alerts were muted never alerted**, even if the UPS was still on battery when the mute ended. A condition that is still present at unmute is now reported; one that came and went during the mute is not.
+- **"Ignore Similar" saved patterns that could never match** for any error long enough to be shortened on the button. The button's preview ends in "…", which is in no log line, so both the lookup for the full line and the fallback pattern failed. An empty AI-generated pattern, which would ignore every error for the container, is now rejected.
+- **Model families picked old models over new ones.** The version sort read `claude-sonnet-4-20250514` as version 4.20250514 and ranked single-number IDs such as `claude-sonnet-5` below both.
+- **A wrong Unraid API key was silent at startup.** The "check UNRAID_API_KEY" message existed but could never be sent. Monitors still start and keep retrying, since Unraid may just be booting.
+- **The Unraid notification relay could lose notifications.** A failed send was marked as seen rather than retried, and on an empty feed the first-run priming was never saved, so every restart silently swallowed whatever had arrived meanwhile.
+- **`/mutes` could swallow the "mute expired" notice** by cleaning up the expired mute before the expiry loop saw it.
+- **A reset connection to the NUT server skipped the failure count**, and a failed login step leaked its socket.
+- **Disk temperature alerts flapped** for a disk sitting at the threshold: it now has to cool 2°C before it can alert again. **CPU usage alerts** now need two polls in a row over the threshold, not one 30-second sample.
+- **Container names with underscores broke the "Multiple matches" reply** in `/restart`, `/stop`, `/start`, `/pull` and `/diagnose`, which didn't escape them.
+- Blocking Docker calls moved off the event loop on reconnect, in the log watcher and in `/diagnose`. `stop()` closes open log streams so shutdown doesn't wait on a quiet container. Alert-queue overflow is now logged instead of dropped silently.
+
+### Changed
+- Durations read the same everywhere, in compact form: "Exceeded for: 3m", uptime "24d 5h 30m".
+- The UPS mute buttons share the array/server handler and get the same 30-day cap.
+- Removed three config keys nothing ever read: `bot.confirmation_timeout_seconds`, `ai.default_provider` and `ai.providers.anthropic.prompt_caching` (caching is always on). Configs that still contain them load fine. Also removed the unused default-config template.
+- Internal: `register_commands()` and the `/manage` Features handlers are now fully typed, so passing the wrong manager fails type checking instead of shipping; the copy-pasted toggle, picker, mute and threshold handlers share one implementation each; config sections persist through one `update_yaml_config()` helper.
+
 ## [0.21.3] - 2026-09-21
 
 ### Added

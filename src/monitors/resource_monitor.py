@@ -108,8 +108,10 @@ def parse_container_stats(name: str, stats: dict[str, Any]) -> ContainerStats:
     memory_usage = memory_stats.get("usage", 0)
     memory_limit = memory_stats.get("limit", 1)  # Avoid division by zero
 
-    # Subtract cache from memory usage if available (clamp to 0)
-    cache = memory_stats.get("stats", {}).get("cache", 0)
+    # Subtract page cache, as `docker stats` does (clamp to 0). cgroup v1 names
+    # it "cache"; cgroup v2 (Unraid 7) has no "cache" and uses "inactive_file".
+    mem_detail = memory_stats.get("stats", {})
+    cache = mem_detail.get("cache", mem_detail.get("inactive_file", 0))
     memory_usage = max(0, memory_usage - cache)
 
     memory_percent = (memory_usage / memory_limit) * 100.0 if memory_limit > 0 else 0.0

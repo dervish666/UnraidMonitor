@@ -412,6 +412,9 @@ def ignore_similar_callback(
             return
 
         _, container, error_preview = parts
+        # truncate_callback_data marks a cut preview with "…", which appears in
+        # no log line: drop it or neither the lookup nor the fallback matches.
+        error_preview = error_preview.removesuffix("…")
 
         # Get full error from recent buffer
         # The preview has timestamps stripped (done in send_log_error_alert),
@@ -456,7 +459,9 @@ def ignore_similar_callback(
         # Fallback to substring — strip timestamps so the pattern matches
         # future errors regardless of when they occur
         pattern = strip_log_timestamps(full_error)
-        ignore_manager.add_ignore(container, pattern)
+        if not ignore_manager.add_ignore(container, pattern):
+            await callback.answer("Already ignored, or nothing to match on")
+            return
         display = pattern[:60] + "..." if len(pattern) > 60 else pattern
         if callback.message:
             await callback.message.answer(

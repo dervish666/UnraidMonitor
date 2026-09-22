@@ -1,7 +1,7 @@
 """Tests for multi-provider LLM config support.
 
 Covers new env vars (OPENAI_API_KEY, OLLAMA_HOST) and new AIConfig fields
-(default_provider, default_model, anthropic_prompt_caching, ollama_host).
+(default_model, ollama_host).
 """
 
 import os
@@ -127,28 +127,12 @@ def test_appconfig_ollama_host_none():
 # ---------------------------------------------------------------------------
 
 
-def test_aiconfig_default_provider_defaults_to_anthropic():
-    """AIConfig.default_provider defaults to 'anthropic'."""
-    from src.config import AIConfig
-
-    ai = AIConfig.from_dict({})
-    assert ai.default_provider == "anthropic"
-
-
 def test_aiconfig_default_model_defaults_to_haiku():
     """AIConfig.default_model defaults to 'haiku' family name."""
     from src.config import AIConfig
 
     ai = AIConfig.from_dict({})
     assert ai.default_model == "haiku"
-
-
-def test_aiconfig_anthropic_prompt_caching_defaults_to_true():
-    """AIConfig.anthropic_prompt_caching defaults to True."""
-    from src.config import AIConfig
-
-    ai = AIConfig.from_dict({})
-    assert ai.anthropic_prompt_caching is True
 
 
 def test_aiconfig_ollama_host_defaults():
@@ -164,32 +148,12 @@ def test_aiconfig_ollama_host_defaults():
 # ---------------------------------------------------------------------------
 
 
-def test_aiconfig_parses_default_provider_from_yaml():
-    """AIConfig reads default_provider from YAML dict."""
-    from src.config import AIConfig
-
-    ai = AIConfig.from_dict({"default_provider": "openai"})
-    assert ai.default_provider == "openai"
-
-
 def test_aiconfig_parses_default_model_from_yaml():
     """AIConfig reads default_model from YAML dict."""
     from src.config import AIConfig
 
     ai = AIConfig.from_dict({"default_model": "gpt-4o-mini"})
     assert ai.default_model == "gpt-4o-mini"
-
-
-def test_aiconfig_parses_providers_anthropic_prompt_caching():
-    """AIConfig reads providers.anthropic.prompt_caching from YAML dict."""
-    from src.config import AIConfig
-
-    ai = AIConfig.from_dict({
-        "providers": {
-            "anthropic": {"prompt_caching": False},
-        },
-    })
-    assert ai.anthropic_prompt_caching is False
 
 
 def test_aiconfig_parses_providers_ollama_host():
@@ -209,10 +173,8 @@ def test_aiconfig_parses_all_new_fields_together():
     from src.config import AIConfig
 
     data = {
-        "default_provider": "ollama",
         "default_model": "llama3:8b",
         "providers": {
-            "anthropic": {"prompt_caching": False},
             "ollama": {"host": "http://gpu-server:11434"},
         },
         "models": {
@@ -227,9 +189,7 @@ def test_aiconfig_parses_all_new_fields_together():
     ai = AIConfig.from_dict(data)
 
     # New fields
-    assert ai.default_provider == "ollama"
     assert ai.default_model == "llama3:8b"
-    assert ai.anthropic_prompt_caching is False
     assert ai.ollama_host == "http://gpu-server:11434"
 
     # Existing fields still work
@@ -275,11 +235,8 @@ def test_full_yaml_roundtrip_with_providers(tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text("""
 ai:
-  default_provider: openai
   default_model: gpt-4o-mini
   providers:
-    anthropic:
-      prompt_caching: false
     ollama:
       host: "http://nas:11434"
   models:
@@ -297,9 +254,7 @@ ai:
         settings = Settings(config_path=str(config_file))
         config = AppConfig(settings)
 
-        assert config.ai.default_provider == "openai"
         assert config.ai.default_model == "gpt-4o-mini"
-        assert config.ai.anthropic_prompt_caching is False
         assert config.ai.ollama_host == "http://nas:11434"
         # Existing fields still correct
         assert config.ai.pattern_analyzer_model == "claude-haiku-4-5-20251001"
@@ -323,7 +278,5 @@ ai:
         settings = Settings(config_path=str(config_file))
         config = AppConfig(settings)
 
-        assert config.ai.default_provider == "anthropic"
         assert config.ai.default_model == "haiku"
-        assert config.ai.anthropic_prompt_caching is True
         assert config.ai.ollama_host == "http://localhost:11434"

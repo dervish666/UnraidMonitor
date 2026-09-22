@@ -218,7 +218,12 @@ def _init_unraid(
             uc.notification_monitor = UnraidNotificationMonitor(
                 client=uc.client,
                 config=unraid_config,
-                on_alert=on_server_alert,
+                # Raising variant: the relay keeps an unsent notification
+                # unseen and retries it next poll instead of losing it.
+                on_alert=make_server_alert_handler(
+                    chat_id_store, bot, config, escape_markdown, uc.resource_monitor_ref,
+                    raise_on_failure=True,
+                ),
                 mute_manager=uc.server_mute_manager,
                 state_path=ANNOUNCED_NOTIFICATIONS_PATH,
             )
@@ -433,6 +438,20 @@ async def _start_background_monitors(
     if uc.client:
         try:
             await uc.client.connect()
+            if not uc.client.is_connected:
+                # connect() logs and returns rather than raising. Monitors
+                # still start (they reconnect on each poll, and Unraid may
+                # just be booting), but a wrong key must not stay silent.
+                for cid in chat_id_store.get_all_chat_ids():
+                    try:
+                        await send_with_retry(
+                            bot.send_message,
+                            chat_id=cid,
+                            text="⚠️ Can't reach the Unraid API yet. I'll keep retrying.\n"
+                                 "If this keeps up, check UNRAID_API_KEY and the host setting.",
+                        )
+                    except Exception as send_err:
+                        logger.error(f"Failed to send Unraid warning to {cid}: {send_err}")
             if uc.system_monitor:
                 bg.add_task(asyncio.create_task(uc.system_monitor.start()))
                 logger.info("Unraid system monitoring started")

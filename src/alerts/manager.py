@@ -213,7 +213,7 @@ Uptime: {uptime_str}"""
         if len(error_line) > self.error_display_max_chars:
             display_error = error_line[:self.error_display_max_chars] + "..."
 
-        cooldown_str = self._format_duration(self.cooldown_seconds)
+        cooldown_str = format_uptime(self.cooldown_seconds)
         safe_name = escape_markdown(container_name)
 
         if total_errors > 1:
@@ -284,7 +284,7 @@ Latest: `{display_error}`
             memory_percent: Memory usage percentage.
             cpu_percent: CPU usage percentage.
         """
-        duration_str = self._format_duration(duration_seconds)
+        duration_str = format_uptime(duration_seconds)
         memory_display = format_bytes(memory_bytes)
         memory_limit_display = format_bytes(memory_limit)
 
@@ -425,15 +425,3 @@ Exceeded for: {duration_str}
             logger.info(f"Sent recovery alert for {container_name}")
         except Exception as e:
             logger.error(f"Failed to send recovery alert: {e}")
-
-    @staticmethod
-    def _format_duration(seconds: int) -> str:
-        """Format duration in human-readable form."""
-        if seconds >= 3600:
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            return f"{hours}h {minutes}m"
-        minutes = seconds // 60
-        if minutes > 0:
-            return f"{minutes} minutes" if minutes > 1 else "1 minute"
-        return f"{seconds} seconds"

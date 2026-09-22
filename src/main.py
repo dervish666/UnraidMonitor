@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 
 _shutting_down = False
+# Strong refs to signal-handler tasks; the loop only keeps weak ones.
+_shutdown_tasks: set[asyncio.Task[None]] = set()
 
 async def _graceful_shutdown(dp: Dispatcher) -> None:
     """Signal handler: stop polling so the finally block runs."""
@@ -96,7 +98,7 @@ async def main() -> None:
         logger.info("Starting Telegram bot (setup wizard mode)...")
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, lambda: asyncio.create_task(_graceful_shutdown(dp)))
+            loop.add_signal_handler(sig, lambda: _shutdown_tasks.add(asyncio.create_task(_graceful_shutdown(dp))))
         try:
             await dp.start_polling(bot)
         finally:
@@ -149,7 +151,7 @@ async def main() -> None:
         logger.info("Starting Telegram bot...")
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, lambda: asyncio.create_task(_graceful_shutdown(dp)))
+            loop.add_signal_handler(sig, lambda: _shutdown_tasks.add(asyncio.create_task(_graceful_shutdown(dp))))
         try:
             await dp.start_polling(bot)
         finally:

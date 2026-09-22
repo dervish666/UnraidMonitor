@@ -108,7 +108,10 @@ class UnraidNotificationMonitor:
         self._state_path = state_path
         self._seen: list[str] = _load_seen(state_path) if state_path else []
         self._seen_set: set[str] = set(self._seen)
-        self._primed = bool(self._seen)
+        # Primed once a state file exists, even an empty one. Keying on a
+        # non-empty list re-primed on every restart when the feed was empty,
+        # silently marking anything that arrived meanwhile as seen.
+        self._primed = bool(self._seen) or bool(state_path and os.path.exists(state_path))
 
     @property
     def is_running(self) -> bool:
@@ -153,6 +156,8 @@ class UnraidNotificationMonitor:
             self._primed = True
             self._remember([n.get("id", "") for n in notifications if n.get("id")])
             logger.info(f"Primed notification relay with {len(notifications)} existing notification(s)")
+            if self._state_path:
+                await asyncio.to_thread(_save_seen, self._state_path, list(self._seen))
             return 0
 
         floor = _importance_rank(self._config.notifications_min_importance)
@@ -192,14 +197,17 @@ class UnraidNotificationMonitor:
             # Never drop silently.
             logger.warning(f"{overflow} further notification(s) held back this poll")
             if not muted:
-                await self._on_alert(
-                    title="🔔 More Unraid Notifications",
-                    message=(
-                        f"{overflow} further notification(s) this cycle were not sent "
-                        f"to avoid flooding the chat. Check the Unraid web UI."
-                    ),
-                    alert_type="server",
-                )
+                try:
+                    await self._on_alert(
+                        title="🔔 More Unraid Notifications",
+                        message=(
+                            f"{overflow} further notification(s) this cycle were not sent "
+                            f"to avoid flooding the chat. Check the Unraid web UI."
+                        ),
+                        alert_type="server",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send notification overflow notice: {e}")
 
         if self._state_path:
             await asyncio.to_thread(_save_seen, self._state_path, list(self._seen))

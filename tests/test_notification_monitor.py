@@ -217,3 +217,35 @@ def test_message_survives_an_empty_notification():
     body = UnraidNotificationMonitor._format_message({})
 
     assert body == "(no detail provided)"
+
+
+@pytest.mark.asyncio
+async def test_empty_feed_priming_survives_a_restart(tmp_path):
+    """Priming on an empty feed must persist, or every restart re-primes and
+    silently swallows whatever arrived while the bot was down (audit 2026-09-22)."""
+    state = str(tmp_path / "announced_notifications.json")
+    monitor, _, _ = _monitor([], state_path=state, primed=False)
+    await monitor.check_once()
+
+    restarted, sent, _ = _monitor([_notification("new")], state_path=state, primed=False)
+    relayed = await restarted.check_once()
+
+    assert relayed == 1
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_server_alert_handler_raises_when_nothing_delivered():
+    """The relay only retries if its alert handler reports the failure."""
+    from src.monitor_callbacks import make_server_alert_handler
+
+    chat_ids = MagicMock()
+    chat_ids.get_all_chat_ids.return_value = [1]
+    bot = MagicMock()
+    bot.send_message = AsyncMock(side_effect=RuntimeError("telegram down"))
+    handler = make_server_alert_handler(
+        chat_ids, bot, MagicMock(), lambda s: s, [None], raise_on_failure=True,
+    )
+
+    with pytest.raises(RuntimeError):
+        await handler("Disk Problem", "d", "server")

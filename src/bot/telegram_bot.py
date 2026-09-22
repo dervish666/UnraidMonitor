@@ -6,6 +6,14 @@ from aiogram.filters import Command, Filter
 from aiogram.types import ErrorEvent, Message, CallbackQuery, TelegramObject
 import docker
 
+from src.constants import (
+    DIAGNOSE_MAX_LINES,
+    DIAGNOSTIC_BRIEF_MAX_TOKENS,
+    DIAGNOSTIC_CONTEXT_EXPIRY_SECONDS,
+    DIAGNOSTIC_DETAIL_MAX_TOKENS,
+    LOG_MAX_CHARS,
+    LOG_MAX_LINES,
+)
 from src.state import ContainerStateManager
 from src.bot.commands import help_command, help_section_callback, help_back_callback, status_command, logs_command
 from src.bot.control_commands import (
@@ -92,7 +100,30 @@ from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 
 if TYPE_CHECKING:
+    from src.alerts.array_mute_manager import ArrayMuteManager
+    from src.alerts.ignore_manager import IgnoreManager
+    from src.alerts.mute_manager import MuteManager
+    from src.alerts.recent_errors import RecentErrorsBuffer
+    from src.alerts.server_mute_manager import ServerMuteManager
+    from src.analysis.pattern_analyzer import PatternAnalyzer
+    from src.config import (
+        AIConfig,
+        AutoHealConfig,
+        BotConfig,
+        ImageUpdatesConfig,
+        MemoryConfig,
+        NutConfig,
+        ResourceConfig,
+        UnraidConfig,
+    )
+    from src.monitors.image_update_monitor import ImageUpdateMonitor
     from src.monitors.memory_monitor import MemoryMonitor
+    from src.monitors.resource_monitor import ResourceMonitor
+    from src.nut.monitor import UpsMonitor
+    from src.services.llm.registry import ProviderRegistry
+    from src.services.nl_processor import NLProcessor
+    from src.unraid.monitors.array_monitor import ArrayMonitor
+    from src.unraid.monitors.system_monitor import UnraidSystemMonitor
     from src.bot.setup_wizard import SetupWizard
 
 logger = logging.getLogger(__name__)
@@ -194,9 +225,9 @@ def create_dispatcher(allowed_users: list[int], chat_id_store: Any = None) -> Di
 
 def _register_ignore_commands(
     dp: Dispatcher,
-    ignore_manager: Any,
-    recent_errors_buffer: Any,
-    pattern_analyzer: Any | None,
+    ignore_manager: "IgnoreManager",
+    recent_errors_buffer: "RecentErrorsBuffer",
+    pattern_analyzer: "PatternAnalyzer | None",
 ) -> None:
     """Register /ignore and /ignores commands with selection callbacks."""
     selection_state = IgnoreSelectionState()
@@ -219,12 +250,12 @@ def _register_ignore_commands(
 
 def _register_unraid_commands(
     dp: Dispatcher,
-    unraid_system_monitor: Any | None,
-    server_mute_manager: Any | None,
-    array_mute_manager: Any | None,
-    array_monitor: Any | None,
-    unraid_config: Any | None,
-    ups_monitor: Any | None = None,
+    unraid_system_monitor: "UnraidSystemMonitor | None",
+    server_mute_manager: "ServerMuteManager | None",
+    array_mute_manager: "ArrayMuteManager | None",
+    array_monitor: "ArrayMonitor | None",
+    unraid_config: "UnraidConfig | None",
+    ups_monitor: "UpsMonitor | None" = None,
 ) -> None:
     """Register Unraid server/array/disk/UPS commands and alert button callbacks."""
     if unraid_system_monitor is not None:
@@ -261,7 +292,7 @@ def _register_memory_commands(
     dp: Dispatcher,
     memory_monitor: "MemoryMonitor | None",
     protected_containers: list[str] | None,
-    memory_config: Any | None = None,
+    memory_config: "MemoryConfig | None" = None,
 ) -> None:
     """Register memory management commands and kill/restart button callbacks.
 
@@ -295,21 +326,21 @@ def _register_memory_commands(
 def _register_manage_commands(
     dp: Dispatcher,
     state: ContainerStateManager,
-    ignore_manager: Any,
-    mute_manager: Any,
-    resource_monitor: Any | None,
-    unraid_system_monitor: Any | None,
-    server_mute_manager: Any | None,
-    array_mute_manager: Any | None,
-    image_update_monitor: Any | None = None,
-    image_updates_config: Any | None = None,
-    auto_heal_config: Any | None = None,
-    memory_config: Any | None = None,
+    ignore_manager: "IgnoreManager",
+    mute_manager: "MuteManager",
+    resource_monitor: "ResourceMonitor | None",
+    unraid_system_monitor: "UnraidSystemMonitor | None",
+    server_mute_manager: "ServerMuteManager | None",
+    array_mute_manager: "ArrayMuteManager | None",
+    image_update_monitor: "ImageUpdateMonitor | None" = None,
+    image_updates_config: "ImageUpdatesConfig | None" = None,
+    auto_heal_config: "AutoHealConfig | None" = None,
+    memory_config: "MemoryConfig | None" = None,
     protected_containers: list[str] | None = None,
     restart_cb: Callable[[], Awaitable[None]] | None = None,
-    unraid_config: Any | None = None,
-    nut_config: Any | None = None,
-    ups_monitor: Any | None = None,
+    unraid_config: "UnraidConfig | None" = None,
+    nut_config: "NutConfig | None" = None,
+    ups_monitor: "UpsMonitor | None" = None,
 ) -> None:
     """Register /manage dashboard command and all its sub-callbacks."""
     dp.message.register(manage_command(unraid_system_monitor), Command("manage"))
@@ -389,28 +420,28 @@ def register_commands(
     state: ContainerStateManager,
     docker_client: docker.DockerClient | None = None,
     protected_containers: list[str] | None = None,
-    registry: Any | None = None,
-    resource_monitor: Any | None = None,
-    resource_config: Any | None = None,
-    ignore_manager: Any | None = None,
-    recent_errors_buffer: Any | None = None,
-    mute_manager: Any | None = None,
-    unraid_system_monitor: Any | None = None,
-    server_mute_manager: Any | None = None,
-    array_mute_manager: Any | None = None,
-    array_monitor: Any | None = None,
-    unraid_config: Any | None = None,
+    registry: "ProviderRegistry | None" = None,
+    resource_monitor: "ResourceMonitor | None" = None,
+    resource_config: "ResourceConfig | None" = None,
+    ignore_manager: "IgnoreManager | None" = None,
+    recent_errors_buffer: "RecentErrorsBuffer | None" = None,
+    mute_manager: "MuteManager | None" = None,
+    unraid_system_monitor: "UnraidSystemMonitor | None" = None,
+    server_mute_manager: "ServerMuteManager | None" = None,
+    array_mute_manager: "ArrayMuteManager | None" = None,
+    array_monitor: "ArrayMonitor | None" = None,
+    unraid_config: "UnraidConfig | None" = None,
     memory_monitor: "MemoryMonitor | None" = None,
-    memory_config: Any | None = None,
-    pattern_analyzer: Any | None = None,
-    nl_processor: Any | None = None,
-    ai_config: Any | None = None,
-    bot_config: Any | None = None,
-    image_update_monitor: Any | None = None,
-    image_updates_config: Any | None = None,
-    auto_heal_config: Any | None = None,
-    nut_config: Any | None = None,
-    ups_monitor: Any | None = None,
+    memory_config: "MemoryConfig | None" = None,
+    pattern_analyzer: "PatternAnalyzer | None" = None,
+    nl_processor: "NLProcessor | None" = None,
+    ai_config: "AIConfig | None" = None,
+    bot_config: "BotConfig | None" = None,
+    image_update_monitor: "ImageUpdateMonitor | None" = None,
+    image_updates_config: "ImageUpdatesConfig | None" = None,
+    auto_heal_config: "AutoHealConfig | None" = None,
+    nut_config: "NutConfig | None" = None,
+    ups_monitor: "UpsMonitor | None" = None,
     restart_cb: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[ContainerController | None, DiagnosticService | None]:
     """Register all command handlers.
@@ -423,9 +454,9 @@ def register_commands(
     dp.message.register(status_command(state, resource_monitor), Command("status"))
 
     if docker_client:
-        _log_max_lines = bot_config.log_max_lines if bot_config else 100
-        _log_max_chars = bot_config.log_max_chars if bot_config else 4000
-        _diagnose_max_lines = bot_config.diagnose_max_lines if bot_config else 500
+        _log_max_lines = bot_config.log_max_lines if bot_config else LOG_MAX_LINES
+        _log_max_chars = bot_config.log_max_chars if bot_config else LOG_MAX_CHARS
+        _diagnose_max_lines = bot_config.diagnose_max_lines if bot_config else DIAGNOSE_MAX_LINES
 
         dp.message.register(
             logs_command(state, docker_client, max_lines=_log_max_lines, max_chars=_log_max_chars), Command("logs"),
@@ -443,9 +474,9 @@ def register_commands(
             docker_client,
             registry=registry,
             feature="diagnostic",
-            brief_max_tokens=ai_config.diagnostic_brief_max_tokens if ai_config else 300,
-            detail_max_tokens=ai_config.diagnostic_detail_max_tokens if ai_config else 800,
-            context_expiry_seconds=ai_config.diagnostic_context_expiry_seconds if ai_config else 600,
+            brief_max_tokens=ai_config.diagnostic_brief_max_tokens if ai_config else DIAGNOSTIC_BRIEF_MAX_TOKENS,
+            detail_max_tokens=ai_config.diagnostic_detail_max_tokens if ai_config else DIAGNOSTIC_DETAIL_MAX_TOKENS,
+            context_expiry_seconds=ai_config.diagnostic_context_expiry_seconds if ai_config else DIAGNOSTIC_CONTEXT_EXPIRY_SECONDS,
         )
         dp.message.register(diagnose_command(state, diagnostic_service, max_lines=_diagnose_max_lines), Command("diagnose"))
         dp.callback_query.register(diag_details_callback(diagnostic_service), F.data.startswith("diag_details:"))

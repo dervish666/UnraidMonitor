@@ -97,6 +97,9 @@ class BaseMuteManager:
             expired = [key for key, exp in self._mutes.items() if now >= exp]
             for key in expired:
                 del self._mutes[key]
+                # Same bookkeeping as the is-muted path, or listing mutes
+                # first would swallow the "mute expired" notice.
+                self._recently_expired.append(key)
             if expired:
                 self._dirty = True
 

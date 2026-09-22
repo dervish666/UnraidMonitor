@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError
 
-from src.utils.telegram_retry import send_with_retry, with_telegram_retry
+from src.utils.telegram_retry import send_with_retry
 
 
 class TestSendWithRetry:
@@ -62,55 +62,3 @@ class TestSendWithRetry:
 
         # Should only try once
         mock_func.assert_called_once()
-
-
-class TestWithTelegramRetryDecorator:
-    """Tests for the with_telegram_retry decorator."""
-
-    @pytest.mark.asyncio
-    async def test_decorator_success(self):
-        """Decorated function succeeds normally."""
-        @with_telegram_retry(max_retries=3)
-        async def my_func(value):
-            return value * 2
-
-        result = await my_func(5)
-        assert result == 10
-
-    @pytest.mark.asyncio
-    async def test_decorator_retries_rate_limit(self):
-        """Decorated function retries on rate limit."""
-        call_count = 0
-
-        @with_telegram_retry(max_retries=3)
-        async def my_func():
-            nonlocal call_count
-            call_count += 1
-            if call_count < 2:
-                raise TelegramRetryAfter(retry_after=0.01, method=MagicMock(), message="Rate limited")
-            return "success"
-
-        result = await my_func()
-        assert result == "success"
-        assert call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_decorator_raises_after_max_retries(self):
-        """Decorated function raises after max retries."""
-        @with_telegram_retry(max_retries=2)
-        async def my_func():
-            raise TelegramRetryAfter(retry_after=0.01, method=MagicMock(), message="Rate limited")
-
-        with pytest.raises(TelegramRetryAfter):
-            await my_func()
-
-    @pytest.mark.asyncio
-    async def test_decorator_preserves_function_name(self):
-        """Decorator preserves function metadata."""
-        @with_telegram_retry(max_retries=3)
-        async def my_special_func():
-            """My docstring."""
-            return "result"
-
-        assert my_special_func.__name__ == "my_special_func"
-        assert "My docstring" in (my_special_func.__doc__ or "")

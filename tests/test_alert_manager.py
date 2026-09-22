@@ -288,7 +288,7 @@ async def test_send_resource_alert_cpu():
     assert "plex" in text
     assert "CPU: 92.5%" in text
     assert "threshold: 80%" in text
-    assert "3 minutes" in text
+    assert "Exceeded for: 3m" in text
 
 
 @pytest.mark.asyncio
@@ -321,7 +321,7 @@ async def test_send_resource_alert_memory():
     assert "HIGH MEMORY USAGE" in text
     assert "radarr" in text
     assert "Memory: 95.0%" in text
-    assert "4 minutes" in text
+    assert "Exceeded for: 4m" in text
 
 
 @pytest.mark.asyncio

@@ -184,7 +184,7 @@ class ProviderRegistry:
         self._default_model_name = resolved
         self._provider_cache.clear()
         self._persist_selection(provider_name, model_name)
-        self._persist_to_config(default_model=model_name, default_provider=provider_name)
+        self._persist_to_config(default_model=model_name)
 
     def set_feature_model(self, feature: str, model_name: str) -> str:
         """Set a per-feature model override and persist. Returns the resolved ID."""
@@ -301,11 +301,17 @@ class ProviderRegistry:
 
     @staticmethod
     def _model_sort_key(model_id: str) -> tuple[int, int, str]:
-        """Extract (major, minor, full_id) for sorting model versions."""
-        m = re.search(r"-(\d+)-(\d+)", model_id)
-        if m:
-            return (int(m.group(1)), int(m.group(2)), model_id)
-        return (0, 0, model_id)
+        """Extract (major, minor, full_id) for sorting model versions.
+
+        The date suffix is stripped first: read as a version number it made
+        claude-sonnet-4-20250514 outrank claude-sonnet-4-5, and a single-number
+        ID such as claude-sonnet-5 matched nothing and sorted below both.
+        """
+        base = re.sub(r"-\d{8}$", "", model_id)
+        nums = [int(n) for n in re.findall(r"-(\d{1,3})(?=-|$)", base)]
+        major = nums[0] if nums else 0
+        minor = nums[1] if len(nums) > 1 else 0
+        return (major, minor, model_id)
 
     # ------------------------------------------------------------------
     # Provider auto-detection
@@ -484,7 +490,6 @@ class ProviderRegistry:
         self,
         *,
         default_model: str | None = None,
-        default_provider: str | None = None,
         feature: str | None = None,
         feature_model: str | None = None,
     ) -> None:
@@ -504,8 +509,6 @@ class ProviderRegistry:
 
             if default_model is not None:
                 ai["default_model"] = default_model
-            if default_provider is not None:
-                ai["default_provider"] = default_provider
             if feature is not None and feature_model is not None:
                 models = ai.setdefault("models", {})
                 models[feature] = feature_model

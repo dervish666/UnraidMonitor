@@ -58,6 +58,7 @@ async def test_diagnostic_service_gathers_context():
         },
         "RestartCount": 2,
         "Config": {
+            "Image": "linuxserver/overseerr:latest",
             "Env": ["PUID=99", "PGID=100", "TZ=Europe/London", "API_KEY=secret123"],
         },
         "HostConfig": {
@@ -68,7 +69,6 @@ async def test_diagnostic_service_gathers_context():
             {"Source": "/mnt/user/appdata/overseerr", "Destination": "/config", "Mode": "rw"},
         ],
     }
-    mock_container.image.tags = ["linuxserver/overseerr:latest"]
 
     mock_client = MagicMock()
     mock_client.containers.get.return_value = mock_container

@@ -1,7 +1,7 @@
 """Manage command for ignores and mutes."""
 
 import logging
-from typing import Any, Callable, Awaitable, TYPE_CHECKING
+from typing import Callable, Awaitable, TYPE_CHECKING
 
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -22,6 +22,15 @@ if TYPE_CHECKING:
     from src.state import ContainerStateManager
     from src.monitors.resource_monitor import ResourceMonitor
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
+    from src.config import (
+        AutoHealConfig,
+        ImageUpdatesConfig,
+        MemoryConfig,
+        NutConfig,
+        UnraidConfig,
+    )
+    from src.monitors.image_update_monitor import ImageUpdateMonitor
+    from src.nut.monitor import UpsMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -516,33 +525,33 @@ class ContainerSelectionState:
         self._selections.pop(user_id, None)
 
 
-def _image_updates_state(image_update_monitor: Any) -> str:
+def _image_updates_state(image_update_monitor: "ImageUpdateMonitor | None") -> str:
     """One-word state label for image-update detection."""
     return "✅ On" if image_update_monitor is not None else "⚪ Off"
 
 
-def _auto_heal_state(auto_heal_config: Any) -> str:
+def _auto_heal_state(auto_heal_config: "AutoHealConfig | None") -> str:
     """State label for auto-heal, including opted-in container count."""
     if auto_heal_config is not None and auto_heal_config.enabled and auto_heal_config.containers:
         return f"✅ {len(auto_heal_config.containers)} container(s)"
     return "⚪ Off"
 
 
-def _memory_restart_state(memory_config: Any) -> str:
+def _memory_restart_state(memory_config: "MemoryConfig | None") -> str:
     """State label for the memory restart list, including container count."""
     if memory_config is not None and memory_config.restart_containers:
         return f"✅ {len(memory_config.restart_containers)} container(s)"
     return "⚪ Off"
 
 
-def _notifications_state(unraid_config: Any) -> str:
+def _notifications_state(unraid_config: "UnraidConfig | None") -> str:
     """State label for the Unraid notification relay, including its floor."""
     if unraid_config is not None and unraid_config.notifications_enabled:
         return f"✅ On ({unraid_config.notifications_min_importance}+)"
     return "⚪ Off"
 
 
-def _ups_state(nut_config: Any, ups_monitor: Any) -> str:
+def _ups_state(nut_config: "NutConfig | None", ups_monitor: "UpsMonitor | None") -> str:
     """State label for UPS monitoring, saying plainly when it cannot see a UPS."""
     if nut_config is None or not nut_config.enabled:
         return "⚪ Off"
@@ -554,12 +563,12 @@ def _ups_state(nut_config: Any, ups_monitor: Any) -> str:
 
 
 def _build_features_view(
-    image_update_monitor: Any,
-    auto_heal_config: Any,
-    memory_config: Any = None,
-    unraid_config: Any = None,
-    nut_config: Any = None,
-    ups_monitor: Any = None,
+    image_update_monitor: "ImageUpdateMonitor | None",
+    auto_heal_config: "AutoHealConfig | None",
+    memory_config: "MemoryConfig | None" = None,
+    unraid_config: "UnraidConfig | None" = None,
+    nut_config: "NutConfig | None" = None,
+    ups_monitor: "UpsMonitor | None" = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build the Features panel text and keyboard."""
     image_on = image_update_monitor is not None
@@ -644,12 +653,12 @@ def _build_features_view(
 
 
 def manage_features_callback(
-    image_update_monitor: Any = None,
-    auto_heal_config: Any = None,
-    memory_config: Any = None,
-    unraid_config: Any = None,
-    nut_config: Any = None,
-    ups_monitor: Any = None,
+    image_update_monitor: "ImageUpdateMonitor | None" = None,
+    auto_heal_config: "AutoHealConfig | None" = None,
+    memory_config: "MemoryConfig | None" = None,
+    unraid_config: "UnraidConfig | None" = None,
+    nut_config: "NutConfig | None" = None,
+    ups_monitor: "UpsMonitor | None" = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the Features panel (manage:features)."""
 
@@ -665,14 +674,45 @@ def manage_features_callback(
     return handler
 
 
+def _toggle_is_on(callback: CallbackQuery) -> bool:
+    """True for a feat:<name>:on button, False for :off."""
+    return (callback.data or "").rsplit(":", 1)[-1] == "on"
+
+
+async def _restart_to_apply(
+    callback: CallbackQuery,
+    enable: bool,
+    label: str,
+    restart_cb: Callable[[], Awaitable[None]] | None,
+    in_sentence: str | None = None,
+) -> None:
+    """Finish a Features toggle whose monitor is only built at startup.
+
+    Restarts the bot when it can; otherwise says a restart is needed.
+    in_sentence is the label as it reads mid-sentence, when that differs.
+    """
+    await callback.answer()
+    if restart_cb is not None:
+        if callback.message:
+            verb = "Enabling" if enable else "Disabling"
+            await safe_edit(
+                callback.message,
+                f"♻️ {verb} {in_sentence or label} — restarting to apply…",
+            )
+        await restart_cb()
+    elif callback.message:
+        word = "enabled" if enable else "disabled"
+        await safe_edit(callback.message, f"{label} {word}. Restart the bot to apply.")
+
+
 def feat_notifications_callback(
-    unraid_config: Any,
-    image_update_monitor: Any = None,
-    auto_heal_config: Any = None,
-    memory_config: Any = None,
+    unraid_config: "UnraidConfig | None",
+    image_update_monitor: "ImageUpdateMonitor | None" = None,
+    auto_heal_config: "AutoHealConfig | None" = None,
+    memory_config: "MemoryConfig | None" = None,
     restart_cb: Callable[[], Awaitable[None]] | None = None,
-    nut_config: Any = None,
-    ups_monitor: Any = None,
+    nut_config: "NutConfig | None" = None,
+    ups_monitor: "UpsMonitor | None" = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the notification relay buttons (feat:notif:on|off|level).
 
@@ -706,28 +746,13 @@ def feat_notifications_callback(
 
         enable = action == "on"
         unraid_config.set_notifications_enabled(enable)
-        await callback.answer()
-
-        if restart_cb is not None:
-            if callback.message:
-                verb = "Enabling" if enable else "Disabling"
-                await safe_edit(
-                    callback.message,
-                    f"♻️ {verb} Unraid notifications — restarting to apply…",
-                )
-            await restart_cb()
-        elif callback.message:
-            word = "enabled" if enable else "disabled"
-            await safe_edit(
-                callback.message,
-                f"Unraid notifications {word}. Restart the bot to apply.",
-            )
+        await _restart_to_apply(callback, enable, "Unraid notifications", restart_cb)
 
     return handler
 
 
 def feat_image_toggle_callback(
-    image_updates_config: Any,
+    image_updates_config: "ImageUpdatesConfig | None",
     restart_cb: Callable[[], Awaitable[None]] | None = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the image-update enable/disable button (feat:img:on|off).
@@ -737,25 +762,10 @@ def feat_image_toggle_callback(
     """
 
     async def handler(callback: CallbackQuery) -> None:
-        enable = (callback.data or "").endswith(":on")
+        enable = _toggle_is_on(callback)
         if image_updates_config is not None:
             image_updates_config.set_enabled(enable)
-        await callback.answer()
-
-        if restart_cb is not None:
-            if callback.message:
-                verb = "Enabling" if enable else "Disabling"
-                await safe_edit(
-                    callback.message,
-                    f"♻️ {verb} image updates — restarting to apply…",
-                )
-            await restart_cb()
-        elif callback.message:
-            word = "enabled" if enable else "disabled"
-            await safe_edit(
-                callback.message,
-                f"Image updates {word}. Restart the bot to apply.",
-            )
+        await _restart_to_apply(callback, enable, "Image updates", restart_cb, "image updates")
 
     return handler
 
@@ -823,27 +833,75 @@ def _build_memres_picker(
     )
 
 
-def feat_heal_open_callback(
+def _open_picker(
     state: "ContainerStateManager",
-    auto_heal_config: Any,
     selection_state: ContainerSelectionState,
-    protected_containers: list[str] | None = None,
+    protected_containers: list[str] | None,
+    build_picker: Callable[[list[str], set[str]], tuple[str, InlineKeyboardMarkup]],
+    current: Callable[[], list[str]],
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
-    """Factory that opens the auto-heal container picker (feat:heal)."""
+    """Shared open handler for the Features container pickers."""
 
     async def handler(callback: CallbackQuery) -> None:
         user_id = callback.from_user.id if callback.from_user else 0
-        current = list(auto_heal_config.containers) if auto_heal_config is not None else []
-        selection_state.init(user_id, current)
+        selection_state.init(user_id, current())
 
         candidates = _picker_candidates(state, protected_containers)
-        text, keyboard = _build_heal_picker(candidates, selection_state.get(user_id))
+        text, keyboard = build_picker(candidates, selection_state.get(user_id))
 
         await callback.answer()
         if callback.message:
             await safe_edit(callback.message, text, reply_markup=keyboard)
 
     return handler
+
+
+def _save_picker(
+    selection_state: ContainerSelectionState,
+    apply: Callable[[list[str]], list[str]],
+    label: str,
+    off_word: str,
+    render_features: Callable[[], tuple[str, InlineKeyboardMarkup]],
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Shared Save handler for the Features container pickers.
+
+    apply persists the selection and returns what was actually saved. Both
+    lists apply live: the running service shares the config object.
+    """
+
+    async def handler(callback: CallbackQuery) -> None:
+        user_id = callback.from_user.id if callback.from_user else 0
+        selected = sorted(selection_state.get(user_id))
+        saved = apply(selected)
+        selection_state.clear(user_id)
+
+        count = len(saved)
+        answer = f"{label} {'on for ' + str(count) + ' container(s)' if count else off_word}"
+        # The setters drop names that fail validation — unreachable via the
+        # picker, but if it ever happens the user should hear about it.
+        dropped = len(selected) - len(saved)
+        if dropped:
+            answer += f" ({dropped} invalid name(s) skipped)"
+        await callback.answer(answer)
+        if callback.message:
+            text, keyboard = render_features()
+            await safe_edit(callback.message, text, reply_markup=keyboard)
+
+    return handler
+
+
+def feat_heal_open_callback(
+    state: "ContainerStateManager",
+    auto_heal_config: "AutoHealConfig | None",
+    selection_state: ContainerSelectionState,
+    protected_containers: list[str] | None = None,
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory that opens the auto-heal container picker (feat:heal)."""
+
+    return _open_picker(
+        state, selection_state, protected_containers, _build_heal_picker,
+        lambda: list(auto_heal_config.containers) if auto_heal_config is not None else [],
+    )
 
 
 def _toggle_in_picker(
@@ -898,13 +956,13 @@ def feat_heal_toggle_callback(
 
 
 def feat_heal_save_callback(
-    auto_heal_config: Any,
+    auto_heal_config: "AutoHealConfig | None",
     selection_state: ContainerSelectionState,
-    image_update_monitor: Any = None,
-    memory_config: Any = None,
-    unraid_config: Any = None,
-    nut_config: Any = None,
-    ups_monitor: Any = None,
+    image_update_monitor: "ImageUpdateMonitor | None" = None,
+    memory_config: "MemoryConfig | None" = None,
+    unraid_config: "UnraidConfig | None" = None,
+    nut_config: "NutConfig | None" = None,
+    ups_monitor: "UpsMonitor | None" = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the picker Save button (fh_save).
 
@@ -912,54 +970,33 @@ def feat_heal_save_callback(
     so no restart is needed.
     """
 
-    async def handler(callback: CallbackQuery) -> None:
-        user_id = callback.from_user.id if callback.from_user else 0
-        selected = sorted(selection_state.get(user_id))
-        saved = selected
-        if auto_heal_config is not None:
-            auto_heal_config.set_containers(selected)
-            saved = list(auto_heal_config.containers)
-        selection_state.clear(user_id)
+    def apply(selected: list[str]) -> list[str]:
+        if auto_heal_config is None:
+            return selected
+        auto_heal_config.set_containers(selected)
+        return list(auto_heal_config.containers)
 
-        count = len(saved)
-        answer = f"Auto-heal {'on for ' + str(count) + ' container(s)' if count else 'disabled'}"
-        # set_containers drops names that fail validation — unreachable via the
-        # picker, but if it ever happens the user should hear about it.
-        dropped = len(selected) - len(saved)
-        if dropped:
-            answer += f" ({dropped} invalid name(s) skipped)"
-        await callback.answer(answer)
-        if callback.message:
-            text, keyboard = _build_features_view(
-                image_update_monitor, auto_heal_config, memory_config, unraid_config,
-                nut_config, ups_monitor,
-            )
-            await safe_edit(callback.message, text, reply_markup=keyboard)
-
-    return handler
+    return _save_picker(
+        selection_state, apply, "Auto-heal", "disabled",
+        lambda: _build_features_view(
+            image_update_monitor, auto_heal_config, memory_config, unraid_config,
+            nut_config, ups_monitor,
+        ),
+    )
 
 
 def feat_memres_open_callback(
     state: "ContainerStateManager",
-    memory_config: Any,
+    memory_config: "MemoryConfig | None",
     selection_state: ContainerSelectionState,
     protected_containers: list[str] | None = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory that opens the memory-restart container picker (feat:memres)."""
 
-    async def handler(callback: CallbackQuery) -> None:
-        user_id = callback.from_user.id if callback.from_user else 0
-        current = list(memory_config.restart_containers) if memory_config is not None else []
-        selection_state.init(user_id, current)
-
-        candidates = _picker_candidates(state, protected_containers)
-        text, keyboard = _build_memres_picker(candidates, selection_state.get(user_id))
-
-        await callback.answer()
-        if callback.message:
-            await safe_edit(callback.message, text, reply_markup=keyboard)
-
-    return handler
+    return _open_picker(
+        state, selection_state, protected_containers, _build_memres_picker,
+        lambda: list(memory_config.restart_containers) if memory_config is not None else [],
+    )
 
 
 def feat_memres_toggle_callback(
@@ -974,13 +1011,13 @@ def feat_memres_toggle_callback(
 
 
 def feat_memres_save_callback(
-    memory_config: Any,
+    memory_config: "MemoryConfig | None",
     selection_state: ContainerSelectionState,
-    image_update_monitor: Any = None,
-    auto_heal_config: Any = None,
-    unraid_config: Any = None,
-    nut_config: Any = None,
-    ups_monitor: Any = None,
+    image_update_monitor: "ImageUpdateMonitor | None" = None,
+    auto_heal_config: "AutoHealConfig | None" = None,
+    unraid_config: "UnraidConfig | None" = None,
+    nut_config: "NutConfig | None" = None,
+    ups_monitor: "UpsMonitor | None" = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the memory-restart picker Save button (mr_save).
 
@@ -989,33 +1026,23 @@ def feat_memres_save_callback(
     restart.
     """
 
-    async def handler(callback: CallbackQuery) -> None:
-        user_id = callback.from_user.id if callback.from_user else 0
-        selected = sorted(selection_state.get(user_id))
-        saved = selected
-        if memory_config is not None:
-            memory_config.set_restart_containers(selected)
-            saved = list(memory_config.restart_containers)
-        selection_state.clear(user_id)
+    def apply(selected: list[str]) -> list[str]:
+        if memory_config is None:
+            return selected
+        memory_config.set_restart_containers(selected)
+        return list(memory_config.restart_containers)
 
-        count = len(saved)
-        answer = f"Memory restarts {'on for ' + str(count) + ' container(s)' if count else 'off'}"
-        dropped = len(selected) - len(saved)
-        if dropped:
-            answer += f" ({dropped} invalid name(s) skipped)"
-        await callback.answer(answer)
-        if callback.message:
-            text, keyboard = _build_features_view(
-                image_update_monitor, auto_heal_config, memory_config, unraid_config,
-                nut_config, ups_monitor,
-            )
-            await safe_edit(callback.message, text, reply_markup=keyboard)
-
-    return handler
+    return _save_picker(
+        selection_state, apply, "Memory restarts", "off",
+        lambda: _build_features_view(
+            image_update_monitor, auto_heal_config, memory_config, unraid_config,
+            nut_config, ups_monitor,
+        ),
+    )
 
 
 def feat_ups_toggle_callback(
-    nut_config: Any,
+    nut_config: "NutConfig | None",
     restart_cb: Callable[[], Awaitable[None]] | None = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for the UPS monitoring toggle (feat:ups:on|off).
@@ -1029,23 +1056,8 @@ def feat_ups_toggle_callback(
             await callback.answer("UPS monitoring is not configured")
             return
 
-        enable = (callback.data or "").rsplit(":", 1)[-1] == "on"
+        enable = _toggle_is_on(callback)
         nut_config.set_enabled(enable)
-        await callback.answer()
-
-        if restart_cb is not None:
-            if callback.message:
-                verb = "Enabling" if enable else "Disabling"
-                await safe_edit(
-                    callback.message,
-                    f"♻️ {verb} UPS monitoring — restarting to apply…",
-                )
-            await restart_cb()
-        elif callback.message:
-            word = "enabled" if enable else "disabled"
-            await safe_edit(
-                callback.message,
-                f"UPS monitoring {word}. Restart the bot to apply.",
-            )
+        await _restart_to_apply(callback, enable, "UPS monitoring", restart_cb)
 
     return handler

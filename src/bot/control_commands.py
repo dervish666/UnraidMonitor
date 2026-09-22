@@ -4,6 +4,7 @@ from typing import Callable, Awaitable
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ChatAction
 
+from src.models import ContainerInfo
 from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
 from src.utils.formatting import safe_reply, safe_edit, validate_container_name, escape_markdown
@@ -21,18 +22,24 @@ ACTION_EMOJI = {
 VALID_ACTIONS = {"restart", "stop", "start", "pull"}
 
 
-def _find_container(state: ContainerStateManager, query: str) -> tuple[str | None, str | None]:
-    """Find container by name, return (container_name, error_message)."""
+def resolve_container(
+    state: ContainerStateManager, query: str
+) -> tuple[ContainerInfo | None, str | None]:
+    """Resolve a partial name to one container: (container, None) or (None, error).
+
+    The error is Markdown for safe_reply, with names escaped so an underscore
+    in a container name can't break the parse.
+    """
     matches = state.find_by_name(query)
 
     if not matches:
-        return None, f"❌ No container found matching '{query}'"
+        return None, f"❌ No container found matching '{escape_markdown(query)}'"
 
     if len(matches) > 1:
-        names = ", ".join(m.name for m in matches)
+        names = ", ".join(escape_markdown(m.name) for m in matches)
         return None, f"Multiple matches found: {names}\n\n_Be more specific_"
 
-    return matches[0].name, None
+    return matches[0], None
 
 
 def build_confirmation(action: str, container_name: str, status: str) -> tuple[str, InlineKeyboardMarkup]:
@@ -73,7 +80,8 @@ def _control_command(
             return
 
         query = parts[1]
-        container_name, error = _find_container(state, query)
+        container, error = resolve_container(state, query)
+        container_name = container.name if container else None
 
         if error:
             await safe_reply(message, error)

@@ -3,7 +3,7 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Awaitable, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 import docker
 
@@ -12,6 +12,11 @@ if TYPE_CHECKING:
     from src.alerts.recent_errors import RecentErrorsBuffer
 
 logger = logging.getLogger(__name__)
+
+# Pause before re-following a container whose log stream ended cleanly. A
+# stopped container ends a follow stream in a few milliseconds, so without
+# this the watcher re-queries Docker in a tight loop until it starts again.
+LOG_STREAM_RETRY_SECONDS = 10.0
 
 # Matches the bot's own Python logging output so we never alert on our own logs.
 # Format: "2026-02-12 20:39:54,770 - src.some.module - LEVEL - message"
@@ -111,6 +116,10 @@ class LogWatcher:
         self._running = False
         self._tasks: list[asyncio.Task[None]] = []
         self._total_drops: int = 0
+        # Open follow streams, so stop() can close them. A worker thread blocked
+        # reading a quiet container only wakes when its socket closes, and the
+        # executor's threads are joined at interpreter exit.
+        self._streams: set[Any] = set()
         self._thread_pool = ThreadPoolExecutor(
             max_workers=max(len(containers), 4),
             thread_name_prefix="logwatch",
@@ -149,6 +158,11 @@ class LogWatcher:
     def stop(self) -> None:
         """Stop watching logs."""
         self._running = False
+        for stream in list(self._streams):
+            try:
+                stream.close()
+            except Exception as e:
+                logger.debug(f"Error closing log stream: {e}")
         self._thread_pool.shutdown(wait=False)
         for task in self._tasks:
             task.cancel()
@@ -159,6 +173,8 @@ class LogWatcher:
         while self._running:
             try:
                 await self._stream_logs(container_name)
+                if self._running:
+                    await asyncio.sleep(LOG_STREAM_RETRY_SECONDS)
             except docker.errors.NotFound:
                 logger.warning(f"Container {container_name} not found, waiting...")
                 await asyncio.sleep(30)
@@ -171,7 +187,7 @@ class LogWatcher:
         if not self._client:
             return
 
-        container = self._client.containers.get(container_name)
+        container = await asyncio.to_thread(self._client.containers.get, container_name)
 
         # Use queue to bridge blocking log stream to async processing
         # Bounded to prevent unbounded memory growth during error storms
@@ -205,6 +221,7 @@ class LogWatcher:
             nonlocal log_stream
             try:
                 log_stream = container.logs(stream=True, follow=True, tail=0)
+                self._streams.add(log_stream)
                 for line in log_stream:
                     if not self._running:
                         break
@@ -220,19 +237,18 @@ class LogWatcher:
             finally:
                 # Close the log stream to release resources
                 if log_stream is not None:
+                    self._streams.discard(log_stream)
                     try:
                         log_stream.close()
-                    except Exception:
-                        pass
-                # Signal end of stream — never drop the sentinel
-                while True:
-                    try:
-                        loop.call_soon_threadsafe(_safe_put, None)
-                        break
-                    except asyncio.QueueFull:
-                        time.sleep(0.1)
-                    except RuntimeError:
-                        break  # Event loop closed during shutdown
+                    except Exception as e:
+                        logger.debug(f"Error closing log stream for {container_name}: {e}")
+                # Signal end of stream. _safe_put drops this if the queue is
+                # full; the consumer also checks stream_task.done() so a
+                # dropped sentinel cannot strand it.
+                try:
+                    loop.call_soon_threadsafe(_safe_put, None)
+                except RuntimeError:
+                    pass  # Event loop closed during shutdown
 
         stream_future = loop.run_in_executor(self._thread_pool, stream_to_queue)
         stream_task = asyncio.ensure_future(stream_future)
@@ -243,6 +259,8 @@ class LogWatcher:
                 try:
                     line = await asyncio.wait_for(queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
+                    if stream_task.done() and queue.empty():
+                        break  # Stream ended and its sentinel was dropped
                     continue
 
                 if line is None:  # End of stream

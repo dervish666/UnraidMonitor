@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 # Minimum seconds between repeated alerts of the same type
 _ALERT_COOLDOWN = 300  # 5 minutes
+# Consecutive over-threshold polls before a CPU usage alert: one 30s sample is
+# a compile or a scan, two in a row is load worth hearing about.
+_CPU_SUSTAINED_POLLS = 2
 
 # How long cached metrics remain valid before a fresh fetch is needed
 _CACHE_TTL = 30  # seconds
@@ -43,6 +46,7 @@ class UnraidSystemMonitor:
         self._mute_manager = mute_manager
         self._running = False
         self._last_alert_times: dict[str, float] = {}
+        self._cpu_over_polls = 0
         self._cached_metrics: dict[str, Any] | None = None
         self._cached_array: dict[str, Any] | None = None
         self._metrics_cache_time: float = 0.0
@@ -110,6 +114,10 @@ class UnraidSystemMonitor:
         # Check CPU usage
         cpu_percent = metrics.get("cpu_percent", 0)
         if cpu_percent > self._config.cpu_usage_threshold:
+            self._cpu_over_polls += 1
+        else:
+            self._cpu_over_polls = 0
+        if self._cpu_over_polls >= _CPU_SUSTAINED_POLLS:
             temp_info = f"\nTemperature: {cpu_temp:.1f}°C" if cpu_temp is not None else ""
             await self._rate_limited_alert(
                 key="cpu_usage",

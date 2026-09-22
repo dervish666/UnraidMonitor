@@ -178,6 +178,27 @@ def test_parse_container_stats_with_cache():
     assert result.memory_percent == 37.5
 
 
+def test_parse_container_stats_cgroup_v2_inactive_file():
+    """cgroup v2 has no "cache" key; page cache is "inactive_file". Measured on
+    the Tower (Unraid 7.2.4): plex read 1437 MiB here vs 1141 in `docker stats`
+    before this was subtracted (audit 2026-09-22 L8)."""
+    from src.monitors.resource_monitor import parse_container_stats
+
+    docker_stats = {
+        "cpu_stats": {"cpu_usage": {"total_usage": 0}, "system_cpu_usage": 0, "online_cpus": 2},
+        "precpu_stats": {"cpu_usage": {"total_usage": 0}, "system_cpu_usage": 0},
+        "memory_stats": {
+            "usage": 1_437 * 1024**2,
+            "stats": {"inactive_file": 294 * 1024**2, "active_file": 50 * 1024**2},
+            "limit": 16 * 1024**3,
+        },
+    }
+
+    result = parse_container_stats("plex", docker_stats)
+
+    assert result.memory_bytes == 1_143 * 1024**2
+
+
 def test_parse_container_stats_network_io():
     """Test parsing network I/O from Docker stats."""
     from src.monitors.resource_monitor import parse_container_stats

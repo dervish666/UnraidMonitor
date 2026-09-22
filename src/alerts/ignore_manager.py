@@ -142,7 +142,8 @@ class IgnoreManager:
         with self._lock:
             # Check config ignores (always substring, case-insensitive)
             message_lower = message.lower()
-            message_stripped_lower = strip_log_timestamps(message).lower()
+            message_stripped = strip_log_timestamps(message)
+            message_stripped_lower = message_stripped.lower()
             for pattern in self._config_ignores.get(container, []):
                 pattern_lower = pattern.lower()
                 if pattern_lower in message_lower or pattern_lower in message_stripped_lower:
@@ -150,7 +151,7 @@ class IgnoreManager:
 
             # Check runtime ignores (can be regex or substring)
             for ignore_pattern in self._runtime_ignores.get(container, []):
-                if ignore_pattern.matches(message) or ignore_pattern.matches(strip_log_timestamps(message)):
+                if ignore_pattern.matches(message) or ignore_pattern.matches(message_stripped):
                     return True
 
             return False
@@ -173,6 +174,11 @@ class IgnoreManager:
         Returns:
             Tuple of (success, message). If success is False, message explains why.
         """
+        # An empty pattern is a substring of every line and would silently
+        # ignore every error for the container.
+        if not pattern.strip():
+            return False, "Pattern is empty"
+
         # Validate regex patterns for safety (outside lock to avoid holding it during expensive validation)
         if match_type == "regex":
             is_valid, error = validate_regex_pattern(pattern)

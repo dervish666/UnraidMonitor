@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from functools import wraps
 from typing import TypeVar, Callable, Awaitable, Any
 
 from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError
@@ -52,44 +51,3 @@ async def send_with_retry(
 
     return None
 
-
-def with_telegram_retry(max_retries: int = 3) -> Callable[..., Any]:
-    """Decorator for methods that send Telegram messages with retry logic.
-
-    Args:
-        max_retries: Maximum number of retry attempts for rate limits.
-
-    Returns:
-        Decorator function.
-    """
-    def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T | None]]:
-        @wraps(func)
-        async def wrapper(*args: Any, **kwargs: Any) -> T | None:
-            for attempt in range(max_retries + 1):
-                try:
-                    return await func(*args, **kwargs)
-                except TelegramRetryAfter as e:
-                    retry_after = e.retry_after
-                    if attempt < max_retries:
-                        logger.warning(
-                            f"Telegram rate limit in {func.__name__}, "
-                            f"retrying after {retry_after}s "
-                            f"(attempt {attempt + 1}/{max_retries + 1})"
-                        )
-                        await asyncio.sleep(retry_after)
-                    else:
-                        logger.error(
-                            f"Telegram rate limit in {func.__name__}, "
-                            f"max retries reached: {e}"
-                        )
-                        raise
-                except TelegramAPIError as e:
-                    # For other Telegram errors, don't retry
-                    logger.error(f"Telegram API error in {func.__name__}: {e}")
-                    raise
-
-            return None
-
-        return wrapper
-
-    return decorator

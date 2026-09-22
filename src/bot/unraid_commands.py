@@ -9,7 +9,7 @@ from aiogram.types import Message
 from aiogram.enums import ChatAction
 
 from src.alerts.mute_manager import parse_duration
-from src.utils.formatting import truncate_message, safe_reply, format_mute_expiry
+from src.utils.formatting import truncate_message, safe_reply, format_mute_expiry, format_uptime
 
 if TYPE_CHECKING:
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
@@ -20,43 +20,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def format_uptime(uptime_str: str) -> str:
-    """Format ISO timestamp uptime to human-readable format.
+def format_boot_uptime(uptime_str: str) -> str:
+    """Uptime from Unraid's boot timestamp (ISO, e.g. "2026-01-02T18:14:24.693Z").
 
-    Args:
-        uptime_str: Either an ISO timestamp (boot time) or already formatted string.
-
-    Returns:
-        Human-readable uptime like "24 days, 19 hours".
+    Anything that doesn't parse is shown as given.
     """
     if not uptime_str:
         return "Unknown"
-
-    # Try to parse as ISO timestamp
     try:
-        # Handle ISO format like "2026-01-02T18:14:24.693Z"
         boot_time = datetime.fromisoformat(uptime_str.replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)
-        delta = now - boot_time
-
-        days = delta.days
-        hours = delta.seconds // 3600
-        minutes = (delta.seconds % 3600) // 60
-
-        parts = []
-        if days > 0:
-            parts.append(f"{days} day{'s' if days != 1 else ''}")
-        if hours > 0:
-            parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
-        if not parts and minutes > 0:
-            parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
-        if not parts:
-            return "Just started"
-
-        return ", ".join(parts)
     except (ValueError, TypeError):
-        # Already formatted or unknown format
         return uptime_str
+    return format_uptime(int((datetime.now(timezone.utc) - boot_time).total_seconds()))
 
 
 async def format_server_brief(system_monitor: "UnraidSystemMonitor") -> str | None:
@@ -73,7 +48,7 @@ async def format_server_brief(system_monitor: "UnraidSystemMonitor") -> str | No
     cpu = metrics.get("cpu_percent") or 0
     temp = metrics.get("cpu_temperature")
     memory = metrics.get("memory_percent") or 0
-    uptime = format_uptime(metrics.get("uptime", ""))
+    uptime = format_boot_uptime(metrics.get("uptime", ""))
 
     temp_str = f" ({temp:.1f}°C)" if temp is not None else ""
     return (
@@ -104,7 +79,7 @@ async def format_server_detailed(system_monitor: "UnraidSystemMonitor") -> str |
     memory_gb = (metrics.get("memory_used") or 0) / (1024**3)
     memory_total_gb = (metrics.get("memory_total") or 0) / (1024**3)
     memory_cached_gb = (metrics.get("memory_cached") or 0) / (1024**3)
-    uptime = format_uptime(metrics.get("uptime", ""))
+    uptime = format_boot_uptime(metrics.get("uptime", ""))
 
     lines = [
         "🖥️ *Unraid Server Status*\n",

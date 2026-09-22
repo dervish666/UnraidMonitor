@@ -272,14 +272,29 @@ class MemoryMonitor:
                 logger.info("Memory returned to normal levels")
 
         elif self._state == MemoryState.CRITICAL:
-            if percent < self._config.warning_threshold:
+            # Every state must handle both directions, or the monitor goes
+            # quiet for good. Dropping out of the critical band re-arms it: a
+            # later climb back re-enters CRITICAL through WARNING and alerts,
+            # which it could not do while parked here after a cancelled or
+            # skipped kill.
+            if percent < self._config.critical_threshold:
                 if self._killed_containers:
                     self._state = MemoryState.RECOVERING
-                else:
+                elif percent < self._config.warning_threshold:
                     self._state = MemoryState.NORMAL
+                    self._restart_prompted = False
+                else:
+                    self._state = MemoryState.WARNING
 
         elif self._state == MemoryState.RECOVERING:
-            if percent <= self._config.safe_threshold and self._killed_containers and not self._restart_prompted:
+            if percent >= self._config.critical_threshold:
+                self._state = MemoryState.CRITICAL
+                await self._handle_critical(percent)
+            elif (
+                percent <= self._config.safe_threshold
+                and self._killed_containers
+                and not self._restart_prompted
+            ):
                 container = self._killed_containers[0]
                 self._restart_prompted = True
                 await self._on_ask_restart(container)
@@ -350,11 +365,14 @@ class MemoryMonitor:
                 "Memory Critical - No Action Available", message, "critical", [], restartable,
             )
 
-    async def _execute_kill_countdown(self) -> None:
-        """Execute the kill countdown for pending container."""
+    async def _execute_kill_countdown(self) -> bool:
+        """Execute the kill countdown for pending container.
+
+        Returns True if a container was stopped.
+        """
         async with self._kill_lock:
             if not self._pending_kill:
-                return
+                return False
             container_name = self._pending_kill
             self._kill_cancel_event = asyncio.Event()
             cancel_event = self._kill_cancel_event
@@ -369,7 +387,7 @@ class MemoryMonitor:
                 logger.info(f"Kill of {container_name} was cancelled")
                 self._pending_kill = None
                 self._kill_cancel_event = None
-            return
+            return False
         except asyncio.TimeoutError:
             pass
 
@@ -377,17 +395,19 @@ class MemoryMonitor:
             if self._pending_kill != container_name:
                 logger.info(f"Pending kill changed, aborting kill of {container_name}")
                 self._kill_cancel_event = None
-                return
+                return False
 
             if cancel_event.is_set():
                 logger.info(f"Kill of {container_name} was cancelled (late)")
                 self._pending_kill = None
                 self._kill_cancel_event = None
-                return
+                return False
 
+            killed = False
             percent = self.get_memory_percent()
             if percent >= self._config.critical_threshold:
                 freed = await self._stop_container(container_name)
+                killed = container_name in self._killed_containers
                 now_percent, available = self._system_memory()
                 freed_note = f" It was using ~{format_bytes(freed)}." if freed else ""
                 await self._on_alert(
@@ -403,6 +423,7 @@ class MemoryMonitor:
 
             self._pending_kill = None
             self._kill_cancel_event = None
+            return killed
 
     async def cancel_pending_kill(self) -> bool:
         """Cancel a pending kill. Returns True if there was one to cancel."""
@@ -431,7 +452,11 @@ class MemoryMonitor:
                 container.stop(timeout=10)
 
             await asyncio.to_thread(_do_kill)
-            if name not in self._killed_containers:
+            # Track it for the restart prompt only inside a pressure event.
+            # Outside one (a kill button on an Unraid server alert) nothing
+            # would ever clear the entry, and it would be excluded from
+            # auto-kill for the life of the process.
+            if self._state != MemoryState.NORMAL and name not in self._killed_containers:
                 self._killed_containers.append(name)
             logger.info(f"Stopped container {name} via kill button")
             percent, available = self._system_memory()
@@ -514,8 +539,9 @@ class MemoryMonitor:
                 self._killed_containers.remove(name)
                 logger.info(f"User declined restart of {name}")
 
+            # Re-arm so the next killed container gets its own prompt.
+            self._restart_prompted = False
             if not self._killed_containers:
-                self._restart_prompted = False
                 self._state = MemoryState.NORMAL
 
     def get_killed_containers(self) -> list[str]:
@@ -537,12 +563,15 @@ class MemoryMonitor:
 
                 # Handle kill countdown if in critical state with pending kill
                 if self._state == MemoryState.CRITICAL and self._pending_kill:
-                    await self._execute_kill_countdown()
-
-                    # After kill, wait for stabilization
-                    if self._killed_containers:
-                        self._state = MemoryState.RECOVERING
+                    if await self._execute_kill_countdown():
+                        # Wait for stabilization, then either line up the
+                        # next kill or start recovering.
                         await asyncio.sleep(self._config.stabilization_wait)
+                        percent = self.get_memory_percent()
+                        if percent >= self._config.critical_threshold:
+                            await self._handle_critical(percent)
+                        else:
+                            self._state = MemoryState.RECOVERING
                         continue
 
                 await asyncio.sleep(self._check_interval)

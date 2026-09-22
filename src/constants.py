@@ -8,7 +8,6 @@ DEFAULT_COOLDOWN_SECONDS = 900
 # ---------------------------------------------------------------------------
 # Bot display defaults
 # ---------------------------------------------------------------------------
-CONFIRMATION_TIMEOUT_SECONDS = 60
 LOG_MAX_LINES = 100
 LOG_MAX_CHARS = 4000
 NL_LOG_MAX_CHARS = 3000
@@ -156,6 +155,13 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.22.0": [
+        "Stopping a watched container no longer makes the bot hammer Docker. It was re-checking hundreds of times a second until the container came back",
+        "A crash alert can no longer be silenced by the error alert just before it, and \"RESTART LOOP\" now fires for containers that crash a minute or more apart",
+        "Memory pressure handling can no longer get stuck and go quiet, and container memory now matches docker stats on Unraid 7 instead of counting the disk cache",
+        "A power cut that starts while UPS alerts are muted is reported when the mute ends, if you're still on battery",
+        "Ignore Similar now works on long error lines. It used to save a pattern that could never match",
+    ],
     "0.21.3": [
         "Mute a container for a week. Resource alerts now have a 🔕 Mute 1w button next to 1h and 24h, for the jobs that legitimately hog the machine for weeks at a time. /mute <name> 1w does the same from the keyboard",
         "CPU limits now go as high as your server does. Docker counts a container using four whole cores as 400%, so an 8-core machine tops out at 800%. The Raise CPU Limit button used to stop at 400 no matter what your server had; it now offers every step up to your real ceiling and tells you what that ceiling is",

@@ -2,15 +2,15 @@
 
 import logging
 import time
-from datetime import timedelta
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from aiogram.enums import ChatAction
 from aiogram.types import CallbackQuery, Message
 
+from src.bot.alert_callbacks import category_mute_callback
 from src.nut.client import STATUS_MEANINGS
 from src.nut.monitor import format_duration, format_runtime, parse_status
-from src.utils.formatting import format_mute_expiry, safe_reply, truncate_message
+from src.utils.formatting import safe_reply, truncate_message
 
 if TYPE_CHECKING:
     from src.alerts.server_mute_manager import ServerMuteManager
@@ -160,26 +160,9 @@ def ups_command(
 def ups_mute_callback(
     mute_manager: "ServerMuteManager",
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
-    """Factory for the mute buttons on a UPS alert (ups_mute:<minutes>)."""
+    """Factory for the mute buttons on a UPS alert (ups_mute:<minutes>).
 
-    async def handler(callback: CallbackQuery) -> None:
-        raw = (callback.data or "").rsplit(":", 1)[-1]
-        try:
-            minutes = int(raw)
-        except ValueError:
-            await callback.answer("Bad mute duration")
-            return
-        if minutes <= 0:
-            await callback.answer("Bad mute duration")
-            return
-
-        expiry = mute_manager.mute_ups(timedelta(minutes=minutes))
-        await callback.answer("UPS alerts muted")
-        if isinstance(callback.message, Message):
-            await safe_reply(
-                callback.message,
-                f"\U0001f507 *Muted UPS alerts* {format_mute_expiry(expiry)}\n\n"
-                f"Use `/unmute-server` to clear it early.",
-            )
-
-    return handler
+    Undo points at /unmute-server, which clears system, array and UPS mutes
+    together; there is no UPS-only unmute yet.
+    """
+    return category_mute_callback(mute_manager.mute_ups, "UPS", "/unmute-server")

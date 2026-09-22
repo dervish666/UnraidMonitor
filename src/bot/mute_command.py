@@ -1,11 +1,10 @@
 import logging
 from typing import Callable, Awaitable, TYPE_CHECKING
-from datetime import timedelta
 
 from aiogram.types import Message
 
 from src.alerts.mute_manager import parse_duration
-from src.utils.formatting import extract_container_from_alert, truncate_message, safe_reply, format_mute_expiry, escape_markdown
+from src.utils.formatting import extract_container_from_alert, truncate_message, safe_reply, format_mute_expiry, escape_markdown, format_uptime
 
 if TYPE_CHECKING:
     from src.alerts.mute_manager import MuteManager
@@ -120,24 +119,12 @@ def mute_command(
 
         mute_msg = (
             f"🔇 *Muted {escape_markdown(container)}* {format_mute_expiry(expiry)}\n\n"
-            f"All alerts suppressed for {format_duration(duration)}.\n"
+            f"All alerts suppressed for {format_uptime(int(duration.total_seconds()))}.\n"
             f"Use `/unmute {container}` to unmute early."
         )
         await safe_reply(message, mute_msg)
 
     return handler
-
-
-def format_duration(delta: timedelta) -> str:
-    """Format timedelta for display."""
-    total_minutes = int(delta.total_seconds() / 60)
-    if total_minutes >= 60:
-        hours = total_minutes // 60
-        mins = total_minutes % 60
-        if mins:
-            return f"{hours}h {mins}m"
-        return f"{hours}h"
-    return f"{total_minutes}m"
 
 
 def mutes_command(

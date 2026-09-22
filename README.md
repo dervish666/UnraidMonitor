@@ -38,6 +38,14 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 | <img src="screenshots/manage-dashboard.png" alt="The /manage dashboard showing server CPU, RAM and uptime with buttons for Status, Resources, Server, Disks, Manage Ignores, Manage Mutes and Features" width="420"> | <img src="screenshots/command-menu.png" alt="Telegram autocomplete listing the bot commands with a one-line description of each" width="420"> |
 | **The `/manage` hub.** Server vitals at the top, then every panel one tap away, feature toggles included. | **Commands, if you want them.** The menu is built from what your install actually has enabled, so it never offers something the bot cannot do. |
 
+## What's New in v0.22.0
+
+- **Stopping a watched container no longer hammers Docker** - The log watcher re-checked a stopped container hundreds of times a second until it came back. It now waits between checks
+- **Crash alerts get through** - An error alert no longer silences the crash alert that follows it, and "RESTART LOOP" now fires for containers crashing a minute or more apart
+- **Memory handling can't get stuck** - Four ways the memory monitor could go quiet for good are fixed, and container memory now matches `docker stats` on Unraid 7 instead of counting the disk cache
+- **UPS and mutes** - A power cut that starts during a mute is reported when the mute ends if you're still on battery, and `/ups` during a network blip no longer hides a real outage
+- **Ignore Similar works on long errors** - It used to save a pattern that could never match
+
 ## What's New in v0.21.2
 
 - **Replying to an alert now picks the right container** - `/mute`, `/ignore` and `/diagnose` read the container name off the alert you replied to. Replying to a restart-loop alert used to mute a container called "4" (the crash count) and tell you it had worked. Reply-to-alert `/diagnose` had never worked on anything but resource alerts

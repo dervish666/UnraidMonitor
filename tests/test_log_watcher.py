@@ -261,3 +261,68 @@ def test_log_watcher_accepts_ignore_manager_and_buffer():
 
     assert watcher.ignore_manager is ignore_manager
     assert watcher.recent_errors_buffer is recent_buffer
+
+
+@pytest.mark.asyncio
+async def test_stopped_container_does_not_hot_loop():
+    """A stopped container ends a follow stream at once; the watcher must pause
+    before re-querying Docker instead of spinning (audit 2026-09-22 L1)."""
+    import asyncio
+    from src.monitors import log_watcher as lw
+
+    watcher = lw.LogWatcher(containers=["stopped"], error_patterns=["error"], ignore_patterns=[])
+    mock_client = MagicMock()
+    mock_container = MagicMock()
+    mock_container.logs.side_effect = lambda **_: iter([])
+    mock_client.containers.get.return_value = mock_container
+    watcher._client = mock_client
+    watcher._running = True
+
+    with patch.object(lw, "LOG_STREAM_RETRY_SECONDS", 0.2):
+        task = asyncio.create_task(watcher._watch_container("stopped"))
+        await asyncio.sleep(0.5)
+        watcher._running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert mock_client.containers.get.call_count <= 4
+
+
+@pytest.mark.asyncio
+async def test_dropped_sentinel_does_not_strand_consumer():
+    """If the end-of-stream sentinel is dropped, _stream_logs still returns
+    once the stream thread has finished (audit 2026-09-22 L7)."""
+    import asyncio
+    from src.monitors.log_watcher import LogWatcher
+
+    watcher = LogWatcher(containers=["c"], error_patterns=["error"], ignore_patterns=[])
+    mock_client = MagicMock()
+    mock_container = MagicMock()
+    mock_container.logs.return_value = iter([b"hello\n"])
+    mock_client.containers.get.return_value = mock_container
+    watcher._client = mock_client
+    watcher._running = True
+
+    real_put = asyncio.Queue.put_nowait
+
+    def drop_sentinel(self: asyncio.Queue, item: object) -> None:  # type: ignore[type-arg]
+        if item is None:
+            raise asyncio.QueueFull
+        real_put(self, item)
+
+    with patch.object(asyncio.Queue, "put_nowait", drop_sentinel):
+        await asyncio.wait_for(watcher._stream_logs("c"), timeout=5)
+
+
+def test_stop_closes_open_streams():
+    """stop() closes follow streams so blocked worker threads wake up."""
+    from src.monitors.log_watcher import LogWatcher
+
+    watcher = LogWatcher(containers=["c"], error_patterns=["error"], ignore_patterns=[])
+    stream = MagicMock()
+    watcher._streams.add(stream)
+    watcher.stop()
+    stream.close.assert_called_once()

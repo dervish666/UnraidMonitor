@@ -3,7 +3,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 from pydantic import field_validator
@@ -12,7 +12,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from src.constants import (
     AUTOHEAL_MAX_RESTARTS,
     AUTOHEAL_WINDOW_MINUTES,
-    CONFIRMATION_TIMEOUT_SECONDS,
     DEFAULT_COOLDOWN_SECONDS,
     DEFAULT_CPU_PERCENT,
     DEFAULT_HAIKU_MODEL,
@@ -149,9 +148,7 @@ class AIConfig:
     diagnostic_context_expiry_seconds: int = DIAGNOSTIC_CONTEXT_EXPIRY_SECONDS
 
     # Multi-provider settings
-    default_provider: str = "anthropic"
     default_model: str = DEFAULT_HAIKU_MODEL
-    anthropic_prompt_caching: bool = True
     ollama_host: str = DEFAULT_OLLAMA_HOST
     # Default model used when Ollama is auto-selected as the provider
     ollama_default_model: str = DEFAULT_OLLAMA_MODEL
@@ -175,9 +172,7 @@ class AIConfig:
             nl_max_conversation_exchanges=nl.get("max_conversation_exchanges", NL_MAX_CONVERSATION_EXCHANGES),
             pattern_analyzer_context_lines=data.get("pattern_analyzer_context_lines", PATTERN_ANALYZER_CONTEXT_LINES),
             diagnostic_context_expiry_seconds=data.get("diagnostic_context_expiry_seconds", DIAGNOSTIC_CONTEXT_EXPIRY_SECONDS),
-            default_provider=data.get("default_provider", "anthropic"),
             default_model=data.get("default_model", DEFAULT_HAIKU_MODEL),
-            anthropic_prompt_caching=providers.get("anthropic", {}).get("prompt_caching", True),
             ollama_host=providers.get("ollama", {}).get("host", DEFAULT_OLLAMA_HOST),
             ollama_default_model=providers.get("ollama", {}).get("default_model", DEFAULT_OLLAMA_MODEL),
         )
@@ -187,7 +182,6 @@ class AIConfig:
 class BotConfig:
     """Configuration for Telegram bot display and behaviour."""
 
-    confirmation_timeout_seconds: int = CONFIRMATION_TIMEOUT_SECONDS
     log_max_lines: int = LOG_MAX_LINES
     log_max_chars: int = LOG_MAX_CHARS
     nl_log_max_chars: int = NL_LOG_MAX_CHARS
@@ -199,7 +193,6 @@ class BotConfig:
         """Create BotConfig from YAML dict."""
         log_display = data.get("log_display", {})
         return cls(
-            confirmation_timeout_seconds=data.get("confirmation_timeout_seconds", CONFIRMATION_TIMEOUT_SECONDS),
             log_max_lines=log_display.get("max_lines", LOG_MAX_LINES),
             log_max_chars=log_display.get("max_chars", LOG_MAX_CHARS),
             nl_log_max_chars=log_display.get("nl_max_chars", NL_LOG_MAX_CHARS),
@@ -287,20 +280,14 @@ class ResourceConfig:
 
     def _persist(self) -> None:
         """Write current container_overrides back to config.yaml."""
-        if not self.config_path:
-            return
-        path = Path(self.config_path)
-        if not path.exists():
-            return
+        def _update(data: dict[str, Any]) -> None:
+            rm = data.setdefault("resource_monitoring", {})
+            if self.container_overrides:
+                rm["containers"] = self.container_overrides
+            else:
+                rm.pop("containers", None)
 
-        data = load_yaml_config(str(path))
-        rm = data.setdefault("resource_monitoring", {})
-        if self.container_overrides:
-            rm["containers"] = self.container_overrides
-        else:
-            rm.pop("containers", None)
-
-        atomic_yaml_write(data, path)
+        update_yaml_config(self.config_path, _update)
 
 
 @dataclass
@@ -367,15 +354,10 @@ class MemoryConfig:
         The section's other keys (thresholds, killable list, etc.) keep
         whatever is currently on disk.
         """
-        if not self.config_path:
-            return
-        path = Path(self.config_path)
-        if not path.exists():
-            return
+        def _update(data: dict[str, Any]) -> None:
+            data.setdefault("memory_management", {})["restart_containers"] = self.restart_containers
 
-        data = load_yaml_config(str(path))
-        data.setdefault("memory_management", {})["restart_containers"] = self.restart_containers
-        atomic_yaml_write(data, path)
+        update_yaml_config(self.config_path, _update)
 
 
 @dataclass
@@ -404,18 +386,12 @@ class ImageUpdatesConfig:
 
     def _persist(self) -> None:
         """Write current image-update settings back to config.yaml."""
-        if not self.config_path:
-            return
-        path = Path(self.config_path)
-        if not path.exists():
-            return
+        def _update(data: dict[str, Any]) -> None:
+            section = data.setdefault("image_updates", {})
+            section["enabled"] = self.enabled
+            section["poll_interval_hours"] = self.poll_interval_hours
 
-        data = load_yaml_config(str(path))
-        section = data.setdefault("image_updates", {})
-        section["enabled"] = self.enabled
-        section["poll_interval_hours"] = self.poll_interval_hours
-
-        atomic_yaml_write(data, path)
+        update_yaml_config(self.config_path, _update)
 
 
 @dataclass
@@ -459,20 +435,14 @@ class AutoHealConfig:
 
     def _persist(self) -> None:
         """Write current auto-heal settings back to config.yaml."""
-        if not self.config_path:
-            return
-        path = Path(self.config_path)
-        if not path.exists():
-            return
+        def _update(data: dict[str, Any]) -> None:
+            section = data.setdefault("auto_heal", {})
+            section["enabled"] = self.enabled
+            section["containers"] = self.containers
+            section["max_restarts"] = self.max_restarts
+            section["window_minutes"] = self.window_minutes
 
-        data = load_yaml_config(str(path))
-        section = data.setdefault("auto_heal", {})
-        section["enabled"] = self.enabled
-        section["containers"] = self.containers
-        section["max_restarts"] = self.max_restarts
-        section["window_minutes"] = self.window_minutes
-
-        atomic_yaml_write(data, path)
+        update_yaml_config(self.config_path, _update)
 
 
 @dataclass
@@ -565,25 +535,19 @@ class UnraidConfig:
 
     def _persist(self) -> None:
         """Write current thresholds back to config.yaml."""
-        if not self.config_path:
-            return
-        path = Path(self.config_path)
-        if not path.exists():
-            return
+        def _update(data: dict[str, Any]) -> None:
+            unraid = data.setdefault("unraid", {})
+            thresholds = unraid.setdefault("thresholds", {})
+            thresholds["array_usage"] = self.array_usage_threshold
+            thresholds["disk_temp"] = self.disk_temp_threshold
+            thresholds["cpu_temp"] = self.cpu_temp_threshold
+            thresholds["cpu_usage"] = self.cpu_usage_threshold
 
-        data = load_yaml_config(str(path))
-        unraid = data.setdefault("unraid", {})
-        thresholds = unraid.setdefault("thresholds", {})
-        thresholds["array_usage"] = self.array_usage_threshold
-        thresholds["disk_temp"] = self.disk_temp_threshold
-        thresholds["cpu_temp"] = self.cpu_temp_threshold
-        thresholds["cpu_usage"] = self.cpu_usage_threshold
+            notifications = unraid.setdefault("notifications", {})
+            notifications["enabled"] = self.notifications_enabled
+            notifications["min_importance"] = self.notifications_min_importance
 
-        notifications = unraid.setdefault("notifications", {})
-        notifications["enabled"] = self.notifications_enabled
-        notifications["min_importance"] = self.notifications_min_importance
-
-        atomic_yaml_write(data, path)
+        update_yaml_config(self.config_path, _update)
 
     def set_notifications_enabled(self, enabled: bool) -> None:
         """Toggle the Unraid notification relay and persist to config.yaml.
@@ -606,6 +570,23 @@ class UnraidConfig:
             return
         self.notifications_min_importance = importance
         self._persist()
+
+
+def update_yaml_config(
+    config_path: str | None, update: Callable[[dict[str, Any]], None]
+) -> None:
+    """Load config.yaml, apply *update* to it, and write it back atomically.
+
+    No-op without a path or file: tests and first-run have nothing to persist.
+    """
+    if not config_path:
+        return
+    path = Path(config_path)
+    if not path.exists():
+        return
+    data = load_yaml_config(str(path))
+    update(data)
+    atomic_yaml_write(data, path)
 
 
 def load_yaml_config(path: str) -> dict[str, Any]:
@@ -723,26 +704,20 @@ class NutConfig:
 
     def _persist(self) -> None:
         """Write current NUT settings back to config.yaml."""
-        if not self.config_path:
-            return
-        path = Path(self.config_path)
-        if not path.exists():
-            return
+        def _update(data: dict[str, Any]) -> None:
+            section = data.setdefault("nut", {})
+            section["enabled"] = self.enabled
+            if self.host:
+                section["host"] = self.host
+            section["port"] = self.port
+            if self.ups_name:
+                section["ups_name"] = self.ups_name
+            section["poll_seconds"] = self.poll_seconds
+            thresholds = section.setdefault("thresholds", {})
+            thresholds["battery_charge"] = self.battery_charge_threshold
+            thresholds["load"] = self.load_threshold
 
-        data = load_yaml_config(str(path))
-        section = data.setdefault("nut", {})
-        section["enabled"] = self.enabled
-        if self.host:
-            section["host"] = self.host
-        section["port"] = self.port
-        if self.ups_name:
-            section["ups_name"] = self.ups_name
-        section["poll_seconds"] = self.poll_seconds
-        thresholds = section.setdefault("thresholds", {})
-        thresholds["battery_charge"] = self.battery_charge_threshold
-        thresholds["load"] = self.load_threshold
-
-        atomic_yaml_write(data, path)
+        update_yaml_config(self.config_path, _update)
 
 
 class AppConfig:
@@ -1017,7 +992,6 @@ class ConfigWriter:
                 "diagnostic_context_expiry_seconds": DIAGNOSTIC_CONTEXT_EXPIRY_SECONDS,
             },
             "bot": {
-                "confirmation_timeout_seconds": CONFIRMATION_TIMEOUT_SECONDS,
                 "log_display": {
                     "max_lines": LOG_MAX_LINES,
                     "max_chars": LOG_MAX_CHARS,
@@ -1080,117 +1054,3 @@ class ConfigWriter:
     def _write_yaml(self, config: dict[str, Any]) -> None:
         """Write config dict to the YAML file atomically."""
         atomic_yaml_write(config, self._path)
-
-
-DEFAULT_CONFIG_TEMPLATE = '''# Unraid Monitor Bot Configuration
-# Generated automatically on first run
-
-# AI / Claude API configuration
-ai:
-  models:
-    pattern_analyzer: "haiku"
-    nl_processor: "sonnet"
-    diagnostic: "haiku"
-  max_tokens:
-    pattern_analyzer: 500
-    nl_processor: 1024
-    diagnostic_brief: 300
-    diagnostic_detail: 800
-  nl_processor:
-    max_tool_iterations: 10
-    max_conversation_exchanges: 5
-  pattern_analyzer_context_lines: 30
-  diagnostic_context_expiry_seconds: 600
-
-# Bot display and behaviour settings
-bot:
-  confirmation_timeout_seconds: 60
-  log_display:
-    max_lines: 100
-    max_chars: 4000
-    nl_max_chars: 3000
-    diagnose_max_lines: 500
-  error_display_max_chars: 200
-
-# Docker connection settings
-docker:
-  socket_path: "unix:///var/run/docker.sock"
-
-# Containers to ignore (won't be monitored or shown)
-ignored_containers: []
-
-# Containers that cannot be controlled via Telegram
-protected_containers:
-  - unraid-monitor-bot
-
-# Log watching configuration
-log_watching:
-  containers: []  # Add container names to watch
-  error_patterns:
-    - "error"
-    - "exception"
-    - "fatal"
-    - "failed"
-    - "critical"
-    - "panic"
-    - "traceback"
-  ignore_patterns:
-    - "DeprecationWarning"
-    - "DEBUG"
-  cooldown_seconds: 900
-
-# Resource monitoring (CPU/memory per container)
-resource_monitoring:
-  enabled: true
-  poll_interval_seconds: 60
-  sustained_threshold_seconds: 120
-  defaults:
-    cpu_percent: 80
-    memory_percent: 85
-  containers: {}  # Per-container overrides, e.g.: plex: { cpu_percent: 95 }
-
-# Memory pressure management (system-wide)
-memory_management:
-  enabled: false
-  warning_threshold: 90
-  critical_threshold: 95
-  safe_threshold: 80
-  kill_delay_seconds: 60
-  stabilization_wait: 180
-  priority_containers: []
-  killable_containers: []
-
-# Unraid server monitoring
-unraid:
-  enabled: false
-  host: "your-unraid-ip"
-  port: 443
-  use_ssl: true
-  # WARNING: Set verify_ssl to true in production for security
-  # Only set to false if using self-signed certs and you understand the risk
-  verify_ssl: true
-  polling:
-    system: 30
-    array: 300
-  thresholds:
-    cpu_temp: 80
-    cpu_usage: 95
-    memory_usage: 90
-    disk_temp: 50
-    array_usage: 85
-'''
-
-
-def generate_default_config(config_path: str) -> bool:
-    """Generate default config file if it doesn't exist.
-
-    Returns True if config was created, False if it already existed.
-    """
-    path = Path(config_path)
-
-    if path.exists():
-        return False
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(DEFAULT_CONFIG_TEMPLATE)
-    return True

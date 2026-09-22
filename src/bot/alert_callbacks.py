@@ -754,34 +754,85 @@ def set_limit_callback(
     return handler
 
 
-def array_mute_callback(
-    array_mute_manager: "ArrayMuteManager",
+def category_mute_callback(
+    mute: Callable[[timedelta], Any],
+    label: str,
+    unmute_command: str,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
-    """Factory for array mute button callback handler."""
+    """Shared handler for the array/server/UPS mute buttons (<prefix>:<minutes>)."""
 
     async def handler(callback: CallbackQuery) -> None:
         minutes = await _parse_minutes_callback(callback)
         if minutes is None:
             return
 
-        array_mute_manager.mute_array(timedelta(minutes=minutes))
-
+        mute(timedelta(minutes=minutes))
         duration_str = format_duration_minutes(minutes)
-
-        await callback.answer(f"Muted array alerts for {duration_str}")
+        await callback.answer(f"Muted {label} alerts for {duration_str}")
 
         if callback.message:
             try:
                 await callback.message.answer(
-                    f"🔇 *Muted array alerts* for {duration_str}\n"
-                    f"Use `/unmute-array` to unmute early.",
+                    f"🔇 *Muted {label} alerts* for {duration_str}\n"
+                    f"Use `{unmute_command}` to unmute early.",
                     parse_mode="Markdown",
                 )
             except TelegramBadRequest:
                 await callback.message.answer(
-                    f"🔇 Muted array alerts for {duration_str}\n"
-                    f"Use /unmute-array to unmute early."
+                    f"🔇 Muted {label} alerts for {duration_str}\n"
+                    f"Use {unmute_command} to unmute early."
                 )
+
+    return handler
+
+
+def array_mute_callback(
+    array_mute_manager: "ArrayMuteManager",
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Factory for array mute button callback handler."""
+
+    return category_mute_callback(array_mute_manager.mute_array, "array", "/unmute-array")
+
+
+def _threshold_picker_callback(
+    set_prefix: str, allowed: set[str],
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Shared handler for <prefix>:<metric>:<current> — shows threshold options."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        if not callback.data:
+            return
+        parts = callback.data.split(":")
+        if len(parts) < 3:
+            await callback.answer("Invalid callback data")
+            return
+        try:
+            current = int(parts[2])
+        except ValueError:
+            current = 0
+        await _show_threshold_picker(callback, parts[1], current, set_prefix, allowed)
+
+    return handler
+
+
+def _threshold_set_callback(
+    unraid_config: UnraidConfig, allowed: set[str],
+) -> Callable[[CallbackQuery], Awaitable[None]]:
+    """Shared handler for <prefix>:<metric>:<value> — applies a threshold."""
+
+    async def handler(callback: CallbackQuery) -> None:
+        if not callback.data:
+            return
+        parts = callback.data.split(":")
+        if len(parts) < 3:
+            await callback.answer("Invalid callback data")
+            return
+        try:
+            value = int(parts[2])
+        except ValueError:
+            await callback.answer("Invalid threshold value")
+            return
+        await _apply_threshold(callback, parts[1], value, unraid_config, allowed)
 
     return handler
 
@@ -791,22 +842,7 @@ def array_threshold_callback(
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for array threshold adjustment button — shows options."""
 
-    async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-        parts = callback.data.split(":")
-        if len(parts) < 3:
-            await callback.answer("Invalid callback data")
-            return
-        try:
-            current = int(parts[2])
-        except ValueError:
-            current = 0
-        await _show_threshold_picker(
-            callback, parts[1], current, "arr_set", {"capacity", "disk_temp"},
-        )
-
-    return handler
+    return _threshold_picker_callback("arr_set", {"capacity", "disk_temp"})
 
 
 def array_set_threshold_callback(
@@ -814,23 +850,7 @@ def array_set_threshold_callback(
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for applying a selected array threshold."""
 
-    async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-        parts = callback.data.split(":")
-        if len(parts) < 3:
-            await callback.answer("Invalid callback data")
-            return
-        try:
-            value = int(parts[2])
-        except ValueError:
-            await callback.answer("Invalid threshold value")
-            return
-        await _apply_threshold(
-            callback, parts[1], value, unraid_config, {"array_usage", "disk_temp"},
-        )
-
-    return handler
+    return _threshold_set_callback(unraid_config, {"array_usage", "disk_temp"})
 
 
 def server_mute_callback(
@@ -838,31 +858,7 @@ def server_mute_callback(
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for server mute button callback handler."""
 
-    async def handler(callback: CallbackQuery) -> None:
-        minutes = await _parse_minutes_callback(callback)
-        if minutes is None:
-            return
-
-        server_mute_manager.mute_server(timedelta(minutes=minutes))
-
-        duration_str = format_duration_minutes(minutes)
-
-        await callback.answer(f"Muted server alerts for {duration_str}")
-
-        if callback.message:
-            try:
-                await callback.message.answer(
-                    f"🔇 *Muted server alerts* for {duration_str}\n"
-                    f"Use `/unmute-server` to unmute early.",
-                    parse_mode="Markdown",
-                )
-            except TelegramBadRequest:
-                await callback.message.answer(
-                    f"🔇 Muted server alerts for {duration_str}\n"
-                    f"Use /unmute-server to unmute early."
-                )
-
-    return handler
+    return category_mute_callback(server_mute_manager.mute_server, "server", "/unmute-server")
 
 
 def server_threshold_callback(
@@ -870,22 +866,7 @@ def server_threshold_callback(
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for server threshold adjustment button — shows options."""
 
-    async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-        parts = callback.data.split(":")
-        if len(parts) < 3:
-            await callback.answer("Invalid callback data")
-            return
-        try:
-            current = int(parts[2])
-        except ValueError:
-            current = 0
-        await _show_threshold_picker(
-            callback, parts[1], current, "srv_set", {"cpu_temp", "cpu_usage"},
-        )
-
-    return handler
+    return _threshold_picker_callback("srv_set", {"cpu_temp", "cpu_usage"})
 
 
 def server_set_threshold_callback(
@@ -893,23 +874,7 @@ def server_set_threshold_callback(
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for applying a selected server threshold."""
 
-    async def handler(callback: CallbackQuery) -> None:
-        if not callback.data:
-            return
-        parts = callback.data.split(":")
-        if len(parts) < 3:
-            await callback.answer("Invalid callback data")
-            return
-        try:
-            value = int(parts[2])
-        except ValueError:
-            await callback.answer("Invalid threshold value")
-            return
-        await _apply_threshold(
-            callback, parts[1], value, unraid_config, {"cpu_temp", "cpu_usage"},
-        )
-
-    return handler
+    return _threshold_set_callback(unraid_config, {"cpu_temp", "cpu_usage"})
 
 
 def pull_callback(

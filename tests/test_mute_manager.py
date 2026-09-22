@@ -110,3 +110,14 @@ def test_mute_manager_get_active_mutes(tmp_path):
     containers = {m[0] for m in mutes}
     assert "plex" in containers
     assert "radarr" in containers
+
+
+def test_listing_mutes_does_not_swallow_expiry_notice(tmp_path):
+    """/mutes cleaning up an expired mute must still queue its "expired" ping."""
+    from src.alerts.mute_manager import MuteManager
+
+    manager = MuteManager(json_path=str(tmp_path / "mutes.json"))
+    manager._mutes["plex"] = datetime.now() - timedelta(minutes=5)
+
+    assert manager.get_active_mutes() == []
+    assert manager.drain_expired() == ["plex"]

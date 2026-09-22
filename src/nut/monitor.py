@@ -194,8 +194,10 @@ class UpsMonitor:
         self._available = True
 
         if self._mute_manager.is_ups_muted():
+            # Leave _known_flags alone: a flag raised during the mute and still
+            # present when it ends must count as new, or a power cut that
+            # starts under a mute never alerts at all.
             logger.debug("UPS alerts muted, skipping checks")
-            self._known_flags = parse_status(variables.get("ups.status"))
             return variables
 
         if was_available is False:
@@ -350,6 +352,11 @@ class UpsMonitor:
         explicitly rather than returning an empty set of values that would
         read as a healthy UPS.
         """
+        # Availability and the failure count belong to the poll loop, which
+        # alerts on their transitions. Changing them here made _handle_failure
+        # skip a real outage alert and made the next good poll announce a
+        # recovery nobody had been told about. This view reports its own read.
+        available = self._available is True
         fresh = (time.monotonic() - self._fetched_at) < _CACHE_TTL
         if force or not fresh or not self._variables:
             try:
@@ -357,16 +364,14 @@ class UpsMonitor:
                 self._ups_name = name
                 self._variables = variables
                 self._fetched_at = time.monotonic()
-                self._available = True
                 self._last_error = None
-                self._consecutive_failures = 0
+                available = True
             except NutError as e:
                 self._last_error = str(e)
-                if self._available is True:
-                    self._available = False
+                available = False
 
         return {
-            "available": self._available is True,
+            "available": available,
             "target": self._client.target,
             "ups": self._ups_name,
             "variables": dict(self._variables),

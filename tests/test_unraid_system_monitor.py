@@ -314,3 +314,34 @@ async def test_check_once_updates_cache_timestamp():
 
     assert second_cache_time > first_cache_time
     assert monitor._cached_metrics == metrics
+
+
+@pytest.mark.asyncio
+async def test_cpu_usage_alert_needs_a_sustained_spike():
+    """One hot 30s sample is a compile, not an alert; two in a row is."""
+    from src.unraid.monitors.system_monitor import UnraidSystemMonitor
+    from src.config import UnraidConfig
+
+    config = UnraidConfig(enabled=True, host="192.168.1.100", cpu_usage_threshold=90)
+    readings = iter([95.0, 40.0, 95.0, 96.0])
+    mock_client = AsyncMock()
+
+    async def metrics():
+        return {"cpu_percent": next(readings), "memory_percent": 10.0}
+
+    mock_client.get_system_metrics = metrics
+    alert_callback = AsyncMock()
+    mute_manager = MagicMock()
+    mute_manager.is_server_muted.return_value = False
+    monitor = UnraidSystemMonitor(
+        client=mock_client, config=config, on_alert=alert_callback, mute_manager=mute_manager,
+    )
+
+    await monitor.check_once()
+    await monitor.check_once()
+    await monitor.check_once()
+    alert_callback.assert_not_called()
+
+    await monitor.check_once()
+    alert_callback.assert_called_once()
+    assert "CPU Usage" in alert_callback.call_args[1]["title"]

@@ -268,3 +268,21 @@ async def test_restart_command_no_args_shows_styled_usage():
     response = message.answer.call_args[0][0]
     assert "Usage" in response or "`/restart" in response
     assert "Partial names" in response or "partial" in response.lower()
+
+
+def test_resolve_container_escapes_ambiguous_names():
+    """Underscored names in the "Multiple matches" reply must be escaped, or
+    the Markdown parse fails (/restart and /diagnose didn't escape them)."""
+    from src.bot.control_commands import resolve_container
+    from src.models import ContainerInfo
+    from src.state import ContainerStateManager
+
+    state = ContainerStateManager()
+    state.update(ContainerInfo("media_plex", "running", None, "plex", None))
+    state.update(ContainerInfo("media_sonarr", "running", None, "sonarr", None))
+
+    container, error = resolve_container(state, "media")
+
+    assert container is None
+    assert error is not None
+    assert "media\\_plex" in error and "media\\_sonarr" in error

@@ -290,13 +290,25 @@ async def test_muted_ups_alerts_are_suppressed():
     assert rec.alerts == []
 
 
-async def test_muting_still_tracks_state_so_unmuting_does_not_replay_history():
-    monitor, rec = build([ONLINE, ON_BATTERY, ON_BATTERY], muted=True)
+async def test_unmuting_does_not_replay_a_battery_run_that_already_ended():
+    monitor, rec = build([ONLINE, ON_BATTERY, ONLINE, ONLINE], muted=True)
+    await monitor.check_once()
     await monitor.check_once()
     await monitor.check_once()
     monitor._mute_manager.muted = False
     await monitor.check_once()
     assert rec.alerts == []
+
+
+async def test_unmuting_reports_a_battery_run_still_in_progress():
+    """Mains lost during a mute and still lost when it ends is the present,
+    not history (audit 2026-09-22 L6)."""
+    monitor, rec = build([ONLINE, ON_BATTERY, ON_BATTERY], muted=True)
+    await monitor.check_once()
+    await monitor.check_once()
+    monitor._mute_manager.muted = False
+    await monitor.check_once()
+    assert rec.titles == ["UPS On Battery"]
 
 
 async def test_clear_alert_state_lets_the_condition_be_reported_again():
@@ -306,3 +318,46 @@ async def test_clear_alert_state_lets_the_condition_be_reported_again():
     monitor.clear_alert_state()
     await monitor.check_once()
     assert rec.titles.count("UPS On Battery") == 2
+
+
+async def test_ups_command_failure_does_not_hide_the_outage_alert():
+    """A /ups read failing must not pre-empt the poll loop's outage alert, or
+    fake a recovery afterwards (audit 2026-09-22 L5)."""
+    monitor, rec = build([ONLINE, NutUnavailable("gone")] + [NutUnavailable("gone")] * 3)
+    await monitor.check_once()  # connected
+
+    snapshot = await monitor.get_snapshot(force=True)  # /ups hits the blip
+    assert snapshot["available"] is False
+
+    for _ in range(3):
+        await monitor.check_once()
+    assert "UPS Monitoring Unavailable" in rec.titles
+
+
+async def test_ups_command_blip_does_not_announce_a_phantom_recovery():
+    monitor, rec = build([ONLINE, NutUnavailable("blip"), ONLINE])
+    await monitor.check_once()
+    await monitor.get_snapshot(force=True)
+    await monitor.check_once()
+    assert "UPS Monitoring Restored" not in rec.titles
+
+
+async def test_ups_mute_button_mutes_ups_and_clamps_duration(tmp_path):
+    from datetime import datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock
+    from src.alerts.server_mute_manager import ServerMuteManager
+    from src.bot.ups_command import ups_mute_callback
+
+    manager = ServerMuteManager(json_path=str(tmp_path / "server_mutes.json"))
+    callback = MagicMock()
+    callback.data = "ups_mute:999999"  # beyond the 30-day cap
+    callback.answer = AsyncMock()
+    callback.message.answer = AsyncMock()
+
+    await ups_mute_callback(manager)(callback)
+
+    assert manager.is_ups_muted()
+    assert not manager.is_server_muted()
+    expiry = dict(manager.get_active_mutes())["ups"]
+    assert expiry <= datetime.now() + timedelta(days=30, minutes=1)
+    assert "/unmute-server" in callback.message.answer.call_args[0][0]

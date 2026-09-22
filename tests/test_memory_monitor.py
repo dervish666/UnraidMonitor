@@ -266,6 +266,7 @@ class TestMemoryReporting:
             on_ask_restart=mock_on_ask_restart,
         )
 
+        monitor._state = MemoryState.WARNING  # inside a pressure event
         result = await monitor.kill_container("bitmagnet")
         assert result.success is True
         assert result.name == "bitmagnet"
@@ -1005,3 +1006,110 @@ class TestRestartContainer:
 
         await monitor.restart_container("plex")
         assert not event.is_set()
+
+
+class TestNoStuckStates:
+    """Sequences, not single transitions: each path here used to leave the
+    monitor silent under renewed pressure (audit 2026-09-22 L2)."""
+
+    def _monitor(self, config, docker, on_alert, on_ask):
+        c1 = MagicMock()
+        c1.name = "bitmagnet"
+        c2 = MagicMock()
+        c2.name = "obsidian"
+        docker.containers.list.return_value = [c1, c2]
+        return MemoryMonitor(
+            docker_client=docker, config=config, on_alert=on_alert, on_ask_restart=on_ask,
+        )
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_recovering_escalates_on_renewed_critical(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        monitor = self._monitor(memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart)
+        monitor._state = MemoryState.RECOVERING
+        monitor._killed_containers = ["bitmagnet"]
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=97.0)
+
+        await monitor._check_memory()
+
+        assert monitor._state == MemoryState.CRITICAL
+        assert monitor._pending_kill == "obsidian"
+        assert mock_on_alert.call_args[0][2] == "critical"
+
+    @pytest.mark.asyncio
+    async def test_decline_prompts_next_killed_container(
+        self, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        monitor = self._monitor(memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart)
+        monitor._state = MemoryState.RECOVERING
+        monitor._killed_containers = ["bitmagnet", "obsidian"]
+        monitor._restart_prompted = True
+
+        await monitor.decline_restart("bitmagnet")
+
+        with patch("src.monitors.memory_monitor.psutil") as mock_psutil:
+            mock_psutil.virtual_memory.return_value = MagicMock(percent=70.0)
+            await monitor._check_memory()
+        mock_on_ask_restart.assert_awaited_once_with("obsidian")
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_critical_rearms_after_dip_into_warning_band(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        """Kill skipped at 92% (or countdown cancelled), then back to 97%."""
+        monitor = self._monitor(memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart)
+        monitor._state = MemoryState.CRITICAL
+        monitor._pending_kill = None
+
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=92.0)
+        await monitor._check_memory()
+        assert monitor._state == MemoryState.WARNING
+        mock_on_alert.assert_not_called()  # quiet step down, no warning re-alert
+
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=97.0)
+        await monitor._check_memory()
+        assert monitor._state == MemoryState.CRITICAL
+        assert monitor._pending_kill == "bitmagnet"
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    async def test_kill_button_outside_pressure_event_is_not_tracked(
+        self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=60.0, available=8 * 1024**3)
+        monitor = self._monitor(memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart)
+        assert monitor._state == MemoryState.NORMAL
+
+        result = await monitor.kill_container("bitmagnet")
+
+        assert result.success is True
+        assert monitor._killed_containers == []
+
+    @pytest.mark.asyncio
+    @patch("src.monitors.memory_monitor.psutil")
+    @patch("src.monitors.memory_monitor.asyncio.sleep", new_callable=AsyncMock)
+    async def test_still_critical_after_kill_lines_up_next(
+        self, mock_sleep, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
+    ):
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=97.0)
+        monitor = self._monitor(memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart)
+        monitor._state = MemoryState.CRITICAL
+        monitor._pending_kill = "bitmagnet"
+
+        async def fake_countdown() -> bool:
+            if monitor._killed_containers:
+                raise asyncio.CancelledError()  # second countdown: stop here
+            monitor._killed_containers.append("bitmagnet")
+            monitor._pending_kill = None
+            return True
+
+        monitor._execute_kill_countdown = fake_countdown  # type: ignore[method-assign]
+
+        with pytest.raises(asyncio.CancelledError):
+            await monitor.start()
+
+        assert monitor._state == MemoryState.CRITICAL
+        assert monitor._pending_kill == "obsidian"

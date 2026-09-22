@@ -240,17 +240,36 @@ def test_crash_tracker_recovery_cooldown():
     assert tracker.should_send_recovery("app") is False
 
 
-def test_crash_tracker_recovery_clears_crash_history():
-    """Recording recovery should clear crash history."""
+def test_crash_tracker_recovery_keeps_crash_history():
+    """A recovery alert must not reset the crash count, or a container crashing
+    every 90s never reaches the restart-loop threshold (audit 2026-09-22 L4)."""
+    from datetime import timedelta
+    from unittest.mock import patch
+    from src.monitors import docker_events
+    from src.monitors.docker_events import CrashTracker
+
+    tracker = CrashTracker()
+    start = datetime(2026, 9, 22, 12, 0, 0)
+    escalated = False
+    for i in range(7):
+        now = start + timedelta(seconds=90 * i)
+        with patch.object(docker_events, "datetime") as dt:
+            dt.now.return_value = now
+            tracker.record_crash("app")
+            should, _ = tracker.check_restart_loop("app")
+            escalated = escalated or should
+            if tracker.should_send_recovery("app"):
+                tracker.record_recovery_alert("app")
+    assert escalated
+
+
+def test_crash_tracker_no_recovery_alert_while_looping():
     from src.monitors.docker_events import CrashTracker
 
     tracker = CrashTracker()
     tracker.record_crash("app")
     tracker.record_crash("app")
-    assert tracker.get_crash_count("app") == 2
-
-    tracker.record_recovery_alert("app")
-    assert tracker.get_crash_count("app") == 0
+    assert tracker.should_send_recovery("app") is False
 
 
 @pytest.mark.asyncio

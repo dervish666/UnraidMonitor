@@ -214,53 +214,6 @@ unraid:
         assert config.unraid.poll_array_seconds == 300
 
 
-def test_generate_default_config_creates_file(tmp_path):
-    """Test that generate_default_config creates a new file when none exists."""
-    from src.config import generate_default_config
-
-    config_file = tmp_path / "config" / "config.yaml"
-    assert not config_file.exists()
-
-    result = generate_default_config(str(config_file))
-
-    assert result is True
-    assert config_file.exists()
-
-
-def test_generate_default_config_does_not_overwrite(tmp_path):
-    """Test that generate_default_config does not overwrite existing files."""
-    from src.config import generate_default_config
-
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("existing: content")
-
-    result = generate_default_config(str(config_file))
-
-    assert result is False
-    assert config_file.read_text() == "existing: content"
-
-
-def test_generated_config_is_valid_yaml(tmp_path):
-    """Test that the generated config is valid YAML that can be loaded."""
-    import yaml
-    from src.config import generate_default_config
-
-    config_file = tmp_path / "config.yaml"
-    generate_default_config(str(config_file))
-
-    content = config_file.read_text()
-    parsed = yaml.safe_load(content)
-
-    assert isinstance(parsed, dict)
-    assert "ai" in parsed
-    assert "bot" in parsed
-    assert "docker" in parsed
-    assert "log_watching" in parsed
-    assert "resource_monitoring" in parsed
-    assert "memory_management" in parsed
-    assert "unraid" in parsed
-
-
 class TestConfigValidation:
     """Tests for config value clamping/validation."""
 
@@ -326,14 +279,23 @@ class TestConfigValidation:
         assert mc.critical_threshold == 95
 
 
-def test_generated_config_loads_all_sections(tmp_path):
-    """Test that all config sections load properly from generated config."""
+def test_wizard_written_config_loads_all_sections(tmp_path):
+    """Every section loads from the config the setup wizard actually writes."""
     import os
     from unittest.mock import patch
-    from src.config import generate_default_config, Settings, AppConfig
+    from src.config import ConfigWriter, Settings, AppConfig
 
     config_file = tmp_path / "config.yaml"
-    generate_default_config(str(config_file))
+    ConfigWriter(str(config_file)).write(
+        unraid_host=None,
+        unraid_port=443,
+        unraid_use_ssl=True,
+        watched_containers=["plex"],
+        protected_containers=[],
+        ignored_containers=[],
+        priority_containers=[],
+        killable_containers=[],
+    )
 
     with patch.dict(os.environ, {
         "TELEGRAM_BOT_TOKEN": "test",
@@ -349,7 +311,6 @@ def test_generated_config_loads_all_sections(tmp_path):
 
         bot = config.bot
         assert bot.log_max_lines == 100
-        assert bot.confirmation_timeout_seconds == 60
 
         docker = config.docker
         assert docker.socket_path == "unix:///var/run/docker.sock"

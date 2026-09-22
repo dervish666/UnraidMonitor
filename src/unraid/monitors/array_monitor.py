@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 # rebuilt" flag in the API -- a running parity operation is the only signal that
 # these are expected rather than a fault. Every other status (DISK_DSBL,
 # DISK_WRONG, DISK_NP_MISSING...) still alerts, sync or no sync.
+_DISK_TEMP_HYSTERESIS = 2  # °C below threshold before a hot disk re-arms
 _REBUILD_EXPECTED_STATUSES = {"DISK_INVALID", "DISK_NEW"}
 
 # Measured against a live server mid-sync on 2026-08-02: `running`, `paused` and
@@ -253,8 +254,9 @@ class ArrayMonitor:
                                 alert_type="array",
                             )
                             self._alerted_disks.add(disk_key)
-                    else:
-                        # Condition cleared - allow re-alerting if it returns
+                    elif temp_value <= self._config.disk_temp_threshold - _DISK_TEMP_HYSTERESIS:
+                        # Re-arm only once clearly cooler, so a disk sitting
+                        # at the threshold doesn't alert on every poll.
                         self._alerted_disks.discard(disk_key)
                 except (ValueError, TypeError):
                     logger.warning(f"Invalid temperature for {disk_name}: {temp}")

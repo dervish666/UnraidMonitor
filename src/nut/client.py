@@ -203,9 +203,14 @@ class NutClient:
             raise NutUnavailable(f"cannot reach {self.target}: {e}") from e
 
         if self._username:
-            await self._expect_ok(reader, writer, f"USERNAME {self._username}")
-            if self._password:
-                await self._expect_ok(reader, writer, f"PASSWORD {self._password}")
+            try:
+                await self._expect_ok(reader, writer, f"USERNAME {self._username}")
+                if self._password:
+                    await self._expect_ok(reader, writer, f"PASSWORD {self._password}")
+            except BaseException:
+                # Callers only close sockets _open hands back.
+                await self._close(writer)
+                raise
         return reader, writer
 
     async def _close(self, writer: asyncio.StreamWriter) -> None:
@@ -222,17 +227,24 @@ class NutClient:
             pass
 
     async def _send(self, writer: asyncio.StreamWriter, command: str) -> None:
-        writer.write(f"{command}\n".encode())
+        # A reset surfaces as OSError; wrap it so the monitor counts it as a
+        # failed poll instead of letting it escape the NutError handling.
         try:
+            writer.write(f"{command}\n".encode())
             await asyncio.wait_for(writer.drain(), timeout=self._timeout)
         except asyncio.TimeoutError as e:
             raise NutUnavailable(f"timed out sending to {self.target}") from e
+        except OSError as e:
+            raise NutUnavailable(f"lost connection to {self.target}: {e}") from e
 
     async def _readline(self, reader: asyncio.StreamReader) -> str:
         try:
             raw = await asyncio.wait_for(reader.readline(), timeout=self._timeout)
         except asyncio.TimeoutError as e:
             raise NutUnavailable(f"timed out reading from {self.target}") from e
+        except (OSError, ValueError) as e:
+            # ValueError: line over the stream limit.
+            raise NutUnavailable(f"lost connection to {self.target}: {e}") from e
         if not raw:
             raise NutUnavailable(f"{self.target} closed the connection")
         return raw.decode("utf-8", errors="replace").rstrip("\r\n")

@@ -101,8 +101,9 @@ class CrashTracker:
         Returns True if the container had recent crashes and hasn't had
         a recovery alert sent within the cooldown period.
         """
-        # Only send recovery if the container actually crashed recently
-        if self.get_crash_count(container_name) == 0:
+        # Only send recovery if the container crashed recently, and only once:
+        # a second crash in the window means it is looping, not recovering.
+        if self.get_crash_count(container_name) != 1:
             return False
 
         now = datetime.now()
@@ -113,10 +114,13 @@ class CrashTracker:
         return True
 
     def record_recovery_alert(self, container_name: str) -> None:
-        """Record that a recovery alert was sent and clear crash history."""
+        """Record that a recovery alert was sent.
+
+        Crash history is left to age out of the window. Clearing it here reset
+        the count on every recovery alert, so a container crashing every 90s
+        never reached the restart-loop threshold.
+        """
         self._last_recovery_alert[container_name] = datetime.now()
-        # Clear crash history since the container recovered
-        self._crashes.pop(container_name, None)
 
     def get_active_crash_loops(self, min_count: int = 3) -> list[tuple[str, int]]:
         """Return containers with crash counts >= min_count."""
@@ -286,11 +290,29 @@ class DockerEventMonitor:
 
                 # Attempt to reconnect
                 try:
-                    self._reconnect()
+                    # 1 + 2N blocking Docker calls; keep them off the event loop.
+                    await asyncio.to_thread(self._reconnect)
                     self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
                     logger.info("Reconnected to Docker")
                 except Exception as reconnect_error:
                     logger.error(f"Reconnection failed: {reconnect_error}")
+
+    def _queue_alert(self, item: dict[str, Any], kind: str) -> None:
+        """Hand an event to the alert queue from the events thread.
+
+        put_nowait has to run on the loop, so QueueFull surfaces there, not
+        here; the closure catches it where it actually happens.
+        """
+        def _put() -> None:
+            try:
+                self._pending_alerts.put_nowait(item)
+            except asyncio.QueueFull:
+                logger.warning(f"Alert queue full, dropping {kind} event")
+
+        try:
+            self._loop.call_soon_threadsafe(_put)
+        except RuntimeError as e:
+            logger.error(f"Failed to queue {kind} event: {e}")
 
     def _reconnect(self) -> None:
         """Attempt to reconnect to Docker daemon."""
@@ -397,41 +419,20 @@ class DockerEventMonitor:
 
                 # Queue start events for recovery alert processing (thread-safe)
                 if action == "start" and self.alert_manager:
-                    try:
-                        self._loop.call_soon_threadsafe(
-                            self._pending_alerts.put_nowait,
-                            {**event, "_alert_type": "recovery"},
-                        )
-                    except asyncio.QueueFull:
-                        logger.debug("Alert queue full, dropping recovery event")
-                    except Exception as e:
-                        logger.error(f"Failed to queue recovery event: {e}")
+                    self._queue_alert({**event, "_alert_type": "recovery"}, "recovery")
 
                 # Queue health_status events for unhealthy alerts
                 if action == "health_status" and self.alert_manager:
                     health = event.get("Actor", {}).get("Attributes", {}).get("health_status", "")
                     if health == "unhealthy":
-                        try:
-                            self._loop.call_soon_threadsafe(
-                                self._pending_alerts.put_nowait,
-                                {**event, "_alert_type": "health"},
-                            )
-                        except (asyncio.QueueFull, Exception):
-                            pass
+                        self._queue_alert({**event, "_alert_type": "health"}, "unhealthy")
                     elif health == "healthy":
                         # Clear the alerted flag so we re-alert if it goes unhealthy again
                         self._unhealthy_alerted.discard(container_name)
 
                 # Queue die events for crash alert processing (thread-safe)
                 if action == "die" and self.alert_manager:
-                    try:
-                        self._loop.call_soon_threadsafe(
-                            self._pending_alerts.put_nowait, event
-                        )
-                    except asyncio.QueueFull:
-                        logger.warning("Alert queue full, dropping event")
-                    except Exception as e:
-                        logger.error(f"Failed to queue crash event: {e}")
+                    self._queue_alert(event, "crash")
 
         except docker.errors.APIError as e:
             logger.error(f"Docker API error: {e}")
@@ -511,13 +512,16 @@ class DockerEventMonitor:
             )
             return
 
-        # Check rate limiter if available
+        # Check rate limiter if available. The limiter is shared with log-error
+        # alerts, which key on the bare name; a separate key stops an error
+        # alert from silencing the crash that usually follows it.
         if self.rate_limiter:
-            if not self.rate_limiter.should_alert(container_name):
-                self.rate_limiter.record_suppressed(container_name)
+            rate_key = f"{container_name}:crash"
+            if not self.rate_limiter.should_alert(rate_key):
+                self.rate_limiter.record_suppressed(rate_key)
                 logger.debug(f"Rate-limited crash alert for {container_name}")
                 return
-            self.rate_limiter.record_alert(container_name)
+            self.rate_limiter.record_alert(rate_key)
 
         logger.info(f"Container {container_name} crashed with exit code {exit_code}")
 

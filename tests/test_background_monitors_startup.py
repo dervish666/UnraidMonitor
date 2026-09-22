@@ -31,8 +31,15 @@ class _FakeMonitor:
 
 
 class _FakeClient:
+    def __init__(self, connected: bool = True) -> None:
+        self._connected = connected
+
     async def connect(self) -> None:
         return None
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
 
 
 class _FakeUnraid:
@@ -41,6 +48,7 @@ class _FakeUnraid:
         self.system_monitor = system_monitor
         self.array_monitor = array_monitor
         self.ups_monitor = ups_monitor
+        self.notification_monitor = None
 
 
 async def _cancel(bg: _BackgroundTasks) -> None:
@@ -77,5 +85,28 @@ async def test_core_monitors_running_when_unraid_not_configured():
     try:
         assert bg.monitor.is_running
         assert bg.log_watcher.is_running
+    finally:
+        await _cancel(bg)
+
+
+async def test_failed_unraid_connect_warns_user_and_still_starts_monitors():
+    """connect() returns quietly on failure; the user must hear about it, and
+    monitors still start so they recover when Unraid comes up (audit 2026-09-22)."""
+    from unittest.mock import AsyncMock
+
+    bg = _BackgroundTasks()
+    bg.monitor = _FakeMonitor()
+    bg.log_watcher = _FakeMonitor()
+    uc = _FakeUnraid(_FakeClient(connected=False), _FakeMonitor(), _FakeMonitor())
+    chat_ids = MagicMock()
+    chat_ids.get_all_chat_ids.return_value = [42]
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+
+    await startup_mod._start_background_monitors(bg, None, uc, chat_ids, bot)
+    try:
+        assert uc.system_monitor.is_running
+        bot.send_message.assert_awaited_once()
+        assert "UNRAID_API_KEY" in bot.send_message.call_args.kwargs["text"]
     finally:
         await _cancel(bg)

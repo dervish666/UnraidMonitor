@@ -244,3 +244,41 @@ async def test_array_monitor_checks_all_disk_types():
     assert any("Data Disk" in title for title in titles)
     assert any("Parity Disk" in title for title in titles)
     assert any("Cache Disk" in title for title in titles)
+
+
+@pytest.mark.asyncio
+async def test_disk_temp_flapping_at_threshold_alerts_once():
+    """51/50/51°C around a 50°C threshold is one alert, not one per poll."""
+    from src.unraid.monitors.array_monitor import ArrayMonitor
+
+    temps = iter([51, 50, 51, 49, 51, 47, 51])
+
+    async def status():
+        return {
+            "state": "STARTED",
+            "disks": [{"name": "disk1", "temp": next(temps), "status": "DISK_OK"}],
+            "parities": [],
+            "caches": [],
+            "capacity": {"kilobytes": {"used": "1000", "total": "10000", "free": "9000"}},
+        }
+
+    mock_client = MagicMock()
+    mock_client.get_array_status = status
+    mock_config = MagicMock()
+    mock_config.disk_temp_threshold = 50
+    mock_config.array_usage_threshold = 85
+    mock_mute = MagicMock()
+    mock_mute.is_array_muted.return_value = False
+    alerts = []
+
+    async def capture_alert(**kwargs):
+        alerts.append(kwargs)
+
+    monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
+    for _ in range(5):
+        await monitor.check_once()
+    assert len(alerts) == 1  # 51, 50, 51, 49, 51: never cooled 2°C below
+
+    await monitor.check_once()  # 47: re-armed
+    await monitor.check_once()  # 51: alerts again
+    assert len(alerts) == 2

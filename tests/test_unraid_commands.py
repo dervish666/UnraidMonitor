@@ -5,11 +5,11 @@ from datetime import datetime, timezone, timedelta
 
 def test_format_uptime_iso_timestamp():
     """Test format_uptime with ISO timestamp."""
-    from src.bot.unraid_commands import format_uptime
+    from src.bot.unraid_commands import format_boot_uptime as format_uptime
     from unittest.mock import patch
 
     # Mock current time to 24 days, 5 hours after boot
-    boot_time = datetime(2026, 1, 2, 18, 14, 24, tzinfo=timezone.utc)
+    boot_time = datetime(2026, 1, 2, 18, 14, 24, 693000, tzinfo=timezone.utc)
     mock_now = boot_time + timedelta(days=24, hours=5, minutes=30)
 
     with patch("src.bot.unraid_commands.datetime") as mock_datetime:
@@ -18,13 +18,12 @@ def test_format_uptime_iso_timestamp():
 
         result = format_uptime("2026-01-02T18:14:24.693Z")
 
-        assert "24 day" in result
-        assert "5 hour" in result
+        assert result == "24d 5h 30m"
 
 
 def test_format_uptime_already_formatted():
     """Test format_uptime with already formatted string."""
-    from src.bot.unraid_commands import format_uptime
+    from src.bot.unraid_commands import format_boot_uptime as format_uptime
 
     result = format_uptime("5 days, 3 hours")
     assert result == "5 days, 3 hours"
@@ -32,7 +31,7 @@ def test_format_uptime_already_formatted():
 
 def test_format_uptime_empty():
     """Test format_uptime with empty string."""
-    from src.bot.unraid_commands import format_uptime
+    from src.bot.unraid_commands import format_boot_uptime as format_uptime
 
     result = format_uptime("")
     assert result == "Unknown"
@@ -40,7 +39,7 @@ def test_format_uptime_empty():
 
 def test_format_uptime_none():
     """Test format_uptime with None."""
-    from src.bot.unraid_commands import format_uptime
+    from src.bot.unraid_commands import format_boot_uptime as format_uptime
 
     result = format_uptime(None)
     assert result == "Unknown"

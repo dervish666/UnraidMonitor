@@ -58,11 +58,16 @@ def make_server_alert_handler(
     array_mute_manager: Any = None,
     server_mute_manager: Any = None,
     unraid_config: Any = None,
+    raise_on_failure: bool = False,
 ) -> Callable[[str, str, str], Awaitable[None]]:
+    """raise_on_failure: raise when no chat received the alert, for callers
+    that retry a failed send (the notification relay) instead of losing it."""
     async def on_server_alert(title: str, message: str, alert_type: str) -> None:
         chat_ids = chat_id_store.get_all_chat_ids()
         if not chat_ids:
             logger.warning("No chat ID yet, cannot send server alert")
+            if raise_on_failure:
+                raise RuntimeError("no chat to deliver to")
             return
 
         safe_title = escape_markdown_fn(title)
@@ -153,13 +158,17 @@ def make_server_alert_handler(
                     )])
             keyboard = InlineKeyboardMarkup(inline_keyboard=srv_buttons)
 
+        delivered = 0
         for cid in chat_ids:
             try:
                 await send_with_retry(
                     bot.send_message, chat_id=cid, text=alert_text, parse_mode="Markdown", reply_markup=keyboard
                 )
+                delivered += 1
             except Exception as e:
                 logger.error(f"Failed to send server alert to {cid}: {e}")
+        if raise_on_failure and not delivered:
+            raise RuntimeError("server alert reached no chat")
     return on_server_alert
 
 

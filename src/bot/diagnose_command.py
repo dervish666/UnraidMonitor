@@ -7,6 +7,7 @@ from typing import Callable, Awaitable
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ChatAction
 
+from src.bot.control_commands import resolve_container
 from src.state import ContainerStateManager
 from src.services.diagnostic import DiagnosticService
 from src.utils.formatting import extract_alert_container, safe_reply
@@ -72,18 +73,12 @@ def diagnose_command(
             )
             return
 
-        # Find container in state
-        matches = state.find_by_name(container_name)
-        if not matches:
-            await message.answer(f"No container found matching '{container_name}'")
+        container, error = resolve_container(state, container_name)
+        if container is None:
+            await safe_reply(message, error or "")
             return
 
-        if len(matches) > 1:
-            names = ", ".join(m.name for m in matches)
-            await safe_reply(message, f"Multiple matches found: {names}\n\n_Be more specific_")
-            return
-
-        actual_name = matches[0].name
+        actual_name = container.name
 
         if message.bot:
             await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)

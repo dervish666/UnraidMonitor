@@ -158,16 +158,9 @@ class DiagnosticService:
             now = datetime.now(timezone.utc)
             uptime_seconds = int((now - started_at).total_seconds())
 
-        # Get image -- may have been removed after an update
-        try:
-            img = container.image
-            if img is not None:
-                image_tags = img.tags
-                image = image_tags[0] if image_tags else "unknown"
-            else:
-                image = container.attrs.get("Config", {}).get("Image", "unknown")
-        except Exception:
-            image = container.attrs.get("Config", {}).get("Image", "unknown")
+        # The image reference the container was created from. Already in attrs,
+        # whereas container.image is a blocking images.get on the event loop.
+        image = attrs.get("Config", {}).get("Image") or "unknown"
 
         # Docker configuration
         config = attrs.get("Config", {})

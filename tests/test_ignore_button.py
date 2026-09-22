@@ -178,3 +178,41 @@ class TestIgnoreSimilarCallback:
         await handler(callback)
 
         callback.answer.assert_called_with("Invalid callback data")
+
+
+@pytest.mark.asyncio
+async def test_ignore_similar_with_truncated_preview_uses_full_line(tmp_path):
+    """The button's preview is cut to fit 64 bytes and ends in "…". Built from
+    the real alert path, it must still find the full line and never put the
+    "…" into the pattern (audit 2026-09-22)."""
+    from unittest.mock import AsyncMock, MagicMock
+    from src.alerts.ignore_manager import IgnoreManager
+    from src.alerts.recent_errors import RecentErrorsBuffer
+    from src.bot.ignore_command import ignore_similar_callback
+    from src.utils.formatting import truncate_callback_data
+
+    line = "ERROR: failed to connect to database at postgres:5432 after 3 retries"
+    buffer = RecentErrorsBuffer()
+    buffer.add("sonarr", line)
+    manager = IgnoreManager(config_ignores={}, json_path=str(tmp_path / "ignores.json"))
+
+    callback = MagicMock()
+    callback.data = truncate_callback_data("ignore_similar:sonarr:", line)
+    assert callback.data.endswith("…")
+    callback.answer = AsyncMock()
+    callback.message.answer = AsyncMock()
+
+    await ignore_similar_callback(manager, None, buffer)(callback)
+
+    assert manager.is_ignored("sonarr", line)
+    patterns = [p for p, _, _ in manager.get_all_ignores("sonarr")]
+    assert patterns == [line]
+
+
+def test_empty_ignore_pattern_is_rejected(tmp_path):
+    from src.alerts.ignore_manager import IgnoreManager
+
+    manager = IgnoreManager(config_ignores={}, json_path=str(tmp_path / "ignores.json"))
+    ok, _ = manager.add_ignore_pattern("plex", "  ", "substring", None)
+    assert ok is False
+    assert not manager.is_ignored("plex", "ERROR: anything")

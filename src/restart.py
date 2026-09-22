@@ -62,8 +62,8 @@ async def restart_bot(
         for cid in chat_id_store.get_all_chat_ids():
             try:
                 await bot.send_message(cid, notice)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not send restart notice to {cid}: {e}")
     try:
         os.execv(sys.executable, [sys.executable, "-m", "src.main"])
     finally:

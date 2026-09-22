@@ -574,3 +574,22 @@ class TestWellKnownModels:
         model_ids = {m.id for m in ollama_info.available_models}
         assert "llama3.1:8b" in model_ids
         assert "mistral:7b" in model_ids
+
+
+def test_model_family_picks_newest_version_not_dated_older_one():
+    """Dates are not versions: sonnet-4-20250514 must not beat sonnet-4-5, and a
+    single-number ID like sonnet-5 must beat both (audit 2026-09-22 L9)."""
+    from src.services.llm.registry import ProviderRegistry
+
+    key = ProviderRegistry._model_sort_key
+    ids = [
+        "claude-sonnet-4-20250514",
+        "claude-sonnet-4-5-20250929",
+        "claude-sonnet-5",
+        "claude-opus-4-1-20250805",
+        "claude-opus-5-5",
+    ]
+    sonnets = sorted((m for m in ids if m.startswith("claude-sonnet-")), key=key, reverse=True)
+    assert sonnets == ["claude-sonnet-5", "claude-sonnet-4-5-20250929", "claude-sonnet-4-20250514"]
+    opuses = sorted((m for m in ids if m.startswith("claude-opus-")), key=key, reverse=True)
+    assert opuses[0] == "claude-opus-5-5"

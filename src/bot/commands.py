@@ -9,6 +9,7 @@ from src.models import ContainerInfo
 from src.state import ContainerStateManager
 from src.utils.formatting import format_bytes, format_uptime, escape_markdown, safe_reply, safe_edit, truncate_callback_data
 from src.utils.sanitize import sanitize_logs_for_display
+from src.bot.control_commands import resolve_container
 from src.bot.resources_command import format_progress_bar
 
 if TYPE_CHECKING:
@@ -233,14 +234,13 @@ def status_command(
         else:
             # Search for container
             query = parts[1].strip()
-            matches = state.find_by_name(query)
+            container, error = resolve_container(state, query)
 
-            if not matches:
-                await message.answer(f"❌ No container found matching '{query}'")
-                return
-            elif len(matches) == 1:
-                response = await format_container_details(matches[0], resource_monitor)
-                name = matches[0].name
+            if container is None:
+                response = error or ""
+            else:
+                response = await format_container_details(container, resource_monitor)
+                name = container.name
                 keyboard = InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
@@ -252,9 +252,6 @@ def status_command(
                 )
                 await safe_reply(message, response, reply_markup=keyboard)
                 return
-            else:
-                names = ", ".join(escape_markdown(m.name) for m in matches)
-                response = f"Multiple matches found: {names}\n\n_Be more specific_"
 
         await safe_reply(message, response)
 
@@ -293,18 +290,10 @@ def logs_command(
         lines = min(lines, max_lines)
 
         # Find container
-        matches = state.find_by_name(container_name)
-
-        if not matches:
-            await message.answer(f"❌ No container found matching '{container_name}'")
+        container, error = resolve_container(state, container_name)
+        if container is None:
+            await safe_reply(message, error or "")
             return
-
-        if len(matches) > 1:
-            names = ", ".join(escape_markdown(m.name) for m in matches)
-            await safe_reply(message, f"Multiple matches found: {names}\n\n_Be more specific_")
-            return
-
-        container = matches[0]
 
         try:
             docker_container = await asyncio.to_thread(docker_client.containers.get, container.name)
