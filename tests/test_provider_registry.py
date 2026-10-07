@@ -283,7 +283,7 @@ class TestSetModel:
         json_path = tmp_path / "model_selection.json"
         assert json_path.exists()
         data = json.loads(json_path.read_text())
-        assert data == {"provider": "openai", "model": "gpt-4o"}
+        assert data == {"version": 2, "provider": "openai", "model": "gpt-4o"}
 
     def test_set_model_to_ollama(self, tmp_path: Path):
         reg = ProviderRegistry(
@@ -593,3 +593,142 @@ def test_model_family_picks_newest_version_not_dated_older_one():
     assert sonnets == ["claude-sonnet-5", "claude-sonnet-4-5-20250929", "claude-sonnet-4-20250514"]
     opuses = sorted((m for m in ids if m.startswith("claude-opus-")), key=key, reverse=True)
     assert opuses[0] == "claude-opus-5-5"
+
+
+# ---------------------------------------------------------------------------
+# Family names survive persistence (v0.22.1). Pre-fix, the registry saved the
+# resolved ID ("claude-opus-4-8") instead of the family the user typed, so the
+# bot ran June's models in October while startup logged the newer ones.
+# ---------------------------------------------------------------------------
+
+_JUNE_MODELS = ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"]
+_OCTOBER_MODELS = _JUNE_MODELS + ["claude-sonnet-5-5", "claude-opus-5-5"]
+
+
+def _registry(tmp_path: Path, discovered: list[str], **kwargs) -> ProviderRegistry:
+    return ProviderRegistry(
+        anthropic_client=_make_anthropic_client(),
+        data_dir=str(tmp_path),
+        discovered_anthropic_models=discovered,
+        **kwargs,
+    )
+
+
+class TestFamilyPersistence:
+    def test_saved_family_picks_newer_model_after_restart(self, tmp_path: Path):
+        june = _registry(tmp_path, _JUNE_MODELS)
+        june.set_model("anthropic", "opus")
+        june.set_feature_model("nl_processor", "sonnet")
+        june.set_feature_model("diagnostic", "opus")
+        assert june.resolved_model("nl_processor") == ("anthropic", "claude-sonnet-4-6")
+
+        saved = json.loads((tmp_path / "model_selection.json").read_text())
+        assert saved["model"] == "opus"
+        assert saved["features"] == {"nl_processor": "sonnet", "diagnostic": "opus"}
+
+        october = _registry(tmp_path, _OCTOBER_MODELS)
+        assert october.resolved_model() == ("anthropic", "claude-opus-5-5")
+        assert october.resolved_model("nl_processor") == ("anthropic", "claude-sonnet-5-5")
+        assert october.resolved_model("diagnostic") == ("anthropic", "claude-opus-5-5")
+        assert october.get_provider("nl_processor").model_name == "claude-sonnet-5-5"
+
+    def test_feature_change_does_not_freeze_the_default(self, tmp_path: Path):
+        """Every per-feature change used to re-save the default as its resolved ID."""
+        reg = _registry(tmp_path, _JUNE_MODELS)
+        reg.set_model("anthropic", "opus")
+        reg.set_feature_model("diagnostic", "haiku")
+        reg.clear_feature_model("diagnostic")
+
+        saved = json.loads((tmp_path / "model_selection.json").read_text())
+        assert saved["model"] == "opus"
+
+    def test_set_feature_model_returns_resolved_id(self, tmp_path: Path):
+        reg = _registry(tmp_path, _OCTOBER_MODELS)
+        assert reg.set_feature_model("nl_processor", "sonnet") == "claude-sonnet-5-5"
+        assert reg.get_feature_models()["nl_processor"] == "sonnet"
+
+    def test_legacy_file_with_resolved_ids_migrates_to_families(self, tmp_path: Path):
+        """The exact file found on the live server on 2026-10-07."""
+        path = tmp_path / "model_selection.json"
+        path.write_text(json.dumps({
+            "provider": "anthropic",
+            "model": "claude-opus-4-8",
+            "features": {
+                "nl_processor": "claude-sonnet-4-6",
+                "diagnostic": "claude-opus-4-8",
+                "pattern_analyzer": "claude-opus-4-8",
+            },
+        }))
+
+        reg = _registry(tmp_path, _OCTOBER_MODELS)
+
+        assert reg.resolved_model() == ("anthropic", "claude-opus-5-5")
+        assert reg.resolved_model("nl_processor") == ("anthropic", "claude-sonnet-5-5")
+        assert reg.resolved_model("diagnostic") == ("anthropic", "claude-opus-5-5")
+        assert reg.resolved_model("pattern_analyzer") == ("anthropic", "claude-opus-5-5")
+
+        saved = json.loads(path.read_text())
+        assert saved == {
+            "version": 2,
+            "provider": "anthropic",
+            "model": "opus",
+            "features": {
+                "nl_processor": "sonnet",
+                "diagnostic": "opus",
+                "pattern_analyzer": "opus",
+            },
+        }
+
+    def test_legacy_migration_logs_each_conversion_once(self, tmp_path: Path, caplog):
+        path = tmp_path / "model_selection.json"
+        path.write_text(json.dumps({
+            "provider": "anthropic",
+            "model": "claude-opus-4-8",
+            "features": {"nl_processor": "claude-sonnet-4-6"},
+        }))
+
+        with caplog.at_level("WARNING"):
+            _registry(tmp_path, _OCTOBER_MODELS)
+            _registry(tmp_path, _OCTOBER_MODELS)  # second boot reads the rewritten file
+
+        migrated = [r.getMessage() for r in caplog.records if "Migrated saved" in r.getMessage()]
+        assert len(migrated) == 2
+        assert any("claude-opus-4-8 -> 'opus'" in m for m in migrated)
+        assert any("nl_processor model claude-sonnet-4-6 -> 'sonnet'" in m for m in migrated)
+
+    def test_legacy_non_claude_ids_are_left_alone(self, tmp_path: Path):
+        path = tmp_path / "model_selection.json"
+        original = {"provider": "openai", "model": "gpt-4o", "features": {"chat": "llama3.1:8b"}}
+        path.write_text(json.dumps(original))
+
+        _registry(tmp_path, _OCTOBER_MODELS, openai_client=_make_openai_client())
+
+        assert json.loads(path.read_text()) == original
+
+    def test_deliberate_pin_survives_restart(self, tmp_path: Path):
+        """A full ID chosen with /model after the fix is a pin, not a stale resolution."""
+        june = _registry(tmp_path, _JUNE_MODELS)
+        june.set_model("anthropic", "claude-opus-4-8")
+        june.set_feature_model("nl_processor", "claude-sonnet-4-6")
+
+        saved = json.loads((tmp_path / "model_selection.json").read_text())
+        assert saved["version"] == 2
+
+        october = _registry(tmp_path, _OCTOBER_MODELS)
+        assert october.resolved_model() == ("anthropic", "claude-opus-4-8")
+        assert october.resolved_model("nl_processor") == ("anthropic", "claude-sonnet-4-6")
+        assert json.loads((tmp_path / "model_selection.json").read_text()) == saved
+
+    def test_describe_models_names_each_feature_and_its_source(self, tmp_path: Path):
+        reg = _registry(
+            tmp_path,
+            _OCTOBER_MODELS,
+            default_model="opus",
+            feature_models={"nl_processor": "sonnet", "diagnostic": "claude-opus-4-8"},
+        )
+        line = reg.describe_models()
+        assert "default=anthropic/claude-opus-5-5 (from 'opus')" in line
+        assert "nl_processor=anthropic/claude-sonnet-5-5 (from 'sonnet')" in line
+        assert "diagnostic=anthropic/claude-opus-4-8" in line
+        assert "diagnostic=anthropic/claude-opus-4-8 (from" not in line
+        assert "pattern_analyzer=anthropic/claude-opus-5-5 (from 'opus')" in line

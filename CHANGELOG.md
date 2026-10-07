@@ -2,6 +2,16 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.22.1] - 2026-10-07
+
+### Fixed
+- **Model families froze on the model that was newest on the day you used `/model`.** `set_feature_model` saved the resolved ID (`claude-sonnet-4-6`) instead of the family typed (`sonnet`), and every per-feature change re-saved the global default the same way. `data/model_selection.json` outranks `config.yaml` and a full ID skips family resolution, so a live install kept running Sonnet 4.6 and Opus 4.8 in October while its startup log reported resolving the families to the 5.5 models. The registry now saves what you typed and resolves it each time it is used.
+- **Existing selection files upgrade themselves.** The file now carries `"version": 2`. A file without it was written by the old code, so its `claude-*` IDs are converted back to family names on load, each conversion is logged once, and the file is rewritten. In a version 2 file a full ID is a deliberate pin and is left alone.
+
+### Added
+- Startup logs the concrete model each feature uses (`LLM models in use: default=anthropic/claude-opus-5-5 (from 'opus'), nl_processor=...`). The old "Updated 'opus' family" line said which model a family meant, not which model was actually in use, which is how this went unnoticed.
+- `/model` shows what a family resolves to, e.g. `sonnet` → `claude-sonnet-5-5`.
+
 ## [0.22.0] - 2026-09-22
 
 Fixes from the seventh audit (logic, performance, maintainability). The theme: alerting that went quiet and never came back. None of these showed up in tests because every test drove one step, never a sequence.

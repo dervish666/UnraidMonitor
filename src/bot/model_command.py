@@ -52,7 +52,10 @@ def _format_status(registry: "ProviderRegistry") -> str:
     for feat in _ALL_FEATURES:
         label = _FEATURE_DISPLAY[feat]
         if feat in feature_models:
-            lines.append(f"  {label}: `{feature_models[feat]}`")
+            chosen = feature_models[feat]
+            resolved = registry.resolve_model(chosen)
+            shown = f"`{chosen}` → `{resolved}`" if resolved != chosen else f"`{chosen}`"
+            lines.append(f"  {label}: {shown}")
         else:
             lines.append(f"  {label}: _default_")
 

@@ -163,6 +163,7 @@ async def _build_provider_registry(
     if providers:
         provider_names = ", ".join(p.display_name for p in providers)
         logger.info(f"LLM providers available: {provider_names}")
+        logger.info("LLM models in use: %s", registry.describe_models())
     else:
         logger.warning("No LLM providers configured - AI features will be disabled")
 

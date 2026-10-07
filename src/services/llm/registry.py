@@ -61,6 +61,13 @@ _OPENAI_MODELS: list[ModelInfo] = [
 
 _PERSISTENCE_FILENAME = "model_selection.json"
 
+# Format of model_selection.json. Files without a "version" key were written
+# before v0.22.1, which saved resolved IDs ("claude-opus-4-8") in place of the
+# family the user typed ("opus") and so froze the bot on whatever model was
+# newest that day. A legacy file has its claude-* IDs converted back to family
+# names on load. From version 2 on, a full ID in the file is a deliberate pin.
+_PERSISTENCE_VERSION = 2
+
 
 @dataclass
 class ProviderInfo:
@@ -112,7 +119,8 @@ class ProviderRegistry:
         if self._discovered_anthropic:
             self._update_families_from_discovered()
 
-        # Per-feature model overrides (feature_name -> model_id)
+        # Per-feature model overrides (feature_name -> what the user chose,
+        # a family name or a full ID). Resolved at use time, never stored resolved.
         self._feature_models: dict[str, str] = dict(feature_models or {})
 
         # Persistence paths
@@ -127,21 +135,22 @@ class ProviderRegistry:
             m.id: m.supports_tools for m in self._ollama_models
         }
 
-        # Determine default model/provider
+        # Determine default model/provider. _default_model_input is what the
+        # user chose (and what gets persisted); _default_model_name is its
+        # resolution against this run's discovered models.
         self._default_provider_name: str | None = None
         self._default_model_name: str | None = None
+        self._default_model_input: str | None = None
 
         # Try to load persisted selection first (may also merge feature overrides)
         persisted = self._load_persisted_selection()
         if persisted and self._has_provider(persisted[0]):
-            self._default_provider_name = persisted[0]
-            self._default_model_name = self._resolve_model(persisted[1])
+            self._set_default(persisted[0], persisted[1])
         elif default_model:
             resolved = self._resolve_model(default_model)
             provider_name = self._detect_provider(resolved)
             if provider_name:
-                self._default_provider_name = provider_name
-                self._default_model_name = resolved
+                self._set_default(provider_name, default_model)
             else:
                 self._auto_select_provider()
         else:
@@ -157,55 +166,64 @@ class ProviderRegistry:
         Checks per-feature overrides first, then falls back to the global
         default.  Returns ``None`` if no provider is configured.
         """
-        # Check feature override
-        if feature != "default" and feature in self._feature_models:
-            override_model = self._resolve_model(self._feature_models[feature])
-            override_provider_name = self._detect_provider(override_model)
-            if override_provider_name:
-                provider = self._create_provider(override_provider_name, override_model)
-                if provider is not None:
-                    return provider
+        route = self._route(feature)
+        if route is None:
+            return None
+        return self._create_provider(*route)
 
-        # Global default
-        if self._default_provider_name and self._default_model_name:
-            return self._create_provider(
-                self._default_provider_name, self._default_model_name
+    def resolved_model(self, feature: str = "default") -> tuple[str, str] | None:
+        """Return ``(provider_name, model_id)`` that *feature* would use right now."""
+        return self._route(feature)
+
+    def describe_models(self) -> str:
+        """One line naming the concrete model each feature resolves to, for the startup log."""
+        parts: list[str] = []
+        for feature in ("default", *_FEATURE_DEFAULTS):
+            route = self._route(feature)
+            if route is None:
+                parts.append(f"{feature}=none")
+                continue
+            chosen = (
+                self._feature_models.get(feature, self._default_model_input)
+                if feature != "default"
+                else self._default_model_input
             )
+            source = f" (from '{chosen}')" if chosen and chosen != route[1] else ""
+            parts.append(f"{feature}={route[0]}/{route[1]}{source}")
+        return ", ".join(parts)
 
-        return None
+    def resolve_model(self, model_id: str) -> str:
+        """Resolve a family name or retired alias to the concrete ID it means today."""
+        return self._resolve_model(model_id)
 
     def set_model(self, provider_name: str, model_name: str) -> None:
         """Switch the global default model and persist to disk.
 
         Accepts family names (``"sonnet"``) or full IDs (``"claude-sonnet-4-6"``).
+        The name is persisted as given, so a family keeps tracking the newest model.
         """
-        resolved = self._resolve_model(model_name)
-        self._default_provider_name = provider_name
-        self._default_model_name = resolved
+        self._set_default(provider_name, model_name)
         self._provider_cache.clear()
-        self._persist_selection(provider_name, model_name)
+        self._persist_selection()
         self._persist_to_config(default_model=model_name)
 
     def set_feature_model(self, feature: str, model_name: str) -> str:
-        """Set a per-feature model override and persist. Returns the resolved ID."""
-        resolved = self._resolve_model(model_name)
-        self._feature_models[feature] = resolved
+        """Set a per-feature model override and persist. Returns the resolved ID.
+
+        The name is stored as given (``"sonnet"`` stays ``"sonnet"``) and resolved
+        each time it is used.
+        """
+        self._feature_models[feature] = model_name
         self._provider_cache.clear()
-        self._persist_selection(
-            self._default_provider_name or "",
-            self._default_model_name or "",
-        )
+        self._persist_selection()
         self._persist_to_config(feature=feature, feature_model=model_name)
-        return resolved
+        return self._resolve_model(model_name)
 
     def clear_feature_model(self, feature: str) -> bool:
         """Remove a per-feature override so it falls back to the global default."""
         if feature in self._feature_models:
             del self._feature_models[feature]
-            self._persist_selection(
-                self._default_provider_name or "",
-                self._default_model_name or "",
-            )
+            self._persist_selection()
             default = _FEATURE_DEFAULTS.get(feature)
             if default:
                 self._persist_to_config(feature=feature, feature_model=default)
@@ -213,7 +231,7 @@ class ProviderRegistry:
         return False
 
     def get_feature_models(self) -> dict[str, str]:
-        """Return a copy of the current per-feature model overrides."""
+        """Return a copy of the per-feature overrides as chosen (family names or full IDs)."""
         return dict(self._feature_models)
 
     def get_available_providers(self) -> list[ProviderInfo]:
@@ -317,17 +335,32 @@ class ProviderRegistry:
     # Provider auto-detection
     # ------------------------------------------------------------------
 
+    def _set_default(self, provider_name: str, model_input: str) -> None:
+        """Record the global default as chosen and as resolved for this run."""
+        self._default_provider_name = provider_name
+        self._default_model_input = model_input
+        self._default_model_name = self._resolve_model(model_input)
+
+    def _route(self, feature: str) -> tuple[str, str] | None:
+        """``(provider, model_id)`` for *feature*: its override if usable, else the default."""
+        if feature != "default" and feature in self._feature_models:
+            override_model = self._resolve_model(self._feature_models[feature])
+            override_provider_name = self._detect_provider(override_model)
+            if override_provider_name:
+                return (override_provider_name, override_model)
+
+        if self._default_provider_name and self._default_model_name:
+            return (self._default_provider_name, self._default_model_name)
+        return None
+
     def _auto_select_provider(self) -> None:
         """Pick the first available provider: anthropic > openai > ollama."""
         if self._anthropic_client is not None:
-            self._default_provider_name = "anthropic"
-            self._default_model_name = self._resolve_model("sonnet")
+            self._set_default("anthropic", "sonnet")
         elif self._openai_client is not None:
-            self._default_provider_name = "openai"
-            self._default_model_name = _OPENAI_MODELS[0].id
+            self._set_default("openai", _OPENAI_MODELS[0].id)
         elif self._ollama_client is not None and self._ollama_models:
-            self._default_provider_name = "ollama"
-            self._default_model_name = self._ollama_default_model
+            self._set_default("ollama", self._ollama_default_model)
 
     def _detect_provider(self, model_name: str) -> str | None:
         """Detect which provider should serve *model_name*.
@@ -437,6 +470,11 @@ class ProviderRegistry:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError(f"expected a JSON object, got {type(data).__name__}")
+
+            if data.get("version") is None and self._migrate_legacy_selection(data):
+                self._write_selection(data)
 
             # Merge persisted per-feature overrides (take precedence over config)
             features = data.get("features")
@@ -449,22 +487,73 @@ class ProviderRegistry:
             model = data.get("model")
             if isinstance(provider, str) and isinstance(model, str):
                 return (provider, model)
-        except (json.JSONDecodeError, OSError, KeyError) as exc:
+        except (json.JSONDecodeError, OSError, KeyError, ValueError) as exc:
             logger.warning("Failed to load persisted model selection: %s", exc)
 
         return None
 
-    def _persist_selection(self, provider_name: str, model_name: str) -> None:
-        """Write model selection and per-feature overrides to JSON."""
-        path = self._persistence_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def _legacy_family(self, model_id: str) -> str | None:
+        """Family name for a concrete claude-* ID (``claude-opus-4-8`` -> ``opus``)."""
+        match = _FAMILY_PREFIX.match(model_id)
+        if match and match.group(1) in self._model_families:
+            return match.group(1)
+        return None
 
+    def _migrate_legacy_selection(self, data: dict[str, Any]) -> bool:
+        """Turn a pre-v2 file's resolved claude-* IDs back into family names, in place.
+
+        Pre-v2 code saved the resolved ID rather than what the user typed, so a
+        full ID in a legacy file cannot be told from a deliberate pin. Treating
+        it as the family is the reading that matches how /model was used.
+        Returns True if anything changed and the file should be rewritten.
+        """
+        changed = False
+
+        model = data.get("model")
+        if isinstance(model, str):
+            family = self._legacy_family(model)
+            if family:
+                logger.warning(
+                    "Migrated saved default model %s -> '%s' (legacy %s stored a "
+                    "resolved ID; the family now tracks the newest model)",
+                    model, family, _PERSISTENCE_FILENAME,
+                )
+                data["model"] = family
+                changed = True
+
+        features = data.get("features")
+        if isinstance(features, dict):
+            for feat, feat_model in list(features.items()):
+                if not isinstance(feat_model, str):
+                    continue
+                family = self._legacy_family(feat_model)
+                if family:
+                    logger.warning(
+                        "Migrated saved %s model %s -> '%s' (legacy %s stored a "
+                        "resolved ID; the family now tracks the newest model)",
+                        feat, feat_model, family, _PERSISTENCE_FILENAME,
+                    )
+                    features[feat] = family
+                    changed = True
+
+        if changed:
+            data["version"] = _PERSISTENCE_VERSION
+        return changed
+
+    def _persist_selection(self) -> None:
+        """Write the default and per-feature overrides to JSON, as the user chose them."""
         data: dict[str, Any] = {
-            "provider": provider_name,
-            "model": model_name,
+            "version": _PERSISTENCE_VERSION,
+            "provider": self._default_provider_name or "",
+            "model": self._default_model_input or "",
         }
         if self._feature_models:
             data["features"] = dict(self._feature_models)
+        self._write_selection(data)
+
+    def _write_selection(self, data: dict[str, Any]) -> None:
+        """Atomically write *data* to the selection file."""
+        path = self._persistence_path()
 
         # Atomic write, matching version_store/base_mute_manager: a crash
         # mid-write must not leave a half-written selection behind.

@@ -155,6 +155,10 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.22.1": [
+        "AI features now use the newest Claude models. If you had ever picked a model with /model, the bot kept using whatever was newest that day, for good. Choosing sonnet or opus now always means the latest one, and existing choices are upgraded automatically",
+        "A full model ID you pick on purpose, like /model chat claude-sonnet-4-6, still stays pinned",
+    ],
     "0.22.0": [
         "Stopping a watched container no longer makes the bot hammer Docker. It was re-checking hundreds of times a second until the container came back",
         "A crash alert can no longer be silenced by the error alert just before it, and \"RESTART LOOP\" now fires for containers that crash a minute or more apart",
