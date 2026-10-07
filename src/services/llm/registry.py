@@ -103,6 +103,8 @@ class ProviderRegistry:
         config_path: str | None = None,
         ollama_default_model: str = "qwen2.5:7b",
         discovered_anthropic_models: list[str] | None = None,
+        model_display_names: dict[str, str] | None = None,
+        provider_problems: dict[str, str] | None = None,
     ) -> None:
         # Store raw clients
         self._anthropic_client = anthropic_client
@@ -118,6 +120,13 @@ class ProviderRegistry:
         self._discovered_anthropic: set[str] = set(discovered_anthropic_models or [])
         if self._discovered_anthropic:
             self._update_families_from_discovered()
+
+        # Human names from the provider ("Claude Sonnet 5.5"), keyed by model ID
+        self._display_names: dict[str, str] = dict(model_display_names or {})
+
+        # Providers whose client exists but which refused us at startup
+        # (provider -> sentence such as "Anthropic rejected the API key")
+        self._provider_problems: dict[str, str] = dict(provider_problems or {})
 
         # Per-feature model overrides (feature_name -> what the user chose,
         # a family name or a full ID). Resolved at use time, never stored resolved.
@@ -191,6 +200,26 @@ class ProviderRegistry:
             source = f" (from '{chosen}')" if chosen and chosen != route[1] else ""
             parts.append(f"{feature}={route[0]}/{route[1]}{source}")
         return ", ".join(parts)
+
+    def display_name(self, model_id: str) -> str:
+        """Human name for a concrete model ID, e.g. ``Claude Sonnet 5.5``.
+
+        Uses the name the provider reported at discovery, else derives one from
+        a ``claude-<family>-<major>[-<minor>][-<date>]`` ID, else the ID itself.
+        """
+        if model_id in self._display_names:
+            return self._display_names[model_id]
+        match = re.fullmatch(r"claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?", model_id)
+        if match:
+            family, major, minor = match.groups()
+            version = f"{major}.{minor}" if minor else major
+            return f"Claude {family.capitalize()} {version}"
+        return model_id
+
+    @property
+    def provider_problems(self) -> dict[str, str]:
+        """Providers that are configured but refused us, e.g. a rejected API key."""
+        return dict(self._provider_problems)
 
     def resolve_model(self, model_id: str) -> str:
         """Resolve a family name or retired alias to the concrete ID it means today."""

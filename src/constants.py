@@ -155,6 +155,11 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.22.2": [
+        "This message is new. It leads with anything that needs a look, then sums up the rest in a line, and names the AI model each feature uses",
+        "AI features now use the newest Claude models. If you had ever picked a model with /model, the bot kept using whatever was newest that day, for good. Choosing sonnet or opus now always means the latest one, and existing choices upgrade themselves",
+        "The startup message no longer claims UPS monitoring is off when it is on",
+    ],
     "0.22.1": [
         "AI features now use the newest Claude models. If you had ever picked a model with /model, the bot kept using whatever was newest that day, for good. Choosing sonnet or opus now always means the latest one, and existing choices are upgraded automatically",
         "A full model ID you pick on purpose, like /model chat claude-sonnet-4-6, still stays pinned",

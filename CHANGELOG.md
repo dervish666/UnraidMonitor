@@ -2,7 +2,19 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.22.2] - 2026-10-07
+
+### Changed
+- **New startup message.** One header with a colour for overall health (green, yellow when anything needs a look, red when Docker events are down) and a count of things to look at. Problems come first, one line each, then a single line listing what is running, the containers being watched, and the AI model in use with any per-feature overrides grouped by model. /health keeps its full per-monitor list, unchanged.
+- Model names in the startup message use the name Anthropic reports ("Claude Sonnet 5.5"), falling back to one derived from the ID.
+
+### Fixed
+- **The startup message always said UPS monitoring was off.** Startup never passed the UPS monitor to the status builder. It now does, and a UPS whose first poll has not answered yet reads "connecting" rather than unavailable.
+- **A rejected Anthropic API key was logged at info level and otherwise silent.** Discovery now records it and the startup message says "Anthropic rejected the API key". OpenAI has no discovery call, so a bad OpenAI key still only shows on first use.
+
 ## [0.22.1] - 2026-10-07
+
+Tagged but not deployed to the maintainer's server; its fixes reach it in 0.22.2.
 
 ### Fixed
 - **Model families froze on the model that was newest on the day you used `/model`.** `set_feature_model` saved the resolved ID (`claude-sonnet-4-6`) instead of the family typed (`sonnet`), and every per-feature change re-saved the global default the same way. `data/model_selection.json` outranks `config.yaml` and a full ID skips family resolution, so a live install kept running Sonnet 4.6 and Opus 4.8 in October while its startup log reported resolving the families to the 5.5 models. The registry now saves what you typed and resolves it each time it is used.

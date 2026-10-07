@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anthropic
 from aiogram import Bot, Dispatcher
@@ -41,7 +41,9 @@ from src.monitor_callbacks import (
     make_ask_restart_handler,
     make_mute_maintenance_loop,
 )
-from src.bot.health_command import BOT_VERSION, build_status_lines
+from src.bot.health_command import (
+    BOT_VERSION, ai_summary, build_startup_lines, collect_status,
+)
 from src.constants import (
     WHATS_NEW,
     ANNOUNCED_VERSION_PATH,
@@ -53,6 +55,9 @@ from src.constants import (
 )
 from src.utils.version_store import read_announced_version, write_announced_version
 
+
+if TYPE_CHECKING:
+    from src.services.llm.registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +126,9 @@ async def _build_provider_registry(
             logger.warning(f"Failed to discover Ollama models: {e}")
             return []
 
+    anthropic_names: dict[str, str] = {}
+    provider_problems: dict[str, str] = {}
+
     async def _discover_anthropic() -> list[str]:
         if anthropic_client is None:
             return []
@@ -130,12 +138,24 @@ async def _build_provider_registry(
                 timeout=MODEL_DISCOVERY_TIMEOUT_SECONDS,
             )
             models = [m.id for m in models_page.data]
+            for m in models_page.data:
+                display = getattr(m, "display_name", None)
+                if isinstance(display, str) and display:
+                    anthropic_names[m.id] = display
             logger.info("Discovered %d Anthropic models", len(models))
             return models
+        except anthropic.AuthenticationError as e:
+            # A rejected key will not fix itself, and every AI call would fail
+            # the same way. Record it so the startup message says so.
+            logger.error("Anthropic rejected the API key: %s", e)
+            provider_problems["anthropic"] = "Anthropic rejected the API key"
+            return []
         except Exception as e:
             logger.info("Could not list Anthropic models (using defaults): %s", e)
             return []
 
+    # OpenAI has no discovery call here, so a rejected OpenAI key is not
+    # detected at startup; it surfaces on the first chat or /diagnose call.
     ollama_models, discovered_anthropic = await asyncio.gather(
         _discover_ollama(), _discover_anthropic(),
     )
@@ -157,6 +177,8 @@ async def _build_provider_registry(
         config_path=settings.config_path,
         ollama_default_model=ai_config.ollama_default_model,
         discovered_anthropic_models=discovered_anthropic or None,
+        model_display_names=anthropic_names,
+        provider_problems=provider_problems,
     )
 
     providers = registry.get_available_providers()
@@ -366,22 +388,28 @@ async def _send_startup_notification(
     memory_monitor: Any = None,
     log_watcher: Any = None,
     monitor: Any = None,
+    registry: ProviderRegistry | None = None,
 ) -> None:
     previous = read_announced_version(ANNOUNCED_VERSION_PATH)
     show_whats_new = previous != BOT_VERSION and BOT_VERSION in WHATS_NEW
-    status_lines = build_status_lines(
+    items = collect_status(
         monitor=monitor, log_watcher=log_watcher, resource_monitor=resource_monitor,
         memory_monitor=memory_monitor, unraid_client=uc.client,
         unraid_system_monitor=uc.system_monitor, unraid_array_monitor=uc.array_monitor,
         unraid_notification_monitor=uc.notification_monitor,
         image_update_monitor=image_update_monitor, auto_heal_config=auto_heal_config,
+        ups_monitor=uc.ups_monitor,
     )
-    parts = [f"🟢 *Bot started* - v{BOT_VERSION}", "", *status_lines]
+    ai_lines, ai_problems = ai_summary(registry)
+    parts = build_startup_lines(
+        items, version=BOT_VERSION, ai_lines=ai_lines, ai_problems=ai_problems,
+    )
     if show_whats_new:
         parts.append("")
         parts.append(f"✨ *What's new in v{BOT_VERSION}*")
         parts.extend(f"  • {item}" for item in WHATS_NEW[BOT_VERSION])
     startup_msg = "\n".join(parts)
+    logger.info("Startup message:\n%s", startup_msg)
     for cid in chat_id_store.get_all_chat_ids():
         try:
             await send_with_retry(bot.send_message, chat_id=cid, text=startup_msg, parse_mode="Markdown")
@@ -701,5 +729,5 @@ async def start_monitoring(
         bot, chat_id_store, state, log_watching_config, uc,
         image_update_monitor=image_update_monitor, auto_heal_config=config.auto_heal,
         resource_monitor=resource_monitor, memory_monitor=bg.memory_monitor,
-        log_watcher=log_watcher, monitor=monitor,
+        log_watcher=log_watcher, monitor=monitor, registry=registry,
     )

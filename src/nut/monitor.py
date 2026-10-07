@@ -150,6 +150,25 @@ class UpsMonitor:
     def ups_name(self) -> str | None:
         return self._ups_name
 
+    @property
+    def target(self) -> str:
+        """``host:port`` of the NUT server being polled."""
+        return self._client.target
+
+    @property
+    def has_polled(self) -> bool:
+        """True once any poll has finished, successful or not.
+
+        Before that, "not available" means "not asked yet", which the startup
+        message must not report as a failure.
+        """
+        return self._available is not None or self._consecutive_failures > 0
+
+    @property
+    def never_reached(self) -> bool:
+        """Polled, failed, and never once succeeded: most likely no NUT server."""
+        return self._available is None and self._consecutive_failures > 0
+
     async def start(self) -> None:
         """Run the poll loop. Wrap in asyncio.create_task() from startup."""
         if self._running:

@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from src.services.llm.provider import ModelInfo
-from src.services.llm.registry import ProviderInfo, ProviderRegistry
+from src.services.llm.registry import ProviderRegistry
 
 
 # ---------------------------------------------------------------------------
