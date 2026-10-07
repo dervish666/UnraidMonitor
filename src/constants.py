@@ -155,6 +155,10 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.22.3": [
+        "Unraid notifications with underscores in them (disk names, serial numbers) were being dropped. They now arrive, as plain text if the formatting won't parse",
+        "No UPS? The startup message no longer flags it. It only mentions UPS if you turned it off or it stopped answering",
+    ],
     "0.22.2": [
         "This message is new. It leads with anything that needs a look, then sums up the rest in a line, and names the AI model each feature uses",
         "AI features now use the newest Claude models. If you had ever picked a model with /model, the bot kept using whatever was newest that day, for good. Choosing sonnet or opus now always means the latest one, and existing choices upgrade themselves",

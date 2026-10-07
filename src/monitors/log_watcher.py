@@ -23,6 +23,37 @@ LOG_STREAM_RETRY_SECONDS = 10.0
 # Also matches __main__ logger (used by src/main.py when run as entry point).
 _SELF_LOG_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - (?:src\.|__main__)")
 
+# The level of one of the bot's own records, and the start of any record in the
+# same format (aiogram, asyncio, ...). A record logged with embedded newlines
+# arrives as several lines and only the first carries the prefix, so the rest
+# would be judged on their own: v0.22.2 logged its startup message that way and
+# "9 for log errors" came back as a log-error alert about the bot itself.
+_SELF_LOG_LEVEL_RE = re.compile(_SELF_LOG_RE.pattern + r"[\w.]* - (\w+) - ")
+_LOG_RECORD_START_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - ")
+_ALERTING_LEVELS = frozenset({"ERROR", "CRITICAL"})
+
+
+class SelfLogContinuation:
+    """Tracks whether the current line continues one of the bot's own quiet records.
+
+    Continuation lines of the bot's own INFO/WARNING/DEBUG records are skipped.
+    Continuation lines of its ERROR records, and any traceback, are still
+    judged, so a real failure inside the bot keeps alerting.
+    """
+
+    def __init__(self) -> None:
+        self._quiet = False
+
+    def is_quiet_continuation(self, line: str) -> bool:
+        match = _SELF_LOG_LEVEL_RE.match(line)
+        if match:
+            self._quiet = match.group(1) not in _ALERTING_LEVELS
+            return False
+        if _LOG_RECORD_START_RE.match(line) or line.startswith("Traceback (most recent call last)"):
+            self._quiet = False
+            return False
+        return self._quiet
+
 
 _PATTERN_CACHE: dict[tuple[tuple[str, ...], tuple[str, ...]], tuple[list[str], list[str]]] = {}
 _PATTERN_CACHE_MAX = 64
@@ -198,6 +229,7 @@ class LogWatcher:
 
         _drop_count = 0
         _last_drop_warn = 0.0
+        continuation = SelfLogContinuation()
 
         def _safe_put(item: str | None) -> None:
             """Put item in queue, dropping if full (log storm protection)."""
@@ -265,6 +297,9 @@ class LogWatcher:
 
                 if line is None:  # End of stream
                     break
+
+                if continuation.is_quiet_continuation(line):
+                    continue
 
                 if should_alert_for_error(
                     container=container_name,

@@ -409,7 +409,9 @@ async def _send_startup_notification(
         parts.append(f"✨ *What's new in v{BOT_VERSION}*")
         parts.extend(f"  • {item}" for item in WHATS_NEW[BOT_VERSION])
     startup_msg = "\n".join(parts)
-    logger.info("Startup message:\n%s", startup_msg)
+    # Header only, on one line. The bot often watches its own container's logs,
+    # and the body ("9 for log errors") read back as an error and alerted.
+    logger.info("Startup message: %s", parts[0])
     for cid in chat_id_store.get_all_chat_ids():
         try:
             await send_with_retry(bot.send_message, chat_id=cid, text=startup_msg, parse_mode="Markdown")

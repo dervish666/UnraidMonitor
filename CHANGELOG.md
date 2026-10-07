@@ -2,6 +2,13 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.22.3] - 2026-10-07
+
+### Fixed
+- **Alerts with stray Markdown were lost.** Two Unraid disk-utilization notifications failed with "can't parse entities" because their text had bare underscores. The relay sends through the shared server-alert handler, which escapes the title but not the body, and through `send_with_retry`, which every alert type uses. `send_with_retry` now resends a markup failure once as plain text, dropping bold and code markers and unescaping, but keeping underscores so names and serials survive.
+- **The bot alerted about itself on startup.** v0.22.2 logged its startup message over several lines. The log watcher already skips the bot's own prefixed log lines, but continuation lines carry no prefix, so "9 for log errors" was judged alone. Continuation lines of the bot's own records below ERROR are now skipped; its ERROR records, tracebacks and other libraries' records still alert. The startup log line is also back to one line.
+- **A UPS that never answered made every startup yellow.** UPS monitoring is on by default and dormant for the majority with no NUT server, so that state is now left out of the startup message entirely. /health still shows it. A UPS turned off on purpose still reads "Off", and one that answered and then stopped is still red.
+
 ## [0.22.2] - 2026-10-07
 
 ### Changed

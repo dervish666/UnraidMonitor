@@ -326,3 +326,57 @@ def test_stop_closes_open_streams():
     watcher._streams.add(stream)
     watcher.stop()
     stream.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bot_watching_itself_skips_continuations_of_its_quiet_records():
+    """v0.22.2 logged its startup message over several lines. Only the first
+    carried the log prefix, so "9 for log errors" was judged alone and the bot
+    alerted about itself. Real failures in the bot's container still alert."""
+    from src.monitors.log_watcher import LogWatcher
+
+    on_error = AsyncMock()
+    watcher = LogWatcher(
+        containers=["UnraidMonitorBot"],
+        # Sam's live config: note INFO is an ignore pattern, which never sees
+        # continuation lines because they carry no level.
+        error_patterns=["error", "exception", "fatal", "failed", "critical", "panic", "traceback"],
+        ignore_patterns=["DeprecationWarning", "DEBUG", "INFO"],
+        on_error=on_error,
+    )
+    log_lines = [
+        b"2026-10-07 22:16:06,713 - src.startup - INFO - Startup message:\n",
+        b"\xf0\x9f\x9f\xa1 *Unraid Monitor is up* \xc2\xb7 v0.22.2\n",
+        b"Watching 63 containers, 9 for log errors, 9 with auto-heal.\n",
+        b"2026-10-07 22:16:06,911 - src.alerts.manager - INFO - Sent log error alert for x\n",
+        b"2026-10-07 22:16:07,000 - src.monitors.memory_monitor - WARNING - Kill failed:\n",
+        b"container plex refused, critical\n",
+        # A real failure: an ERROR record's traceback still alerts
+        b"2026-10-07 22:16:08,000 - src.startup - ERROR - Startup step failed\n",
+        b"Traceback (most recent call last):\n",
+        b"ValueError: config exception\n",
+        # A traceback printed straight to stderr after a quiet record still alerts
+        b"2026-10-07 22:16:09,000 - src.startup - INFO - All monitors started\n",
+        b"Traceback (most recent call last):\n",
+        # Another library's record ends the quiet run
+        b"2026-10-07 22:16:10,000 - src.startup - INFO - one\n",
+        b"2026-10-07 22:16:10,100 - aiogram.dispatcher - ERROR - Polling failed\n",
+        b"fatal: connection reset\n",
+    ]
+    container = MagicMock()
+    container.logs.return_value = iter(log_lines)
+    client = MagicMock()
+    client.containers.get.return_value = container
+    watcher._client = client
+    watcher._running = True
+
+    await watcher._stream_logs("UnraidMonitorBot")
+
+    alerted = [call.args[1] for call in on_error.call_args_list]
+    assert alerted == [
+        "Traceback (most recent call last):",
+        "ValueError: config exception",
+        "Traceback (most recent call last):",
+        "2026-10-07 22:16:10,100 - aiogram.dispatcher - ERROR - Polling failed",
+        "fatal: connection reset",
+    ]

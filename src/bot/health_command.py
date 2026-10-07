@@ -192,11 +192,11 @@ def _ups_status(ups_monitor: Any) -> StatusItem:
         # first answer may not be in yet. Not asked is not the same as down.
         return StatusItem("UPS", PENDING, health, detail="connecting")
     if ups_monitor.never_reached:
-        return StatusItem(
-            "UPS", OFF, health,
-            detail=f"no NUT server answered at {target}, so it is idle.",
-            fix="Set nut.host, or turn {it} off in /manage → Features.",
-        )
+        # On by default but dormant: most installs run no UPS, and a NUT server
+        # that never once answered is the expected state for them, not a
+        # problem. /health still shows the detail; the startup message says
+        # nothing about it.
+        return StatusItem("UPS", OFF, health, in_summary=False)
     return StatusItem(
         "UPS", BROKEN, health,
         detail=f"lost contact with the NUT server at {target}. UPS status is unknown, not healthy.",

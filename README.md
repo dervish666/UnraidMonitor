@@ -38,6 +38,11 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 | <img src="screenshots/manage-dashboard.png" alt="The /manage dashboard showing server CPU, RAM and uptime with buttons for Status, Resources, Server, Disks, Manage Ignores, Manage Mutes and Features" width="420"> | <img src="screenshots/command-menu.png" alt="Telegram autocomplete listing the bot commands with a one-line description of each" width="420"> |
 | **The `/manage` hub.** Server vitals at the top, then every panel one tap away, feature toggles included. | **Commands, if you want them.** The menu is built from what your install actually has enabled, so it never offers something the bot cannot do. |
 
+## What's New in v0.22.3
+
+- **Unraid notifications stop going missing** - Ones with underscores in them, such as disk names and serial numbers, failed to send. Any alert whose formatting won't parse now goes out as plain text
+- **No UPS, no fuss** - The startup message only mentions UPS if you turned it off or it stopped answering
+
 ## What's New in v0.22.2
 
 - **A startup message you can read at a glance** - Anything that needs a look comes first, the rest is one line, and it names the AI model each feature uses. It also stopped claiming UPS monitoring was off when it was on

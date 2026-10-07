@@ -174,10 +174,29 @@ def test_ups_first_poll_pending_is_not_a_problem():
     assert "Unavailable" not in text
 
 
-def test_ups_with_no_nut_server_is_idle_not_broken():
+def test_ups_with_no_nut_server_stays_quiet():
+    """Most installs run no UPS. A NUT server that never answered is not a problem."""
     text = _render(_healthy(ups_monitor=_ups(available=False, never=True, last_error="refused")))
-    assert "⚪ UPS: no NUT server answered at tower:3493, so it is idle." in text
-    assert "🔴 UPS" not in text
+    assert text.startswith("🟢 *Unraid Monitor is up* · v0.22.2\n")
+    assert "UPS" not in text
+    assert "Everything's running: Docker events, logs, resources, memory, image updates and Unraid." in text
+
+
+def test_ups_turned_off_on_purpose_still_shows_off():
+    text = _render(_healthy(ups_monitor=None))
+    assert "⚪ Off: UPS. Turn it on in /manage → Features." in text
+
+
+def test_ups_that_answered_then_stopped_is_red():
+    text = _render(_healthy(ups_monitor=_ups(available=False, last_error="timed out")))
+    assert text.startswith("🟡")
+    assert "🔴 UPS: lost contact with the NUT server at tower:3493." in text
+
+
+def test_health_still_details_an_unreached_ups():
+    from src.bot.health_command import build_status_lines
+    lines = build_status_lines(ups_monitor=_ups(available=False, never=True, last_error="refused"))
+    assert "  UPS: ⚠️ Unavailable (refused)" in lines
 
 
 def test_no_providers_is_ai_off_and_not_a_problem(tmp_path):
@@ -250,3 +269,21 @@ async def test_startup_message_shows_registry_models(tmp_path, monkeypatch):
     reg = _anthropic_registry(tmp_path, default_model="opus")
     text = await _send(bot, chat_store, state, uc, registry=reg)
     assert "AI: Claude Opus 5.5" in text
+
+
+async def test_startup_log_cannot_trip_the_log_watcher(tmp_path, monkeypatch, caplog):
+    """The bot watches its own logs. v0.22.2 logged the whole message, and the line
+    "Watching 63 containers, 9 for log errors" came back as a log-error alert."""
+    bot, chat_store, state, uc = _ctx()
+    monkeypatch.setattr(startup_mod, "ANNOUNCED_VERSION_PATH", str(tmp_path / "v.json"))
+    with caplog.at_level("DEBUG", logger="src.startup"):
+        await _send(
+            bot, chat_store, state, uc,
+            log_watcher=NS(is_running=True, containers=[1, 2], total_drops=0),
+            monitor=NS(is_running=True, state_manager=NS(get_all=lambda: [1, 2])),
+        )
+    assert "for log errors" in bot.send_message.call_args.kwargs["text"]
+    for record in caplog.records:
+        message = record.getMessage()
+        assert "\n" not in message
+        assert "error" not in message.lower()
