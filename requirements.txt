@@ -14,4 +14,11 @@ psutil>=6.1.0,<8.0.0
 # with anyio's TLSStream. Floored for CVE-2026-63374 (IDNA 2003 host
 # encoding in that exact call).
 anyio>=4.14.2
+# Transitive under aiohttp/yarl. Floored for CVE-2026-104874 (C items-view
+# reference leak; not a path the bot reaches).
+multidict>=6.9.1
+# Transitive under docker via requests. Floored for PYSEC-2026-4175/4176/4177
+# (HTTPS proxy TLS, chunked streaming from a hostile server; the bot only
+# talks to the local Docker socket).
+urllib3>=2.8.0
 python-dotenv>=1.0.0,<2.0.0

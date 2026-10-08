@@ -16,6 +16,16 @@ dependencies = [
     # (PYSEC-2026-3546) or WebSockets (PYSEC-2026-3547); the bot long-polls
     # over HTTP and runs neither. CI pip-audit runs with no ignores.
     "aiohttp>=3.14.3,<4.0.0",
+    # multidict arrives under aiohttp and yarl. CVE-2026-104874 is a
+    # reference leak in the C items-view `|` and `-` operators; neither the
+    # bot nor aiohttp, aiogram or yarl calls them. Floored so CI pip-audit
+    # stays clean with no ignores.
+    "multidict>=6.9.1",
+    # urllib3 arrives under docker via requests. PYSEC-2026-4175 needs an
+    # HTTPS proxy; 4176 and 4177 need a hostile server streaming chunked
+    # responses. docker-py talks only to the local daemon over a unix
+    # socket, with no proxy and no compression. Floored for the same reason.
+    "urllib3>=2.8.0",
     "python-dotenv>=1.0.0,<2.0.0",
 ]
 
