@@ -48,6 +48,11 @@ NL_MAX_CONVERSATION_EXCHANGES = 5
 LLM_REQUEST_TIMEOUT_SECONDS = 120
 OLLAMA_REQUEST_TIMEOUT_SECONDS = 300
 MODEL_DISCOVERY_TIMEOUT_SECONDS = 15
+# Ollama discovery asks /api/show for each model's capabilities. Each lookup
+# gets its own short timeout, a few run at once, and the whole batch shares
+# MODEL_DISCOVERY_TIMEOUT_SECONDS so a slow Ollama cannot hold up startup.
+OLLAMA_SHOW_TIMEOUT_SECONDS = 5
+OLLAMA_SHOW_CONCURRENCY = 4
 
 # ---------------------------------------------------------------------------
 # Liveness heartbeat (Docker HEALTHCHECK reads this file's mtime)

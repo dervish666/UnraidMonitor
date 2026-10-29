@@ -1,12 +1,24 @@
 # tests/test_ollama_provider.py
 """Tests for Ollama LLM provider with model discovery."""
+import asyncio
 import json
+import logging
 
+import aiohttp
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+from src.services.llm import ollama_provider
 from src.services.llm.ollama_provider import OllamaProvider
 from src.services.llm.provider import LLMProvider, LLMResponse, ModelInfo
+
+
+@pytest.fixture(autouse=True)
+def _clear_capability_cache():
+    """The /api/show cache is module-level; keep tests from seeing each other's entries."""
+    ollama_provider._capability_cache.clear()
+    yield
+    ollama_provider._capability_cache.clear()
 
 
 # -- Helpers to build mock OpenAI responses (same pattern as test_openai_provider) --
@@ -334,7 +346,8 @@ class TestOllamaDiscoverModels:
             host="http://myhost:11434", session=session
         )
 
-        session.get.assert_called_once_with("http://myhost:11434/api/tags")
+        session.get.assert_called_once()
+        assert session.get.call_args.args == ("http://myhost:11434/api/tags",)
 
     async def test_discover_models_strips_trailing_slash(self):
         """Trailing slash on host should not cause double-slash in URL."""
@@ -351,7 +364,8 @@ class TestOllamaDiscoverModels:
             host="http://myhost:11434/", session=session
         )
 
-        session.get.assert_called_once_with("http://myhost:11434/api/tags")
+        session.get.assert_called_once()
+        assert session.get.call_args.args == ("http://myhost:11434/api/tags",)
 
 
 class TestOllamaFamilyMatching:
@@ -395,3 +409,150 @@ class TestOllamaFamilyMatching:
         assert (await self._discover(None))[0].supports_tools is False  # type: ignore[arg-type]
         models = await self._discover({"family": None, "families": [None, 3, "qwen3"]})
         assert models[0].supports_tools is True
+
+
+class _Ctx:
+    """Async context manager standing in for an aiohttp request."""
+
+    def __init__(self, status: int = 200, body=None, exc: BaseException | None = None,
+                 hang: bool = False):
+        self.status = status
+        self._body = body
+        self._exc = exc
+        self._hang = hang
+
+    async def __aenter__(self):
+        if self._hang:
+            await asyncio.sleep(3600)
+        if self._exc is not None:
+            raise self._exc
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def json(self):
+        return self._body
+
+
+class TestOllamaCapabilities:
+    """Tool support comes from what Ollama reports in /api/show ``capabilities``;
+    the family-prefix guess is only the fallback. gemma2 matches the "gemma"
+    prefix but Ollama rejects tools for it with "does not support tools"."""
+
+    @staticmethod
+    def _session(tags: list[dict], show: dict[str, _Ctx]) -> MagicMock:
+        session = MagicMock()
+        session.get = MagicMock(return_value=_Ctx(body={"models": tags}))
+        session.post = MagicMock(side_effect=lambda url, json, timeout: show[json["model"]])
+        return session
+
+    @staticmethod
+    def _tag(name: str, family: str, digest: str = "d1") -> dict:
+        return {"name": name, "model": name, "digest": digest, "details": {"family": family}}
+
+    async def _discover(self, session) -> dict[str, bool]:
+        models = await OllamaProvider.discover_models(
+            host="http://localhost:11434/", session=session
+        )
+        return {m.id: m.supports_tools for m in models}
+
+    async def test_capabilities_decide_over_the_family_guess(self):
+        session = self._session(
+            [self._tag("gemma2:latest", "gemma2"), self._tag("phi4-mini:latest", "phi3"),
+             self._tag("qwen2.5:7b", "qwen2")],
+            {
+                "gemma2:latest": _Ctx(body={"capabilities": ["completion"]}),
+                "phi4-mini:latest": _Ctx(body={"capabilities": ["completion", "tools"]}),
+                "qwen2.5:7b": _Ctx(body={"capabilities": ["completion", "tools"]}),
+            },
+        )
+        assert await self._discover(session) == {
+            "gemma2:latest": False,
+            "phi4-mini:latest": True,
+            "qwen2.5:7b": True,
+        }
+
+    async def test_show_request_names_the_model_with_a_timeout(self):
+        session = self._session(
+            [self._tag("qwen2.5:7b", "qwen2")],
+            {"qwen2.5:7b": _Ctx(body={"capabilities": ["tools"]})},
+        )
+        await self._discover(session)
+        call = session.post.call_args
+        assert call.args == ("http://localhost:11434/api/show",)
+        assert call.kwargs["json"]["model"] == "qwen2.5:7b"
+        assert call.kwargs["timeout"].total == ollama_provider.OLLAMA_SHOW_TIMEOUT_SECONDS
+
+    async def test_old_ollama_without_capabilities_falls_back_to_family(self):
+        session = self._session(
+            [self._tag("gemma2:latest", "gemma2"), self._tag("phi3:mini", "phi3")],
+            {"gemma2:latest": _Ctx(body={"license": "x"}), "phi3:mini": _Ctx(body={})},
+        )
+        assert await self._discover(session) == {"gemma2:latest": True, "phi3:mini": False}
+
+    async def test_one_failed_lookup_falls_back_for_that_model_only(self, caplog):
+        session = self._session(
+            [self._tag("gemma2:latest", "gemma2"), self._tag("llama3.2:latest", "llama")],
+            {
+                "gemma2:latest": _Ctx(body={"capabilities": ["completion"]}),
+                "llama3.2:latest": _Ctx(status=500),
+            },
+        )
+        with caplog.at_level(logging.DEBUG, logger="src.services.llm.ollama_provider"):
+            result = await self._discover(session)
+        assert result == {"gemma2:latest": False, "llama3.2:latest": True}
+        assert "llama3.2:latest: HTTP 500" in caplog.text
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    async def test_all_lookups_failing_is_a_warning(self, caplog):
+        session = self._session(
+            [self._tag("gemma2:latest", "gemma2"), self._tag("phi3:mini", "phi3")],
+            {
+                "gemma2:latest": _Ctx(exc=aiohttp.ClientConnectionError("reset")),
+                "phi3:mini": _Ctx(body="not a dict"),
+            },
+        )
+        with caplog.at_level(logging.WARNING, logger="src.services.llm.ollama_provider"):
+            result = await self._discover(session)
+        assert result == {"gemma2:latest": True, "phi3:mini": False}
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "failed for all 2 model(s)" in warnings[0].getMessage()
+
+    async def test_a_hung_ollama_cannot_hold_up_discovery(self, monkeypatch, caplog):
+        monkeypatch.setattr(ollama_provider, "MODEL_DISCOVERY_TIMEOUT_SECONDS", 0.05)
+        session = self._session(
+            [self._tag("gemma2:latest", "gemma2"), self._tag("qwen2.5:7b", "qwen2")],
+            {
+                "gemma2:latest": _Ctx(hang=True),
+                "qwen2.5:7b": _Ctx(body={"capabilities": ["tools"]}),
+            },
+        )
+        with caplog.at_level(logging.DEBUG, logger="src.services.llm.ollama_provider"):
+            result = await asyncio.wait_for(self._discover(session), timeout=2)
+        assert result == {"gemma2:latest": True, "qwen2.5:7b": True}
+        assert "gemma2:latest: no answer within" in caplog.text
+
+    async def test_answers_are_cached_per_digest(self):
+        show = {"gemma2:latest": _Ctx(body={"capabilities": ["completion"]})}
+        session = self._session([self._tag("gemma2:latest", "gemma2", "d1")], show)
+        assert await self._discover(session) == {"gemma2:latest": False}
+        assert await self._discover(session) == {"gemma2:latest": False}
+        assert session.post.call_count == 1
+
+        # A re-pulled model has a new digest and is asked again.
+        show["gemma2:latest"] = _Ctx(body={"capabilities": ["completion", "tools"]})
+        session.get = MagicMock(return_value=_Ctx(body={"models": [
+            self._tag("gemma2:latest", "gemma2", "d2")]}))
+        assert await self._discover(session) == {"gemma2:latest": True}
+        assert session.post.call_count == 2
+
+    async def test_failures_are_not_cached(self):
+        show = {"gemma2:latest": _Ctx(status=503)}
+        session = self._session([self._tag("gemma2:latest", "gemma2")], show)
+        assert await self._discover(session) == {"gemma2:latest": True}  # family guess
+
+        show["gemma2:latest"] = _Ctx(body={"capabilities": ["completion"]})
+        assert await self._discover(session) == {"gemma2:latest": False}
+        assert session.post.call_count == 2
