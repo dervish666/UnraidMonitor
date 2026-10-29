@@ -662,3 +662,75 @@ class TestOpenAIProviderParsingGuards:
         assert result.tool_calls is not None
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].name == "get_status"
+
+
+class TestOpenAIProviderNormalizedToolCallTranslation:
+    """NLProcessor's assistant shape ({content: str, tool_calls: [{id, name, input}]})
+    must reach the API in OpenAI form. Issue #7: it was passed through untouched and
+    Ollama rejected the follow-up with 400 "invalid tool call arguments"."""
+
+    def test_normalized_tool_calls_get_type_and_json_arguments(self):
+        messages = [
+            {"role": "user", "content": "how is plex?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "name": "get_container_status", "input": {"name": "plex"}},
+                    {"id": "c2", "name": "get_container_logs", "input": {"name": "plex", "lines": 20}},
+                ],
+            },
+            {"role": "tool_result", "tool_use_id": "c1", "content": "running"},
+            {"role": "tool_result", "tool_use_id": "c2", "content": "no errors"},
+        ]
+
+        result = OpenAIProvider._translate_messages(messages, system="sys")
+
+        assistant = result[2]
+        assert assistant["role"] == "assistant"
+        assert assistant["content"] is None
+        assert assistant["tool_calls"] == [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "get_container_status", "arguments": '{"name": "plex"}'},
+            },
+            {
+                "id": "c2",
+                "type": "function",
+                "function": {
+                    "name": "get_container_logs",
+                    "arguments": '{"name": "plex", "lines": 20}',
+                },
+            },
+        ]
+        assert json.loads(assistant["tool_calls"][1]["function"]["arguments"]) == {
+            "name": "plex", "lines": 20,
+        }
+        assert result[3] == {"role": "tool", "tool_call_id": "c1", "content": "running"}
+        assert result[4] == {"role": "tool", "tool_call_id": "c2", "content": "no errors"}
+
+    def test_normalized_tool_calls_keep_assistant_text(self):
+        messages = [{
+            "role": "assistant",
+            "content": "Checking now.",
+            "tool_calls": [{"id": "c1", "name": "get_server_stats", "input": {}}],
+        }]
+
+        assistant = OpenAIProvider._translate_messages(messages)[0]
+
+        assert assistant["content"] == "Checking now."
+        assert assistant["tool_calls"][0]["function"]["arguments"] == "{}"
+
+    def test_openai_shaped_tool_calls_pass_through_unchanged(self):
+        msg = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "get_status", "arguments": '{"name": "plex"}'},
+            }],
+        }
+
+        assert OpenAIProvider._translate_messages([msg]) == [msg]

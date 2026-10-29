@@ -125,6 +125,12 @@ class OpenAIProvider:
                 # Translate Anthropic-style content blocks to OpenAI format
                 result.append(_translate_assistant_content_blocks(msg))
 
+            elif role == "assistant" and _has_normalized_tool_calls(msg):
+                # NLProcessor's shape: {"content": str, "tool_calls": [{id, name, input}]}.
+                # Passing it through unchanged sent tool calls with no type and no
+                # function.arguments, which Ollama and OpenAI reject (issue #7).
+                result.append(_translate_normalized_tool_calls(msg))
+
             else:
                 # Pass through user, assistant (string content), etc.
                 result.append(msg)
@@ -195,6 +201,51 @@ class OpenAIProvider:
             stop_reason=stop_reason,
             tool_calls=tool_calls if tool_calls else None,
         )
+
+
+def _has_normalized_tool_calls(msg: dict[str, Any]) -> bool:
+    """True if ``tool_calls`` is the normalized ``{id, name, input}`` shape.
+
+    Tool calls already in OpenAI shape (with a ``function`` key) are left alone.
+    """
+    tool_calls = msg.get("tool_calls")
+    return (
+        isinstance(tool_calls, list)
+        and bool(tool_calls)
+        and all(isinstance(tc, dict) and "function" not in tc for tc in tool_calls)
+    )
+
+
+def _translate_normalized_tool_calls(msg: dict[str, Any]) -> dict[str, Any]:
+    """Translate a normalized assistant tool-call message to OpenAI format.
+
+    Normalized format (what NLProcessor builds)::
+
+        {"role": "assistant", "content": "...", "tool_calls": [
+            {"id": "...", "name": "...", "input": {...}},
+        ]}
+
+    OpenAI format::
+
+        {"role": "assistant", "content": "..." | None, "tool_calls": [
+            {"id": "...", "type": "function", "function": {"name": "...", "arguments": "..."}},
+        ]}
+    """
+    return {
+        "role": "assistant",
+        "content": msg.get("content") or None,
+        "tool_calls": [
+            {
+                "id": tc["id"],
+                "type": "function",
+                "function": {
+                    "name": tc["name"],
+                    "arguments": json.dumps(tc.get("input") or {}),
+                },
+            }
+            for tc in msg["tool_calls"]
+        ],
+    }
 
 
 def _translate_assistant_content_blocks(msg: dict[str, Any]) -> dict[str, Any]:

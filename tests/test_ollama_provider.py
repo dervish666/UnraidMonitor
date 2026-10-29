@@ -352,3 +352,46 @@ class TestOllamaDiscoverModels:
         )
 
         session.get.assert_called_once_with("http://myhost:11434/api/tags")
+
+
+class TestOllamaFamilyMatching:
+    """Issue #7: Ollama versions family names (qwen35, qwen3, gemma3), so an exact
+    match against the whitelist left tool-capable models without tools."""
+
+    @staticmethod
+    async def _discover(details: dict) -> list[ModelInfo]:
+        ollama_response = {
+            "models": [{"name": "m:latest", "model": "m:latest", "details": details}]
+        }
+        session = MagicMock()
+        resp_mock = AsyncMock()
+        resp_mock.status = 200
+        resp_mock.json = AsyncMock(return_value=ollama_response)
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=resp_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session.get = MagicMock(return_value=ctx)
+        return await OllamaProvider.discover_models(
+            host="http://localhost:11434", session=session
+        )
+
+    @pytest.mark.parametrize(
+        "family", ["qwen35", "qwen3", "qwen2", "gemma3", "llama4", "mistral3", "Qwen35"]
+    )
+    async def test_versioned_family_supports_tools(self, family: str):
+        models = await self._discover({"family": family})
+        assert models[0].supports_tools is True, f"Family '{family}' should support tools"
+
+    async def test_tool_capable_name_in_families_list_counts(self):
+        models = await self._discover({"family": "clip", "families": ["clip", "qwen35"]})
+        assert models[0].supports_tools is True
+
+    @pytest.mark.parametrize("family", ["phi3", "codellama", "llava", "nomic-bert", ""])
+    async def test_other_families_stay_without_tools(self, family: str):
+        models = await self._discover({"family": family, "families": [family]})
+        assert models[0].supports_tools is False
+
+    async def test_null_details_and_junk_families_do_not_crash(self):
+        assert (await self._discover(None))[0].supports_tools is False  # type: ignore[arg-type]
+        models = await self._discover({"family": None, "families": [None, 3, "qwen3"]})
+        assert models[0].supports_tools is True
