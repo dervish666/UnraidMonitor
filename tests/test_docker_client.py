@@ -121,27 +121,33 @@ class TestWrapperCoversWhatConsumersUse:
             assert host_cpu_cores(SharedDockerClient(raw)) == 3
         assert "using 3 from os.cpu_count()" in caplog.text
 
-    async def test_pull_reconnects_secondary_networks_through_the_wrapper(self):
+    async def test_pull_reaches_networks_through_the_wrapper(self):
+        """The wrapper must hand out the real client's networks collection.
+
+        Only the proxy is checked here. What gets sent to Docker is checked
+        through real docker-py in tests/test_pull_network_reconnect.py; the
+        version of this test that asserted connect(container, Aliases=[...])
+        on a mock passed while docker-py rejected that exact call.
+        """
         from src.services.container_control import ContainerController
         from src.services.docker_client import SharedDockerClient
 
-        container = MagicMock()
-        container.image.tags = ["lscr.io/linuxserver/sonarr:latest"]
-        container.image.id = "sha256:old"
-        container.attrs = {
+        old = MagicMock()
+        old.image.tags = ["lscr.io/linuxserver/sonarr:latest"]
+        old.image.id = "sha256:old"
+        old.attrs = {
             "Config": {"Image": "lscr.io/linuxserver/sonarr:latest"},
             "HostConfig": {"NetworkMode": "bridge"},
             "NetworkSettings": {"Networks": {"bridge": {}, "proxynet": {"Aliases": ["sonarr"]}}},
         }
+        new = MagicMock()
+        new.attrs = {"NetworkSettings": {"Networks": {"bridge": {}}}}
         raw = _spec_client()
-        raw.containers.get.return_value = container
+        raw.containers.get.side_effect = [old, new]
 
         controller = ContainerController(SharedDockerClient(raw), [])  # type: ignore[arg-type]
         result = await controller.pull_and_recreate("sonarr")
 
-        assert result.startswith("✅ sonarr updated"), result
         assert "Failed to reconnect" not in result
         raw.networks.get.assert_called_once_with("proxynet")
-        raw.networks.get.return_value.connect.assert_called_once_with(
-            container, Aliases=["sonarr"]
-        )
+        raw.networks.get.return_value.connect.assert_called_once()
