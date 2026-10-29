@@ -88,7 +88,11 @@ def host_cpu_cores(docker_client: Any) -> int:
         if ncpu > 0:
             return ncpu
     except Exception as e:
-        logger.warning(f"Could not read host CPU count from Docker: {e}")
+        fallback = os.cpu_count() or 1
+        logger.warning(
+            f"Could not read host CPU count from Docker: {e}; using {fallback} from os.cpu_count()"
+        )
+        return fallback
     return os.cpu_count() or 1
 
 
