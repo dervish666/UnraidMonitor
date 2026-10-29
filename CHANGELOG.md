@@ -2,6 +2,15 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.22.4] - 2026-10-29
+
+### Fixed
+- **Chat with tools broke on the second turn for Ollama and OpenAI.** NLProcessor keeps the assistant's tool calls in the normalized `{id, name, input}` shape, and `OpenAIProvider` passed them through unchanged, so the follow-up request carried tool calls with no `type` and no `function.arguments`. Ollama and OpenAI both reject that. They are now translated to the OpenAI shape before sending (issue #7).
+- **Newer Ollama models were treated as having no tools.** Tool support was an exact match on the model's family, and Ollama versions family names (`qwen2`, `qwen3`, `qwen35`, `gemma3`), so `qwen35` missed `qwen`. Families now match by prefix, checking both `family` and `families` (issue #7).
+
+### Security
+- Floors `aiohttp` at 3.14.4 (cookie jar fixes CVE-2026-111749 and CVE-2026-111065) and `certifi` at 2026.10.19 (PYSEC-2026-4320, drops the emSign ECC Root CA - G3). Dev-only floors for `filelock` and `msgpack`, which arrive under pip-audit.
+
 ## [0.22.3] - 2026-10-07
 
 ### Fixed
