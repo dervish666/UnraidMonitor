@@ -1,11 +1,85 @@
 import asyncio
+import inspect
 import logging
 from typing import Any
 
 import docker
+import docker.api.network
 from docker.types import DeviceRequest
 
 logger = logging.getLogger(__name__)
+
+# Keyword arguments the installed docker-py accepts when connecting a container
+# to a network. Network.connect() forwards **kwargs to this method, which
+# rejects anything else with a TypeError.
+_CONNECT_KWARGS: frozenset[str] = frozenset(
+    name
+    for name in inspect.signature(
+        docker.api.network.NetworkApiMixin.connect_container_to_network
+    ).parameters
+    if name not in ("self", "container", "net_id")
+)
+
+
+def _endpoint_connect_kwargs(endpoint: dict[str, Any], own_short_id: str) -> dict[str, Any]:
+    """Translate a ``docker inspect`` network endpoint into ``Network.connect()`` kwargs.
+
+    Inspect reports the endpoint in API shape (``Aliases``, ``Links``,
+    ``IPAMConfig``, ``DriverOpts``); docker-py takes snake_case keywords and
+    builds that shape itself. Passing the inspect keys through raised
+    "unexpected keyword argument 'Aliases'", so every secondary network with
+    an alias or a static IP was dropped after a /pull.
+
+    ``MacAddress`` is left out: inspect reports the address Docker assigned
+    even when nobody chose one, and pinning it would carry it to the new
+    container as if it had been configured.
+    """
+    kwargs: dict[str, Any] = {}
+
+    # Engines before API 1.45 also list the container's short ID as an alias.
+    # It names the old container, so it is not carried over.
+    aliases = [
+        a for a in (endpoint.get("Aliases") or [])
+        if isinstance(a, str) and a and a != own_short_id
+    ]
+    if aliases:
+        kwargs["aliases"] = aliases
+
+    # Inspect gives "name:alias" strings; docker-py wants (name, alias) pairs
+    # and unpacks each item, so a plain string fails in normalize_links().
+    links: list[tuple[str, str | None]] = []
+    for link in endpoint.get("Links") or []:
+        if isinstance(link, str) and link:
+            name, _, alias = link.partition(":")
+            links.append((name, alias or None))
+    if links:
+        kwargs["links"] = links
+
+    ipam = endpoint.get("IPAMConfig") or {}
+    if ipam.get("IPv4Address"):
+        kwargs["ipv4_address"] = ipam["IPv4Address"]
+    if ipam.get("IPv6Address"):
+        kwargs["ipv6_address"] = ipam["IPv6Address"]
+    if ipam.get("LinkLocalIPs"):
+        kwargs["link_local_ips"] = list(ipam["LinkLocalIPs"])
+
+    if endpoint.get("DriverOpts"):
+        kwargs["driver_opt"] = dict(endpoint["DriverOpts"])
+
+    unsupported = set(kwargs) - _CONNECT_KWARGS
+    for name in unsupported:
+        logger.warning(f"Installed docker-py cannot set {name} on a network endpoint; skipping it")
+        del kwargs[name]
+    return kwargs
+
+
+def _attached_networks(container: Any) -> set[str]:
+    """Names of the networks a container is already on, per its inspect data."""
+    attrs = getattr(container, "attrs", None)
+    if not isinstance(attrs, dict):
+        return set()
+    networks = (attrs.get("NetworkSettings") or {}).get("Networks") or {}
+    return set(networks) if isinstance(networks, dict) else set()
 
 
 class ContainerController:
@@ -143,9 +217,16 @@ class ContainerController:
                     new_container = await asyncio.to_thread(
                         self.docker_client.containers.get, container_name
                     )
+                    attached = _attached_networks(new_container)
                     for net_name, endpoint in secondary_networks.items():
+                        if net_name in attached:
+                            # run() already joined it, e.g. NetworkMode "default"
+                            # is reported as the "bridge" network.
+                            continue
                         try:
-                            network = self.docker_client.networks.get(net_name)
+                            network = await asyncio.to_thread(
+                                self.docker_client.networks.get, net_name
+                            )
                             await asyncio.to_thread(
                                 network.connect, new_container, **endpoint
                             )
@@ -202,27 +283,21 @@ class ContainerController:
     def _get_secondary_networks(attrs: dict[str, Any]) -> dict[str, dict[str, Any]]:
         """Extract secondary network connections (excluding the primary NetworkMode).
 
-        Returns a dict of network_name -> endpoint_config for networks that need
-        to be reconnected after container creation (since containers.run only
-        connects the primary network).
+        Returns a dict of network_name -> keyword arguments for docker-py's
+        ``Network.connect()``, for networks that need to be reconnected after
+        container creation (since containers.run only connects the primary
+        network).
         """
-        host_config = attrs.get("HostConfig", {})
+        host_config = attrs.get("HostConfig") or {}
         primary_network = host_config.get("NetworkMode", "")
+        own_short_id = (attrs.get("Id") or "")[:12]
 
-        networks = attrs.get("NetworkSettings", {}).get("Networks", {})
+        networks = (attrs.get("NetworkSettings") or {}).get("Networks") or {}
         secondary = {}
         for net_name, net_config in networks.items():
             if net_name == primary_network:
                 continue
-            # Extract reconnection-relevant config
-            endpoint = {}
-            if net_config.get("IPAMConfig"):
-                endpoint["IPAMConfig"] = net_config["IPAMConfig"]
-            if net_config.get("Aliases"):
-                endpoint["Aliases"] = net_config["Aliases"]
-            if net_config.get("Links"):
-                endpoint["Links"] = net_config["Links"]
-            secondary[net_name] = endpoint
+            secondary[net_name] = _endpoint_connect_kwargs(net_config or {}, own_short_id)
         return secondary
 
     def _extract_run_config(self, attrs: dict[str, Any]) -> dict[str, Any]:

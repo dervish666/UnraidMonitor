@@ -2,12 +2,20 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [Unreleased]
+
+Draft for 0.22.6. Not released; the version is still 0.22.5.
+
+### Fixed
+- **A /pull still dropped secondary networks that had an alias, a static IP or a link.** 0.22.5 fixed the missing `networks` proxy but not the call behind it: the endpoint from `docker inspect` was passed to docker-py's `Network.connect()` as-is (`Aliases=`, `IPAMConfig=`, `Links=`), and docker-py only takes snake_case keywords, so it failed with "unexpected keyword argument". Only a secondary network with none of those settings reconnected in 0.22.5. The endpoint is now translated to `aliases`, `links` (as name/alias pairs), `ipv4_address`, `ipv6_address`, `link_local_ips` and `driver_opt`. The old container's short ID, which engines before API 1.45 list as an alias, is not carried over, and the MAC address Docker assigned is not pinned. A network the recreated container has already joined is skipped instead of reported as a failure.
+- The 0.22.5 test for this asserted the broken call on a mock, so it passed. The tests now run docker-py's real `connect()` and check the request body it builds.
+
 ## [0.22.5] - 2026-10-29
 
 ### Fixed
 - **Ollama tool support is read from Ollama, not guessed.** Discovery guessed from the model family by prefix, which was wrong both ways: gemma2, gemma3, gemma and opencoder were offered tools that Ollama rejects ("does not support tools"), and models from a family not on the list had working tools withheld. Discovery now asks `/api/show` for each model's `capabilities`, caches the answer per model digest, and falls back to the family guess only for an Ollama too old to report capabilities or a lookup that fails. Lookups run four at a time with short timeouts inside the discovery budget, so a slow Ollama cannot hold up startup.
 - **The host CPU count warning on every startup.** `SharedDockerClient`, the reconnectable wrapper every consumer holds, did not pass through `info()`, so reading the host core count always failed with "has no attribute 'info'" and fell back to the bot's own count. That count only sets the top of the CPU threshold buttons and was usually the same number, so the visible cost was the warning.
-- **Secondary networks were dropped after a /pull.** The same wrapper did not pass through `networks`, so recreating a container after a /pull or an image-update Pull failed to reconnect every network beyond the primary one, and said so. Both are now passed through, and a test checks that every client attribute the code reads is.
+- **Secondary networks were dropped after a /pull.** The same wrapper did not pass through `networks`, so recreating a container after a /pull or an image-update Pull failed to reconnect every network beyond the primary one, and said so. Both are now passed through, and a test checks that every client attribute the code reads is. *Correction:* this fixed only secondary networks with no alias, static IP or link. Those still failed one step later, fixed in the next release (see Unreleased).
 
 ## [0.22.4] - 2026-10-29
 
