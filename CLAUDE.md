@@ -254,7 +254,7 @@ Messages use Markdown parse mode. Use `safe_reply()` and `safe_edit()` from `src
 - **`LLMProvider` protocol** (`src/services/llm/provider.py`) — normalized `chat()` interface returning `LLMResponse` with `.text`, `.stop_reason`, `.tool_calls`
 - **Provider implementations** — `AnthropicProvider`, `OpenAIProvider`, `OllamaProvider` translate the normalized interface to each SDK's format
 - **Tool call translation** — Anthropic uses `input_schema`/content blocks; OpenAI uses `function`/`parameters`; normalized via `ToolCall` dataclass
-- **Model discovery** — Ollama models discovered at startup via `/api/tags` endpoint
+- **Model discovery** — Ollama models discovered at startup via `/api/tags`; tool support is what `/api/show` reports in `capabilities` (cached per model digest), with the family-prefix guess only as a fallback for old servers or failed lookups. The prefix guess is wrong for some models (gemma2 matches "gemma" but has no tools)
 - **Per-feature overrides** — `feature_models` dict in config allows different models per AI feature (e.g., cheap model for pattern analysis, capable model for NL chat)
 - **Model families** — Config and `/model` accept family names (`sonnet`, `haiku`, `opus`) resolved to latest available model at startup via `client.models.list()` (hardcoded fallback if API unavailable)
 - **Runtime switching** — `/model` sets global default; `/model <feature> <model>` sets per-feature override (features: `chat`, `diagnose`, `analyze`); `/model <feature> default` resets to global. Persisted to `data/model_selection.json`

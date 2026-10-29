@@ -714,4 +714,5 @@ class TestOllamaDiscoverModels:
         await OllamaProvider.discover_models("http://localhost:11434/", session)
 
         # Should call with cleaned URL (no double slash)
-        session.get.assert_called_once_with("http://localhost:11434/api/tags")
+        session.get.assert_called_once()
+        assert session.get.call_args.args == ("http://localhost:11434/api/tags",)
