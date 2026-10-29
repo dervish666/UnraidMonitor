@@ -102,7 +102,7 @@ src/utils/version_store.py - read/write data/announced_version.json for startup 
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.22.4) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources), Unraid server health (CPU, memory, disks, array) and UPS state over NUT. Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.22.5) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources), Unraid server health (CPU, memory, disks, array) and UPS state over NUT. Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 UPS has a history worth knowing: the README once advertised UPS alerts that did not exist (removed in v0.19.0), and v0.21.0 built them for real against a NUT server (`src/nut/`). Do not reintroduce the "UPS was never implemented" line.
 

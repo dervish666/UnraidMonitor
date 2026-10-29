@@ -2,6 +2,13 @@
 
 All notable changes to UnraidMonitor will be documented in this file.
 
+## [0.22.5] - 2026-10-29
+
+### Fixed
+- **Ollama tool support is read from Ollama, not guessed.** Discovery guessed from the model family by prefix, which was wrong both ways: gemma2, gemma3, gemma and opencoder were offered tools that Ollama rejects ("does not support tools"), and models from a family not on the list had working tools withheld. Discovery now asks `/api/show` for each model's `capabilities`, caches the answer per model digest, and falls back to the family guess only for an Ollama too old to report capabilities or a lookup that fails. Lookups run four at a time with short timeouts inside the discovery budget, so a slow Ollama cannot hold up startup.
+- **The host CPU count warning on every startup.** `SharedDockerClient`, the reconnectable wrapper every consumer holds, did not pass through `info()`, so reading the host core count always failed with "has no attribute 'info'" and fell back to the bot's own count. That count only sets the top of the CPU threshold buttons and was usually the same number, so the visible cost was the warning.
+- **Secondary networks were dropped after a /pull.** The same wrapper did not pass through `networks`, so recreating a container after a /pull or an image-update Pull failed to reconnect every network beyond the primary one, and said so. Both are now passed through, and a test checks that every client attribute the code reads is.
+
 ## [0.22.4] - 2026-10-29
 
 ### Fixed

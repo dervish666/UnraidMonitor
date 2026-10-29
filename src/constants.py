@@ -160,6 +160,10 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.22.5": [
+        "Ollama models now get tools only if Ollama says they support them, so models like Gemma 2 chat normally instead of failing",
+        "Pull now reconnects every network a container was on, not just the main one",
+    ],
     "0.22.4": [
         "Chat on Ollama or OpenAI failed whenever a question needed a tool, such as checking a container. It works again, and newer Ollama models like Qwen 3.5 now get tools",
     ],

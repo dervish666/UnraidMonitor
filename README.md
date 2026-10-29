@@ -38,6 +38,11 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 | <img src="screenshots/manage-dashboard.png" alt="The /manage dashboard showing server CPU, RAM and uptime with buttons for Status, Resources, Server, Disks, Manage Ignores, Manage Mutes and Features" width="420"> | <img src="screenshots/command-menu.png" alt="Telegram autocomplete listing the bot commands with a one-line description of each" width="420"> |
 | **The `/manage` hub.** Server vitals at the top, then every panel one tap away, feature toggles included. | **Commands, if you want them.** The menu is built from what your install actually has enabled, so it never offers something the bot cannot do. |
 
+## What's New in v0.22.5
+
+- **Ollama models get tools only when they support them** - The bot now asks Ollama which models can use tools instead of guessing from the name, so models like Gemma 2 chat normally instead of failing
+- **Pull keeps your networks** - Updating a container with Pull now reconnects every network it was on, not just the main one
+
 ## What's New in v0.22.4
 
 - **Ollama and OpenAI chat can use tools again** - A question that needed a tool, such as container status, failed on the follow-up request. Newer Ollama models like Qwen 3.5 are also recognised as tool-capable
