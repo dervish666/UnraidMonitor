@@ -13,7 +13,9 @@ from src.services.llm.provider import ModelInfo
 
 logger = logging.getLogger(__name__)
 
-# Model families known to support tool/function calling.
+# Model family prefixes known to support tool/function calling. Matched as
+# prefixes because Ollama versions the family name: qwen2, qwen3, qwen35,
+# gemma3 (issue #7: an exact match left qwen35 without tools).
 _TOOL_CAPABLE_FAMILIES: frozenset[str] = frozenset({
     "llama",
     "mistral",
@@ -21,6 +23,22 @@ _TOOL_CAPABLE_FAMILIES: frozenset[str] = frozenset({
     "command-r",
     "gemma",
 })
+
+
+def _family_supports_tools(details: dict[str, Any]) -> bool:
+    """True if ``details.family`` or any of ``details.families`` is tool-capable."""
+    names: list[str] = []
+    family = details.get("family")
+    if isinstance(family, str):
+        names.append(family)
+    families = details.get("families")
+    if isinstance(families, list):
+        names.extend(f for f in families if isinstance(f, str))
+    return any(
+        name.lower().startswith(prefix)
+        for name in names
+        for prefix in _TOOL_CAPABLE_FAMILIES
+    )
 
 
 class OllamaProvider(OpenAIProvider):
@@ -89,8 +107,8 @@ class OllamaProvider(OpenAIProvider):
         models: list[ModelInfo] = []
         for entry in data.get("models", []):
             model_id = entry.get("name", entry.get("model", "unknown"))
-            family = entry.get("details", {}).get("family", "")
-            supports_tools = family in _TOOL_CAPABLE_FAMILIES
+            details = entry.get("details") or {}
+            supports_tools = _family_supports_tools(details)
 
             models.append(
                 ModelInfo(
