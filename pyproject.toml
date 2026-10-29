@@ -15,7 +15,15 @@ dependencies = [
     # what we are. The other two in that batch need an aiohttp server
     # (PYSEC-2026-3546) or WebSockets (PYSEC-2026-3547); the bot long-polls
     # over HTTP and runs neither. CI pip-audit runs with no ignores.
-    "aiohttp>=3.14.3,<4.0.0",
+    # Raised again to 3.14.4 for a batch that is mostly server-side; the
+    # client-side pair are cookie jar bugs (CVE-2026-111749 Host-Only
+    # stripping, CVE-2026-111065 a Max-Age overflow that skips a close).
+    "aiohttp>=3.14.4,<4.0.0",
+    # certifi arrives under aiogram, httpx and requests and is the trust
+    # store for every HTTPS call the bot makes (Telegram, Anthropic, OpenAI).
+    # PYSEC-2026-4320: certifi before 2026.10.18 still trusts emSign ECC
+    # Root CA - G3, whose intermediates have leaked keys. This one applies.
+    "certifi>=2026.10.19",
     # multidict arrives under aiohttp and yarl. CVE-2026-104874 is a
     # reference leak in the C items-view `|` and `-` operators; neither the
     # bot nor aiohttp, aiogram or yarl calls them. Floored so CI pip-audit
@@ -49,6 +57,12 @@ dev = [
     # needs a malicious package index).
     "cryptography>=50.0.0",
     "pip>=26.2",
+    # Both arrive under pip-audit itself via cachecontrol[filecache].
+    # filelock 4.2.1 fixes nine local lock-file advisories (CVE-2026-112907
+    # to 112940, symlink and Windows ACL cases); msgpack 1.2.3 fixes a C
+    # decoder leak (CVE-2026-114613). Neither is imported by the bot.
+    "filelock>=4.2.1",
+    "msgpack>=1.2.3",
     "types-PyYAML>=6.0",
     "types-psutil>=6.0",
     "types-docker>=7.0",
