@@ -56,7 +56,7 @@ dev = [
     # oracle we never touch), and pip is build tooling (PYSEC-2026-3721
     # needs a malicious package index).
     "cryptography>=50.0.0",
-    "pip>=26.2",
+    "pip>=26.2.2",
     # Both arrive under pip-audit itself via cachecontrol[filecache].
     # filelock 4.2.1 fixes nine local lock-file advisories (CVE-2026-112907
     # to 112940, symlink and Windows ACL cases); msgpack 1.2.3 fixes a C
