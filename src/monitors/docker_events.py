@@ -416,16 +416,19 @@ class DockerEventMonitor:
             try:
                 # Wait for an event with timeout to allow checking _running flag
                 if time.monotonic() - self._last_reconcile >= self.RECONCILE_SECONDS:
-                    await self._reconcile_unhealthy()
-                    await self._retry_pending_crashes()
-                    for hook in self.reconcile_hooks:
-                        try:
-                            await hook()
-                        except Exception as e:
-                            logger.error(f"Alert retry pass failed: {e}", exc_info=True)
-                    # Stamped after the pass: a pass slowed by an outage must
-                    # not leave the next one due after a single event.
-                    self._last_reconcile = time.monotonic()
+                    try:
+                        await self._reconcile_unhealthy()
+                        await self._retry_pending_crashes()
+                        for hook in self.reconcile_hooks:
+                            try:
+                                await hook()
+                            except Exception as e:
+                                logger.error(f"Alert retry pass failed: {e}", exc_info=True)
+                    finally:
+                        # Stamped after the pass, even a failed one: a pass
+                        # slowed by an outage must not come due again after a
+                        # single event, and one that raises must not spin.
+                        self._last_reconcile = time.monotonic()
                 try:
                     event = await asyncio.wait_for(
                         self._pending_alerts.get(), timeout=1.0
@@ -741,7 +744,11 @@ class DockerEventMonitor:
             self._unhealthy_pending.add(container_name)
 
     async def _reconcile_unhealthy(self) -> None:
-        """Announce containers still unhealthy whose alert was held back."""
+        """Announce containers still unhealthy whose alert was held back.
+
+        Stops at the first one whose alert still fails, like the other retry
+        passes on this task: an outage costs one failed send per pass.
+        """
         for name in list(self._unhealthy_pending):
             if self.mute_manager and self.mute_manager.is_muted(name):
                 continue
@@ -750,6 +757,8 @@ class DockerEventMonitor:
                 self._unhealthy_pending.discard(name)
                 continue
             await self._handle_health_event({"Actor": {"Attributes": {"name": name}}})
+            if name in self._unhealthy_pending:
+                return  # not muted, so back in the set means the send failed
 
     def _get_container_image(self, container_name: str) -> str:
         """Get image name for a container from state manager."""

@@ -80,6 +80,12 @@ def test_pre_branch_ignores_load_match_and_survive_a_save(tmp_path):
     r".*foo.*bar",
     r"z*z*+Q",
     r"(z*z*)x",  # last in its group, not in the pattern
+    # Round 4 review (Opus): a huge bound splits like +, a backreference
+    # matches what its group took.
+    r"\d{1,9999}\d+q",
+    r"(\d+)\1q",
+    r"\d+.\d+ms",
+    r"\w+.\w+=",
 ])
 def test_backtracking_shapes_are_refused(pattern):
     ok, why = validate_regex_pattern(pattern)
@@ -97,6 +103,8 @@ def test_backtracking_shapes_are_refused(pattern):
     r"^z*+z*+Q$",
     r"Connection refused to .* on port \d+",  # the trailing repeat has nothing after it to fail
     r".*foo.*",
+    r"\S+@\S+",
+    r"\d{1,20}:\d{1,20}",
     r"upstream timed out .* client: (\d{1,3}\.){3}\d{1,3}",
     r"\d+\s+\d+",
 ])
@@ -114,3 +122,12 @@ def test_overlapping_repeat_run_hand_edited_into_file_is_never_used(tmp_path):
     assert not manager.is_ignored("sonarr", "z" * 150 + "!")  # returns at once
     manager.add_ignore_pattern("radarr", "disk quota", "substring")
     assert json.loads(path.read_text())["sonarr"] == [entry]
+
+
+def test_probe_slower_than_its_budget_is_refused(monkeypatch):
+    """A search holds the GIL, so join() never timed out and a slow probe passed."""
+    import src.alerts.ignore_manager as im
+
+    monkeypatch.setattr(im, "_PROBE_SECONDS", 0.0)
+    ok, why = validate_regex_pattern(r"timeout after \d+ms")
+    assert not ok and "backtracking" in why

@@ -116,3 +116,46 @@ async def test_newer_line_arriving_during_a_failed_retry_is_kept(tmp_path):
     bot.down = False
     await on_error.retry_pending()
     assert len(bot.texts) == 1 and "newest" in bot.texts[0]
+
+
+async def test_unhealthy_retry_pass_stops_at_first_failed_send(tmp_path):
+    """Round 4 review: the sibling pass still spent one Telegram ladder per held container."""
+    monitor, bot = _docker_monitor(tmp_path)
+    monitor.state_manager.get = MagicMock(  # type: ignore[method-assign]
+        return_value=MagicMock(health="unhealthy"),
+    )
+    bot.down = True
+    for i in range(4):
+        await monitor._handle_health_event({"Actor": {"Attributes": {"name": f"web{i}"}}})
+    assert bot.send_message.await_count == 4
+
+    await monitor._reconcile_unhealthy()
+    assert bot.send_message.await_count == 5  # one failed send, not four
+
+    bot.down = False
+    for _ in range(4):
+        await monitor._reconcile_unhealthy()
+    assert len(bot.texts) == 4
+
+
+async def test_retry_pass_that_raises_waits_for_the_next_interval(tmp_path):
+    monitor, _ = _docker_monitor(tmp_path)
+    monitor.ignored_containers = {"x"}
+    passes = 0
+
+    async def broken_pass() -> None:
+        nonlocal passes
+        passes += 1
+        await asyncio.sleep(0)  # yield, so a regression fails the test instead of hanging it
+        raise RuntimeError("bug")
+
+    monitor._reconcile_unhealthy = broken_pass  # type: ignore[method-assign]
+    monitor._last_reconcile = 0.0
+    monitor._running = True
+    for _ in range(3):
+        monitor._pending_alerts.put_nowait(
+            {"_alert_type": "recovery", "Actor": {"Attributes": {"name": "x"}}},
+        )
+    monitor._pending_alerts.put_nowait(None)
+    await asyncio.wait_for(monitor._process_alerts(), timeout=5)
+    assert passes == 1

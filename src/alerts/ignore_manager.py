@@ -2,6 +2,7 @@ import hashlib
 import logging
 import re
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -160,7 +161,11 @@ def _adjacent_repeat_risk(state: Any, items: Any, top: bool = True) -> str:
     run: list[Any] = []
     flat = list(_inline(items))
     for index, (op, av) in enumerate(flat):
-        unbounded_repeat = op in _REPEATS and av[1] == _sre.MAXREPEAT
+        # \\d{1,9999} splits text as freely as \\d+, and a backreference
+        # matches whatever its group took, so both join runs like + and *.
+        unbounded_repeat = op in _REPEATS and av[1] > _MAX_BOUNDED_REPEAT
+        if op is _sre.GROUPREF and run and not (top and index == len(flat) - 1):
+            return "a backreference follows a repeat that can match the same text"
         if unbounded_repeat:
             last = top and index == len(flat) - 1
             if not last and any(overlaps(prev, av[2]) for prev in run):
@@ -208,7 +213,7 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
         return False, f"Pattern too long (max {MAX_REGEX_LENGTH} chars)"
 
     try:
-        compiled = re.compile(pattern)
+        compiled = re.compile(pattern, re.IGNORECASE)  # as IgnorePattern compiles it
         parsed = _sre_parse.parse(pattern, re.IGNORECASE)
         why = _backtracking_risk(parsed) or _adjacent_repeat_risk(parsed.state, parsed)
     except re.error as e:
@@ -219,18 +224,23 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
     # Probe with pathological strings in a daemon thread (signal.SIGALRM is
     # main-thread only). The join timeout catches a slow probe only between
     # searches; see the note on _ADVERSARIAL_PROBES.
-    result: list[bool] = []
+    # The thread times its own searches: a search holds the GIL, so join()
+    # cannot time out while one runs, and a slow probe used to finish, fill
+    # the result and pass.
+    budget = _PROBE_SECONDS * len(_ADVERSARIAL_PROBES)
+    result: list[float] = []
 
     def _test_regex() -> None:
+        started = time.monotonic()
         for probe in _ADVERSARIAL_PROBES:
             compiled.search(probe)
-        result.append(True)
+        result.append(time.monotonic() - started)
 
     t = threading.Thread(target=_test_regex, daemon=True)
     t.start()
-    t.join(timeout=_PROBE_SECONDS * len(_ADVERSARIAL_PROBES))
+    t.join(timeout=budget)
 
-    if not result:
+    if not result or result[0] > budget:
         return False, "Pattern causes excessive backtracking"
 
     return True, ""
