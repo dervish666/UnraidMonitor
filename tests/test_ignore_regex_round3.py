@@ -242,3 +242,35 @@ def test_leading_dot_star_filters_load_fast(pattern):
     assert validate_regex_pattern(pattern) == (True, "")
     assert time.monotonic() - started < 1.0
     assert IgnorePattern(pattern, "regex").matches("POST /api/x error timeout") is True
+
+
+def test_child_killed_between_requests_is_replaced_not_raised():
+    """Round 8 review: closing the buffered pipe to a dead child re-raised
+    BrokenPipeError out of the restart path and aborted the log batch."""
+    import os
+    import signal
+
+    worker = RegexWorker()
+    try:
+        assert worker.search("ok", ("ok",)) is True
+        os.kill(worker._proc.pid, signal.SIGKILL)
+        worker._proc.wait()
+        assert worker.search("ok", ("all ok",)) is True  # restarted, answered
+    finally:
+        worker.close()
+
+
+def test_write_to_a_stalled_child_keeps_the_deadline():
+    """A child that stopped reading used to block a large request past the limit."""
+    import os
+    import signal
+
+    worker = RegexWorker(timeout=0.25)
+    try:
+        assert worker.search("ok", ("ok",)) is True
+        os.kill(worker._proc.pid, signal.SIGSTOP)
+        started = time.monotonic()
+        assert worker.search("x", ("\U0001F600" * 4000,) * 2) is None
+        assert time.monotonic() - started < 1.0
+    finally:
+        worker.close()

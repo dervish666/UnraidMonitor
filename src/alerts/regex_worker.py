@@ -92,11 +92,31 @@ class RegexWorker:
         # Held in self._proc before the handshake, so a failed start is reaped by _stop().
         self._proc = proc = subprocess.Popen(
             [sys.executable, "-I", "-c", _CHILD],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0,
         )
+        assert proc.stdin is not None
+        # Requests go out with os.write against the same deadline as the
+        # reply: a child that stopped reading cannot block the caller.
+        os.set_blocking(proc.stdin.fileno(), False)
         if self._read_line(proc, _START_TIMEOUT_SECONDS) != b"ready":
             raise RegexWorkerError("regex worker did not start")
         return proc
+
+    def _write_all(self, proc: subprocess.Popen[bytes], data: bytes, timeout: float) -> bool:
+        """Send one request; False if the child did not take it in time."""
+        assert proc.stdin is not None
+        fd = proc.stdin.fileno()
+        deadline = time.monotonic() + timeout
+        view = memoryview(data)
+        while view:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([], [fd], [], remaining)[1]:
+                return False
+            try:
+                view = view[os.write(fd, view):]
+            except BlockingIOError:
+                continue
+        return True
 
     def _stop(self) -> None:
         proc, self._proc = self._proc, None
@@ -108,8 +128,12 @@ class RegexWorker:
         except subprocess.TimeoutExpired:
             logger.error(f"Regex worker {proc.pid} did not exit after kill")
         for pipe in (proc.stdin, proc.stdout):
-            if pipe is not None:
-                pipe.close()
+            if pipe is None:
+                continue
+            try:
+                pipe.close()  # unbuffered, so nothing is left to flush into a dead pipe
+            except OSError as e:
+                logger.debug(f"Closing a regex worker pipe: {e!r}")
 
     def search(self, pattern: str, texts: tuple[str, ...]) -> bool | None:
         """Whether the pattern matches any text; None when the search ran out of time."""
@@ -120,12 +144,14 @@ class RegexWorker:
             for attempt in (1, 2):  # a child that died between calls gets one restart
                 try:
                     proc = self._proc or self._start()
-                    assert proc.stdin is not None
-                    proc.stdin.write(request)
-                    proc.stdin.flush()
-                    reply = self._read_line(proc, self._timeout)
+                    started = time.monotonic()
+                    sent = self._write_all(proc, request, self._timeout)
+                    reply = (
+                        self._read_line(proc, self._timeout - (time.monotonic() - started))
+                        if sent else None
+                    )
                 except (OSError, EOFError, RegexWorkerError) as e:
-                    logger.error(f"Regex worker failed ({e}); restarting it")
+                    logger.error(f"Regex worker failed ({e!r}); restarting it")
                     self._stop()
                     if attempt == 2:
                         self._broken_until = time.monotonic() + _BROKEN_BACKOFF_SECONDS
