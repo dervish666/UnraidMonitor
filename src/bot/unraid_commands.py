@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
     from src.unraid.monitors.array_monitor import ArrayMonitor
     from src.alerts.server_mute_manager import ServerMuteManager
-    from src.alerts.array_mute_manager import ArrayMuteManager
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +249,7 @@ def unmute_server_command(
 
 
 def mute_array_command(
-    mute_manager: "ArrayMuteManager",
+    mute_manager: "ServerMuteManager",
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /mute-array command handler."""
 
@@ -291,7 +290,7 @@ def mute_array_command(
 
 
 def unmute_array_command(
-    mute_manager: "ArrayMuteManager",
+    mute_manager: "ServerMuteManager",
     array_monitor: "ArrayMonitor | None" = None,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /unmute-array command handler."""

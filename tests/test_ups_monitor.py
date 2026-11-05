@@ -41,6 +41,7 @@ class Recorder:
 
     async def __call__(self, title, message, alert_type):
         self.alerts.append((title, message, alert_type))
+        return True
 
     @property
     def titles(self):

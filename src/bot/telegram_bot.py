@@ -100,7 +100,6 @@ from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
 
 if TYPE_CHECKING:
-    from src.alerts.array_mute_manager import ArrayMuteManager
     from src.alerts.ignore_manager import IgnoreManager
     from src.alerts.mute_manager import MuteManager
     from src.alerts.recent_errors import RecentErrorsBuffer
@@ -252,7 +251,7 @@ def _register_unraid_commands(
     dp: Dispatcher,
     unraid_system_monitor: "UnraidSystemMonitor | None",
     server_mute_manager: "ServerMuteManager | None",
-    array_mute_manager: "ArrayMuteManager | None",
+    array_mute_manager: "ServerMuteManager | None",
     array_monitor: "ArrayMonitor | None",
     unraid_config: "UnraidConfig | None",
     ups_monitor: "UpsMonitor | None" = None,
@@ -331,7 +330,7 @@ def _register_manage_commands(
     resource_monitor: "ResourceMonitor | None",
     unraid_system_monitor: "UnraidSystemMonitor | None",
     server_mute_manager: "ServerMuteManager | None",
-    array_mute_manager: "ArrayMuteManager | None",
+    array_mute_manager: "ServerMuteManager | None",
     image_update_monitor: "ImageUpdateMonitor | None" = None,
     image_updates_config: "ImageUpdatesConfig | None" = None,
     auto_heal_config: "AutoHealConfig | None" = None,
@@ -428,7 +427,7 @@ def register_commands(
     mute_manager: "MuteManager | None" = None,
     unraid_system_monitor: "UnraidSystemMonitor | None" = None,
     server_mute_manager: "ServerMuteManager | None" = None,
-    array_mute_manager: "ArrayMuteManager | None" = None,
+    array_mute_manager: "ServerMuteManager | None" = None,
     array_monitor: "ArrayMonitor | None" = None,
     unraid_config: "UnraidConfig | None" = None,
     memory_monitor: "MemoryMonitor | None" = None,

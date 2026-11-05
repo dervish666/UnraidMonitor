@@ -80,6 +80,10 @@ class MemoryMonitor:
         self._stats_timeout = stats_timeout
         self._state = MemoryState.NORMAL
         self._killed_containers: list[str] = []
+        # Stops that failed in this pressure event. Skipped when choosing the
+        # next target, so a container Docker will not stop cannot pin the
+        # monitor on one doomed attempt, and retries stay bounded.
+        self._failed_kills: set[str] = set()
         self._running = False
         self._pending_kill: str | None = None
         self._kill_cancel_event: asyncio.Event | None = None
@@ -110,7 +114,9 @@ class MemoryMonitor:
         return [
             name
             for name in self._config.killable_containers
-            if name in running_names and name not in self._killed_containers
+            if name in running_names
+            and name not in self._killed_containers
+            and name not in self._failed_kills
         ]
 
     async def _get_next_killable(self) -> str | None:
@@ -226,11 +232,11 @@ class MemoryMonitor:
         vm = psutil.virtual_memory()
         return float(vm.percent), int(vm.available)
 
-    async def _stop_container(self, name: str) -> int | None:
-        """Stop a container and record it as killed.
+    async def _stop_container(self, name: str) -> KillResult:
+        """Stop a container and record it as killed (or as a failed attempt).
 
-        Returns the container's memory usage (bytes) just before it was stopped,
-        or None if it couldn't be read or the stop failed.
+        freed_bytes is the container's memory just before the stop, when it
+        could be read.
         """
         freed = await self._container_memory_bytes(name)
         try:
@@ -241,13 +247,13 @@ class MemoryMonitor:
             await asyncio.to_thread(_do_stop)
             self._killed_containers.append(name)
             logger.info(f"Stopped container {name} due to memory pressure")
-            return freed
+            return KillResult(True, name, freed)
         except docker.errors.NotFound:
             logger.warning(f"Container {name} not found when trying to stop")
-            return None
         except Exception as e:
             logger.error(f"Failed to stop container {name}: {e}")
-            return None
+        self._failed_kills.add(name)
+        return KillResult(False, name, freed)
 
     async def _check_memory(self) -> None:
         """Check memory and handle state transitions."""
@@ -268,6 +274,7 @@ class MemoryMonitor:
             elif percent < self._config.warning_threshold:
                 self._state = MemoryState.NORMAL
                 self._killed_containers.clear()
+                self._failed_kills.clear()
                 self._restart_prompted = False
                 logger.info("Memory returned to normal levels")
 
@@ -282,6 +289,7 @@ class MemoryMonitor:
                     self._state = MemoryState.RECOVERING
                 elif percent < self._config.warning_threshold:
                     self._state = MemoryState.NORMAL
+                    self._failed_kills.clear()
                     self._restart_prompted = False
                 else:
                     self._state = MemoryState.WARNING
@@ -404,26 +412,49 @@ class MemoryMonitor:
                 return False
 
             killed = False
+            stop_failed = False
             percent = self.get_memory_percent()
             if percent >= self._config.critical_threshold:
-                freed = await self._stop_container(container_name)
-                killed = container_name in self._killed_containers
+                result = await self._stop_container(container_name)
+                killed = result.success
                 now_percent, available = self._system_memory()
-                freed_note = f" It was using ~{format_bytes(freed)}." if freed else ""
-                await self._on_alert(
-                    "Container Stopped",
-                    f"Stopped {container_name} to free memory.{freed_note} "
-                    f"System memory now {now_percent:.0f}% ({format_bytes(available)} free).",
-                    "info",
-                    [],
-                    [],
-                )
+                if killed:
+                    freed_note = (
+                        f" It was using ~{format_bytes(result.freed_bytes)}."
+                        if result.freed_bytes else ""
+                    )
+                    await self._on_alert(
+                        "Container Stopped",
+                        f"Stopped {container_name} to free memory.{freed_note} "
+                        f"System memory now {now_percent:.0f}% ({format_bytes(available)} free).",
+                        "info",
+                        [],
+                        [],
+                    )
+                else:
+                    stop_failed = True
+                    await self._on_alert(
+                        "Could Not Stop Container",
+                        f"Tried to stop {container_name} to free memory, and Docker refused. "
+                        f"System memory still {now_percent:.0f}% ({format_bytes(available)} free).",
+                        "info",
+                        [],
+                        [],
+                    )
             else:
                 logger.info(f"Memory recovered, not killing {container_name}")
 
             self._pending_kill = None
             self._kill_cancel_event = None
-            return killed
+
+        if stop_failed:
+            # Still critical with nothing lined up: pick the next target (the
+            # failed one is now excluded) instead of sitting in CRITICAL with
+            # no countdown. Each container is tried at most once per event.
+            percent = self.get_memory_percent()
+            if percent >= self._config.critical_threshold:
+                await self._handle_critical(percent)
+        return killed
 
     async def cancel_pending_kill(self) -> bool:
         """Cancel a pending kill. Returns True if there was one to cancel."""

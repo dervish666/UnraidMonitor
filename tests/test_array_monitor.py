@@ -27,6 +27,7 @@ async def test_array_monitor_alerts_on_high_disk_temp():
     alerts = []
     async def capture_alert(**kwargs):
         alerts.append(kwargs)
+        return True
 
     monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
     await monitor.check_once()
@@ -61,6 +62,7 @@ async def test_array_monitor_alerts_on_disk_problem():
     alerts = []
     async def capture_alert(**kwargs):
         alerts.append(kwargs)
+        return True
 
     monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
     await monitor.check_once()
@@ -93,6 +95,7 @@ async def test_array_monitor_respects_mute():
     alerts = []
     async def capture_alert(**kwargs):
         alerts.append(kwargs)
+        return True
 
     monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
     await monitor.check_once()
@@ -124,6 +127,7 @@ async def test_array_monitor_tracks_alerted_disks():
     alerts = []
     async def capture_alert(**kwargs):
         alerts.append(kwargs)
+        return True
 
     monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
 
@@ -160,6 +164,7 @@ async def test_array_monitor_clear_alert_state():
     alerts = []
     async def capture_alert(**kwargs):
         alerts.append(kwargs)
+        return True
 
     monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
 
@@ -199,6 +204,7 @@ async def test_array_monitor_capacity_warning():
     alerts = []
     async def capture_alert(**kwargs):
         alerts.append(kwargs)
+        return True
 
     monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
     await monitor.check_once()
@@ -232,6 +238,7 @@ async def test_array_monitor_checks_all_disk_types():
     alerts = []
     async def capture_alert(**kwargs):
         alerts.append(kwargs)
+        return True
 
     monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
     await monitor.check_once()
@@ -273,6 +280,7 @@ async def test_disk_temp_flapping_at_threshold_alerts_once():
 
     async def capture_alert(**kwargs):
         alerts.append(kwargs)
+        return True
 
     monitor = ArrayMonitor(mock_client, mock_config, capture_alert, mock_mute)
     for _ in range(5):

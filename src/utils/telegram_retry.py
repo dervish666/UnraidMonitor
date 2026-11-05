@@ -5,7 +5,13 @@ import logging
 import re
 from typing import TypeVar, Callable, Awaitable, Any
 
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 
 from src.utils.telegram_format import strip_html_tags
 
@@ -15,6 +21,10 @@ T = TypeVar("T")
 
 # A Markdown V1 escape ("\\_") or a bold/code marker ("*", "`").
 _MD_V1_TOKEN = re.compile(r"\\(.)|[*`]")
+
+# Backoff for transient failures (connection reset, DNS, Telegram 5xx). Kept
+# short: an alert that is minutes late is worse than one retried by its caller.
+_TRANSIENT_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 
 
 def markdown_to_plain(text: str) -> str:
@@ -33,7 +43,7 @@ async def send_with_retry(
     max_retries: int = 3,
     **kwargs: Any,
 ) -> T | None:
-    """Execute a Telegram API call with retry logic for rate limits.
+    """Execute a Telegram API call, retrying rate limits and transient failures.
 
     Args:
         coro_func: The async function to call (e.g., bot.send_message).
@@ -75,6 +85,21 @@ async def send_with_retry(
                 return await send_with_retry(coro_func, *args, max_retries=max_retries, **plain)
             logger.error(f"Telegram API error: {e}")
             raise
+        except (TelegramNetworkError, TelegramServerError) as e:
+            # Both subclass TelegramAPIError, so they must be caught first or a
+            # network blip is treated as a permanent rejection.
+            if attempt < max_retries:
+                delay = _TRANSIENT_BACKOFF_SECONDS[
+                    min(attempt, len(_TRANSIENT_BACKOFF_SECONDS) - 1)
+                ]
+                logger.warning(
+                    f"Telegram transient error ({e}), retrying in {delay}s "
+                    f"(attempt {attempt + 1}/{max_retries + 1})"
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"Telegram unreachable after {max_retries + 1} attempts: {e}")
+                raise
         except TelegramAPIError as e:
             # For other Telegram errors, don't retry
             logger.error(f"Telegram API error: {e}")

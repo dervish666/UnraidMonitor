@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.alerts.array_mute_manager import ArrayMuteManager
 from src.alerts.mute_manager import MuteManager
 from src.alerts.server_mute_manager import ServerMuteManager
 from src.bot.alert_callbacks import mute_callback
@@ -46,7 +45,7 @@ def test_server_remute_buttons_are_minutes(tmp_path):
 
 
 def test_array_remute_buttons_are_minutes(tmp_path):
-    manager = ArrayMuteManager(json_path=str(tmp_path / "array.json"))
+    manager = ServerMuteManager(json_path=str(tmp_path / "array.json"))
 
     values = _values(manager, "array")
 
@@ -59,10 +58,9 @@ def test_all_manager_types_agree_on_duration(tmp_path):
     managers = [
         MuteManager(json_path=str(tmp_path / "m.json")),
         ServerMuteManager(json_path=str(tmp_path / "s.json")),
-        ArrayMuteManager(json_path=str(tmp_path / "a.json")),
     ]
 
-    durations = {tuple(sorted(_values(m, "key").values())) for m in managers}
+    durations = {tuple(sorted(_values(m, "server").values())) for m in managers}
 
     assert len(durations) == 1
 

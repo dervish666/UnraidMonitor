@@ -27,14 +27,14 @@ class AlertSender(Protocol):
         image: str,
         uptime_seconds: int | None = None,
         restart_loop_count: int | None = None,
-    ) -> None: ...
+    ) -> bool: ...
 
     async def send_log_error_alert(
         self,
         container_name: str,
         error_line: str,
         suppressed_count: int = 0,
-    ) -> None: ...
+    ) -> bool: ...
 
     async def send_resource_alert(
         self,
@@ -47,17 +47,17 @@ class AlertSender(Protocol):
         memory_limit: int,
         memory_percent: float,
         cpu_percent: float,
-    ) -> None: ...
+    ) -> bool: ...
 
-    async def send_health_alert(self, container_name: str, health_status: str) -> None: ...
+    async def send_health_alert(self, container_name: str, health_status: str) -> bool: ...
 
-    async def send_recovery_alert(self, container_name: str) -> None: ...
+    async def send_recovery_alert(self, container_name: str) -> bool: ...
 
-    async def send_update_alert(self, updates: list[tuple[str, str]]) -> None: ...
+    async def send_update_alert(self, updates: list[tuple[str, str]]) -> bool: ...
 
     async def send_autoheal_alert(
         self, container_name: str, attempt: int, max_attempts: int, gave_up: bool, failed: bool = False
-    ) -> None: ...
+    ) -> bool: ...
 
 
 class ChatIdStore:
@@ -137,6 +137,28 @@ class AlertManager:
         self.error_display_max_chars = error_display_max_chars
         self.cooldown_seconds = cooldown_seconds
 
+    async def _deliver(
+        self, text: str, keyboard: InlineKeyboardMarkup | None, sent_msg: str, fail_msg: str
+    ) -> bool:
+        """Send one alert. True only when Telegram accepted it.
+
+        Callers commit dedup and cooldown state on True, so a swallowed failure
+        here would lose the alert for good.
+        """
+        try:
+            await send_with_retry(
+                self.bot.send_message,
+                chat_id=self.chat_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+        except Exception as e:
+            logger.error(f"{fail_msg} to {self.chat_id}: {e}")
+            return False
+        logger.info(sent_msg)
+        return True
+
     async def send_crash_alert(
         self,
         container_name: str,
@@ -144,7 +166,7 @@ class AlertManager:
         image: str,
         uptime_seconds: int | None = None,
         restart_loop_count: int | None = None,
-    ) -> None:
+    ) -> bool:
         """Send a container crash alert with quick action buttons."""
         uptime_str = format_uptime(uptime_seconds) if uptime_seconds else "unknown"
 
@@ -187,24 +209,14 @@ Uptime: {uptime_str}"""
             ]
         )
 
-        try:
-            await send_with_retry(
-                self.bot.send_message,
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-            )
-            logger.info(f"Sent crash alert for {container_name}")
-        except Exception as e:
-            logger.error(f"Failed to send crash alert: {e}")
+        return await self._deliver(text, keyboard, f"Sent crash alert for {container_name}", "Failed to send crash alert")
 
     async def send_log_error_alert(
         self,
         container_name: str,
         error_line: str,
         suppressed_count: int = 0,
-    ) -> None:
+    ) -> bool:
         """Send a log error alert with ignore button."""
         total_errors = suppressed_count + 1
 
@@ -247,17 +259,7 @@ Latest: `{display_error}`
             ]
         )
 
-        try:
-            await send_with_retry(
-                self.bot.send_message,
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-            )
-            logger.info(f"Sent log error alert for {container_name}")
-        except Exception as e:
-            logger.error(f"Failed to send log error alert: {e}")
+        return await self._deliver(text, keyboard, f"Sent log error alert for {container_name}", "Failed to send log error alert")
 
     async def send_resource_alert(
         self,
@@ -270,7 +272,7 @@ Latest: `{display_error}`
         memory_limit: int,
         memory_percent: float,
         cpu_percent: float,
-    ) -> None:
+    ) -> bool:
         """Send a resource threshold alert.
 
         Args:
@@ -328,19 +330,9 @@ Exceeded for: {duration_str}
             ]
         )
 
-        try:
-            await send_with_retry(
-                self.bot.send_message,
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-            )
-            logger.info(f"Sent resource alert for {container_name} ({metric})")
-        except Exception as e:
-            logger.error(f"Failed to send resource alert: {e}")
+        return await self._deliver(text, keyboard, f"Sent resource alert for {container_name} ({metric})", "Failed to send resource alert")
 
-    async def send_health_alert(self, container_name: str, health_status: str) -> None:
+    async def send_health_alert(self, container_name: str, health_status: str) -> bool:
         """Send alert when a container's health check transitions to unhealthy."""
         safe_name = escape_markdown(container_name)
         text = f"🏥 *UNHEALTHY:* {safe_name}\n\nHealth check status: {health_status}"
@@ -355,21 +347,11 @@ Exceeded for: {duration_str}
             ]
         )
 
-        try:
-            await send_with_retry(
-                self.bot.send_message,
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=keyboard,
-            )
-            logger.info(f"Sent health alert for {container_name}")
-        except Exception as e:
-            logger.error(f"Failed to send health alert: {e}")
+        return await self._deliver(text, keyboard, f"Sent health alert for {container_name}", "Failed to send health alert")
 
     async def send_autoheal_alert(
         self, container_name: str, attempt: int, max_attempts: int, gave_up: bool, failed: bool = False
-    ) -> None:
+    ) -> bool:
         """Notify that an unhealthy container was auto-restarted, the restart failed, or we gave up."""
         safe_name = escape_markdown(container_name)
         if gave_up:
@@ -385,17 +367,12 @@ Exceeded for: {duration_str}
             InlineKeyboardButton(text="📋 Logs", callback_data=truncate_callback_data("logs:", f"{container_name}:50")),
             InlineKeyboardButton(text="🔍 Diagnose", callback_data=truncate_callback_data("diagnose:", container_name)),
         ]])
-        try:
-            await send_with_retry(self.bot.send_message, chat_id=self.chat_id, text=text,
-                                  parse_mode="Markdown", reply_markup=keyboard)
-            logger.info(f"Sent autoheal alert for {container_name} (gave_up={gave_up}, failed={failed})")
-        except Exception as e:
-            logger.error(f"Failed to send autoheal alert: {e}")
+        return await self._deliver(text, keyboard, f"Sent autoheal alert for {container_name} (gave_up={gave_up}, failed={failed})", "Failed to send autoheal alert")
 
-    async def send_update_alert(self, updates: list[tuple[str, str]]) -> None:
+    async def send_update_alert(self, updates: list[tuple[str, str]]) -> bool:
         """Send a single batched digest of containers with newer images available."""
         if not updates:
-            return
+            return True
         lines = [f"⬇️ *Image updates available* ({len(updates)})", ""]
         rows: list[list[InlineKeyboardButton]] = []
         for name, image in updates[:IMAGE_UPDATE_MAX_SHOWN]:
@@ -404,24 +381,9 @@ Exceeded for: {duration_str}
         if len(updates) > IMAGE_UPDATE_MAX_SHOWN:
             lines.append(f"...and {len(updates) - IMAGE_UPDATE_MAX_SHOWN} more")
         keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
-        try:
-            await send_with_retry(self.bot.send_message, chat_id=self.chat_id, text="\n".join(lines),
-                                  parse_mode="Markdown", reply_markup=keyboard)
-            logger.info(f"Sent image-update digest for {len(updates)} container(s)")
-        except Exception as e:
-            logger.error(f"Failed to send update alert: {e}")
+        return await self._deliver("\n".join(lines), keyboard, f"Sent image-update digest for {len(updates)} container(s)", "Failed to send update alert")
 
-    async def send_recovery_alert(self, container_name: str) -> None:
+    async def send_recovery_alert(self, container_name: str) -> bool:
         """Send a brief recovery notification when a crashed container starts."""
         text = f"✅ *{escape_markdown(container_name)}* recovered and is running again."
-
-        try:
-            await send_with_retry(
-                self.bot.send_message,
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode="Markdown",
-            )
-            logger.info(f"Sent recovery alert for {container_name}")
-        except Exception as e:
-            logger.error(f"Failed to send recovery alert: {e}")
+        return await self._deliver(text, None, f"Sent recovery alert for {container_name}", "Failed to send recovery alert")

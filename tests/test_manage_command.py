@@ -305,7 +305,7 @@ async def test_manage_delete_server_mute():
     """Test delete server mute button."""
     mute_manager = MagicMock()
     server_mute_manager = MagicMock()
-    server_mute_manager.unmute_server.return_value = True
+    server_mute_manager.unmute_system.return_value = True
     server_mute_manager.get_active_mutes.return_value = []
 
     handler = manage_delete_mute_callback(mute_manager, server_mute_manager, None)
@@ -319,8 +319,8 @@ async def test_manage_delete_server_mute():
 
     await handler(callback)
 
-    server_mute_manager.unmute_server.assert_called_once()
-    callback.answer.assert_called_with("Unmuted Server alerts")
+    server_mute_manager.unmute_system.assert_called_once()
+    callback.answer.assert_called_with("Unmuted System alerts")
 
 
 @pytest.mark.asyncio
@@ -329,7 +329,7 @@ async def test_manage_delete_array_mute():
     mute_manager = MagicMock()
     array_mute_manager = MagicMock()
     array_mute_manager.unmute_array.return_value = True
-    array_mute_manager.get_mute_expiry.return_value = None
+    array_mute_manager.get_active_mutes.return_value = []
 
     handler = manage_delete_mute_callback(mute_manager, None, array_mute_manager)
     callback = AsyncMock()

@@ -21,7 +21,7 @@ from src.alerts.ignore_manager import IgnoreManager
 from src.alerts.recent_errors import RecentErrorsBuffer
 from src.alerts.mute_manager import MuteManager
 from src.alerts.server_mute_manager import ServerMuteManager
-from src.alerts.array_mute_manager import ArrayMuteManager
+from src.unraid.monitors.availability import UnraidAvailability
 from src.bot.command_menu import publish_command_menu
 from src.bot.telegram_bot import register_commands
 from src.restart import restart_bot
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 class _UnraidComponents:
     __slots__ = (
         "client", "system_monitor", "array_monitor", "notification_monitor",
-        "server_mute_manager", "array_mute_manager",
+        "server_mute_manager", "array_mute_manager", "availability",
         "resource_monitor_ref", "ups_monitor", "server_alert_handler",
     )
 
@@ -75,7 +75,9 @@ class _UnraidComponents:
         self.array_monitor: ArrayMonitor | None = None
         self.notification_monitor: UnraidNotificationMonitor | None = None
         self.server_mute_manager: ServerMuteManager | None = None
-        self.array_mute_manager: ArrayMuteManager | None = None
+        # Same object as server_mute_manager: one store, array is a category.
+        self.array_mute_manager: ServerMuteManager | None = None
+        self.availability: UnraidAvailability | None = None
         self.resource_monitor_ref: list[ResourceMonitor | None] = [None]
         self.ups_monitor: UpsMonitor | None = None
         # Reused by the UPS monitor, which is independent of Unraid.
@@ -205,7 +207,8 @@ def _init_unraid(
         logger.info("Initializing Unraid monitoring...")
 
         uc.server_mute_manager = ServerMuteManager(json_path="data/server_mutes.json")
-        uc.array_mute_manager = ArrayMuteManager(json_path="data/array_mutes.json")
+        uc.server_mute_manager.import_legacy_array_mutes("data/array_mutes.json")
+        uc.array_mute_manager = uc.server_mute_manager
 
         uc.client = UnraidClientWrapper(
             host=unraid_config.host,
@@ -223,29 +226,34 @@ def _init_unraid(
         )
         uc.server_alert_handler = on_server_alert
 
+        # One ladder for both pollers: they hit the same API, and two
+        # "Unraid API Unavailable" alerts for one outage is noise.
+        uc.availability = UnraidAvailability(on_server_alert, uc.server_mute_manager)
+
         uc.system_monitor = UnraidSystemMonitor(
             client=uc.client,
             config=unraid_config,
             on_alert=on_server_alert,
             mute_manager=uc.server_mute_manager,
+            availability=uc.availability,
         )
 
         uc.array_monitor = ArrayMonitor(
             client=uc.client,
             config=unraid_config,
             on_alert=on_server_alert,
-            mute_manager=uc.array_mute_manager,
+            mute_manager=uc.server_mute_manager,
+            availability=uc.availability,
         )
 
         if unraid_config.notifications_enabled:
             uc.notification_monitor = UnraidNotificationMonitor(
                 client=uc.client,
                 config=unraid_config,
-                # Raising variant: the relay keeps an unsent notification
-                # unseen and retries it next poll instead of losing it.
+                # Plain variant (no mute/threshold buttons). It returns False
+                # on a failed send, and the relay keeps that notification unseen.
                 on_alert=make_server_alert_handler(
                     chat_id_store, bot, config, escape_markdown, uc.resource_monitor_ref,
-                    raise_on_failure=True,
                 ),
                 mute_manager=uc.server_mute_manager,
                 state_path=ANNOUNCED_NOTIFICATIONS_PATH,
@@ -687,8 +695,6 @@ async def start_monitoring(
     bg.mute_managers = [mute_manager]
     if uc.server_mute_manager:
         bg.mute_managers.append(uc.server_mute_manager)
-    if uc.array_mute_manager:
-        bg.mute_managers.append(uc.array_mute_manager)
 
     from aiogram.filters import Command as AiogramCommand
     from src.bot.health_command import health_command

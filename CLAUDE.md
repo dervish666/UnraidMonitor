@@ -28,8 +28,7 @@ src/state.py - ContainerStateManager for thread-safe container state tracking
 src/alerts/manager.py - AlertManager, AlertSender protocol, ChatIdStore
 src/alerts/rate_limiter.py - RateLimiter for deduplicating container alerts
 src/alerts/mute_manager.py - MuteManager for temporary container alert mutes
-src/alerts/server_mute_manager.py - ServerMuteManager for Unraid server/array mutes
-src/alerts/array_mute_manager.py - ArrayMuteManager for array/disk alert mutes
+src/alerts/server_mute_manager.py - ServerMuteManager, the one mute store for system/array/UPS alerts (imports legacy array_mutes.json once)
 src/alerts/base_mute_manager.py - BaseMuteManager with JSON persistence for mutes
 src/alerts/ignore_manager.py - IgnoreManager for ignoring regex patterns in logs
 src/alerts/recent_errors.py - RecentErrorsBuffer for tracking recent container errors
@@ -88,6 +87,7 @@ src/services/auto_healer.py - AutoHealer for opt-in auto-restart of unhealthy co
 src/unraid/client.py - UnraidClientWrapper with direct GraphQL API access
 src/unraid/monitors/system_monitor.py - UnraidSystemMonitor for CPU/memory/temp alerts
 src/unraid/monitors/array_monitor.py - ArrayMonitor for disk health, usage, and parity-operation progress
+src/unraid/monitors/availability.py - UnraidAvailability: shared API-outage ladder (alert once after N failed polls, once on recovery)
 src/unraid/monitors/notification_monitor.py - UnraidNotificationMonitor relaying Unraid's own notification feed (opt-in, importance floor)
 
 # Utils
@@ -194,7 +194,7 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `ctrl_confirm:action:container_name`, `ctrl_cancel`
 - `diag_details:container_name`
 - `ign_toggle:index`, `ign_all`, `ign_done`, `ign_cancel`
-- `mdi:container:index` (manage delete ignore), `mdm:type:key` (manage delete mute)
+- `mdi:container:index` (manage delete ignore), `mdm:type:key` (manage delete mute; type is `container`, `server` (system only), `array` or `ups`)
 - `help:section_key`, `help:back`
 - `res_limit:container_name:metric:threshold` (show threshold options; the CPU ladder runs to `cores * 100`, from `cpu_threshold_steps()` in `src/constants.py`)
 - `res_set:container_name:metric:value` (apply threshold, 0 = reset to default)
@@ -208,10 +208,10 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `arr_mute:minutes` (mute array alerts, e.g., `arr_mute:60`)
 - `arr_thresh:metric:current` (show array threshold options, e.g., `arr_thresh:capacity:85`)
 - `arr_set:metric:value` (apply array threshold, e.g., `arr_set:array_usage:90`, 0 = reset to default)
-- `srv_mute:minutes` (mute server alerts, e.g., `srv_mute:60`)
+- `srv_mute:minutes` (mute **system** alerts only, e.g., `srv_mute:60`; array and UPS stay live. `/mute-server` is the mute-everything command)
 - `srv_thresh:metric:current` (show server threshold options, e.g., `srv_thresh:cpu_temp:80`)
 - `srv_set:metric:value` (apply server threshold, e.g., `srv_set:cpu_temp:90`, 0 = reset to default)
-- `ups_mute:minutes` (mute UPS alerts, e.g., `ups_mute:60`) — shares `category_mute_callback` with `arr_mute:`/`srv_mute:` (30-day clamp). Mutes the UPS category only, but the undo hint points at `/unmute-server`, which clears system + array + UPS together. There is no UPS-only unmute yet.
+- `ups_mute:minutes` (mute UPS alerts, e.g., `ups_mute:60`) — shares `category_mute_callback` with `arr_mute:`/`srv_mute:` (30-day clamp). Mutes the UPS category only. `/unmute-server` clears system + array + UPS together; /manage → Mutes lists each category with its own unmute button (`mdm:ups:ups`).
 - `feat:ups:on` / `feat:ups:off` (enable/disable UPS monitoring from /manage → Features; persists + restarts)
 - `model:provider_name`, `model_select:provider:model`, `model:back`
 - `setup:confirm`, `setup:toggle:category:container_name` (e.g., `setup:toggle:watched:plex`), `setup:adjust:category`, `setup:adjust_done`
@@ -232,6 +232,10 @@ After registration, `publish_command_menu(bot, dp)` (called from `start_monitori
 **A disk status is not a verdict without its context.** `DISK_INVALID` means "being written to" during a parity sync and "broken" outside one; the array API has no per-disk rebuild flag, so `parityCheckStatus` is the only way to tell. Alerting on `status != DISK_OK` alone paged the user for a routine rebuild (confirmed live, v0.20.0). Related: the same payload returns `running`/`paused`/`errors` as **null** while `status` correctly reads RUNNING — verify which fields a live server actually populates before keying logic on them.
 
 **A rendered button needs a registered handler in the same conditions.** Alerts are built in `src/monitor_callbacks.py` from one set of flags and handlers are registered in `register_commands()` from another; when those disagree the button silently does nothing. `mem_kill:` is the cautionary tale — it was rendered whenever Unraid monitoring was on but registered only when `memory_management.enabled`. `MemoryMonitor` is now constructed unconditionally (inert until `start()`) with `bg.memory_monitor` as the sole signal for "the pressure loop is running".
+
+**A Docker health event carries its status in the Action.** dockerd emits `Action: "health_status: unhealthy"` (verb, colon, status in one string; moby `daemon/health.go`) and there is no `health_status` attribute. Comparing the raw Action to `"health_status"` matched nothing, so unhealthy alerts and auto-heal were dead in production while every test passed, because the tests built events by hand in the shape the code expected. Parse with `split_event_action()` (`src/monitors/docker_events.py`), and feed tests the real wire shape through `_event_loop` (`tests/test_event_sequences.py`). Docker only emits a health event when the status changes, so a container that goes unhealthy during a mute, or whose alert is lost to a Telegram outage, is held in `_unhealthy_pending` and re-checked by `_reconcile_unhealthy()` every 30s.
+
+**Delivery state follows what Telegram accepted.** `AlertManager.send_*`, `AlertManagerProxy.send_*` and the server-alert callback return `True` only when a chat received the alert (or it was queued before `/start`). Monitors commit dedup and cooldown state (array `_alerted_disks`, system cooldowns, UPS known flags and outage flag, image-update digests, relayed notification ids) only on `True`, so an alert lost to an outage is retried next poll. `send_with_retry` retries `TelegramNetworkError` and `TelegramServerError` (both subclass `TelegramAPIError`, so they must be caught first) with 1/2/4s backoff.
 
 **A reply arrives with the formatting stripped.** Telegram puts the plain text in `Message.text` and the markup in `entities`, so an alert sent as `*ERRORS IN:* plex` comes back as `ERRORS IN: plex`. Any pattern matching a replied-to alert must target the rendered text, never the source. `/diagnose` kept a private pattern list that required literal asterisks and therefore matched nothing in production for months, while its tests passed because they fed it raw source strings. One shared list now lives in `extract_alert_container()` (`src/utils/formatting.py`), and `tests/test_alert_reply_extraction.py` drives real `AlertManager` sends through a render step so a headline change in `manager.py` fails a test.
 
@@ -321,7 +325,7 @@ Environment variables can also be set via `config/.env` (loaded by pydantic-sett
 - `auto_heal` - Opt-in auto-restart of unhealthy containers (enabled, containers, max_restarts, window_minutes)
 - `nut` - UPS monitoring over NUT (enabled, host, port, ups_name, poll_seconds, thresholds.battery_charge, thresholds.load). On by default but dormant: `host` falls back to the Unraid host, and a host that never answers is logged, not alerted about, so it stays quiet for the majority who run no UPS.
 
-Data files in `data/`: `mutes.json`, `server_mutes.json`, `array_mutes.json`, `ignored_errors.json`, `model_selection.json` (runtime LLM choice), `chat_ids.json` (persistent Telegram chat IDs for alert delivery), `announced_version.json` (last-announced bot version for startup What's new gate), `announced_updates.json` (image-update dedup map so restarts don't re-announce), `announced_notifications.json` (relayed Unraid notification ids, bounded at 500)
+Data files in `data/`: `mutes.json`, `server_mutes.json` (system, array and UPS categories; a pre-0.23 `array_mutes.json` is imported once and renamed `.migrated`), `ignored_errors.json`, `model_selection.json` (runtime LLM choice), `chat_ids.json` (persistent Telegram chat IDs for alert delivery), `announced_version.json` (last-announced bot version for startup What's new gate), `announced_updates.json` (image-update dedup map so restarts don't re-announce), `announced_notifications.json` (relayed Unraid notification ids, bounded at 500)
 
 ## Design Context
 

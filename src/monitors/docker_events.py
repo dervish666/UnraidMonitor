@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any, TYPE_CHECKING
 
@@ -16,6 +17,18 @@ if TYPE_CHECKING:
     from src.alerts.mute_manager import MuteManager
 
 logger = logging.getLogger(__name__)
+
+
+def split_event_action(action: str) -> tuple[str, str]:
+    """Split a Docker event Action into (verb, detail).
+
+    Docker sends health events as ``"health_status: unhealthy"`` (verb and
+    status in one string, no ``health_status`` attribute), and exec events as
+    ``"exec_start: sh -c ..."``. Comparing the raw Action to ``"health_status"``
+    matched nothing, so unhealthy alerts and auto-heal never fired.
+    """
+    verb, _, detail = action.partition(":")
+    return verb.strip(), detail.strip()
 
 
 class CrashTracker:
@@ -175,6 +188,7 @@ class DockerEventMonitor:
     INITIAL_BACKOFF_SECONDS = 1
     MAX_BACKOFF_SECONDS = 60
     MAX_QUEUE_SIZE = 1000  # Prevent unbounded memory growth
+    RECONCILE_SECONDS = 30  # Re-check unannounced unhealthy containers
 
     def __init__(
         self,
@@ -202,6 +216,11 @@ class DockerEventMonitor:
         self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
         self._crash_tracker = CrashTracker()
         self._unhealthy_alerted: set[str] = set()  # Track containers already alerted as unhealthy
+        # Seen unhealthy but not yet announced (muted, or the send failed).
+        # Docker only emits a health event on a status change, so without
+        # this a container that stays unhealthy past its mute stays silent.
+        self._unhealthy_pending: set[str] = set()
+        self._last_reconcile = time.monotonic()
         self._auto_healer: Any | None = None
 
     @property
@@ -344,6 +363,9 @@ class DockerEventMonitor:
         while self._running:
             try:
                 # Wait for an event with timeout to allow checking _running flag
+                if time.monotonic() - self._last_reconcile >= self.RECONCILE_SECONDS:
+                    self._last_reconcile = time.monotonic()
+                    await self._reconcile_unhealthy()
                 try:
                     event = await asyncio.wait_for(
                         self._pending_alerts.get(), timeout=1.0
@@ -408,7 +430,7 @@ class DockerEventMonitor:
                 if not self._running:
                     break
 
-                action = event.get("Action", "")
+                action, detail = split_event_action(event.get("Action", ""))
                 container_name = event.get("Actor", {}).get("Attributes", {}).get("name", "")
 
                 if container_name in self.ignored_containers:
@@ -423,12 +445,14 @@ class DockerEventMonitor:
 
                 # Queue health_status events for unhealthy alerts
                 if action == "health_status" and self.alert_manager:
-                    health = event.get("Actor", {}).get("Attributes", {}).get("health_status", "")
-                    if health == "unhealthy":
+                    if detail == "unhealthy":
                         self._queue_alert({**event, "_alert_type": "health"}, "unhealthy")
-                    elif health == "healthy":
-                        # Clear the alerted flag so we re-alert if it goes unhealthy again
+                    elif detail == "healthy":
+                        # Clear the alerted flag so we re-alert if it goes unhealthy
+                        # again. Plain set ops from the events thread; the GIL makes
+                        # each atomic and the loop only reads them per alert.
                         self._unhealthy_alerted.discard(container_name)
+                        self._unhealthy_pending.discard(container_name)
 
                 # Queue die events for crash alert processing (thread-safe)
                 if action == "die" and self.alert_manager:
@@ -562,11 +586,14 @@ class DockerEventMonitor:
         # Only alert once per unhealthy transition
         if container_name in self._unhealthy_alerted:
             return
-        self._unhealthy_alerted.add(container_name)
 
-        # Check mute
+        # Check mute. Remember it, so the reconcile pass announces it if the
+        # container is still unhealthy when the mute ends.
         if self.mute_manager and self.mute_manager.is_muted(container_name):
+            self._unhealthy_pending.add(container_name)
             return
+        self._unhealthy_pending.discard(container_name)
+        self._unhealthy_alerted.add(container_name)
 
         logger.info(f"Container {container_name} is unhealthy")
         if self._auto_healer is not None and self._auto_healer.is_enabled(container_name):
@@ -578,10 +605,25 @@ class DockerEventMonitor:
                 # healthy transition clears it.
                 self._unhealthy_alerted.discard(container_name)
             return
-        await self.alert_manager.send_health_alert(
+        sent = await self.alert_manager.send_health_alert(
             container_name=container_name,
             health_status="unhealthy",
         )
+        if not sent:
+            # Lost to a Telegram outage: let the reconcile pass try again.
+            self._unhealthy_alerted.discard(container_name)
+            self._unhealthy_pending.add(container_name)
+
+    async def _reconcile_unhealthy(self) -> None:
+        """Announce containers still unhealthy whose alert was held back."""
+        for name in list(self._unhealthy_pending):
+            if self.mute_manager and self.mute_manager.is_muted(name):
+                continue
+            info = self.state_manager.get(name)
+            if info is None or info.health != "unhealthy":
+                self._unhealthy_pending.discard(name)
+                continue
+            await self._handle_health_event({"Actor": {"Attributes": {"name": name}}})
 
     def _get_container_image(self, container_name: str) -> str:
         """Get image name for a container from state manager."""

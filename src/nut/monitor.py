@@ -106,7 +106,7 @@ class UpsMonitor:
         self,
         client: NutClient,
         config: "NutConfig",
-        on_alert: Callable[..., Awaitable[None]],
+        on_alert: Callable[..., Awaitable[bool]],
         mute_manager: "ServerMuteManager",
     ) -> None:
         self._client = client
@@ -120,6 +120,10 @@ class UpsMonitor:
         self._available: bool | None = None
         self._consecutive_failures = 0
         self._last_error: str | None = None
+        # Reality (_available) and what the user has been told are separate:
+        # flipping _available during a mute used to swallow the outage alert
+        # for good, since only the true->false edge alerted.
+        self._outage_announced = False
 
         self._ups_name: str | None = None
         self._variables: dict[str, str] = {}
@@ -209,7 +213,6 @@ class UpsMonitor:
         self._variables = variables
         self._fetched_at = time.monotonic()
 
-        was_available = self._available
         self._available = True
 
         if self._mute_manager.is_ups_muted():
@@ -219,12 +222,12 @@ class UpsMonitor:
             logger.debug("UPS alerts muted, skipping checks")
             return variables
 
-        if was_available is False:
-            await self._alert(
-                "UPS Monitoring Restored",
-                f"Talking to {self._client.target} again.\n"
-                f"{self._describe_now(variables)}",
-            )
+        if self._outage_announced and await self._alert(
+            "UPS Monitoring Restored",
+            f"Talking to {self._client.target} again.\n"
+            f"{self._describe_now(variables)}",
+        ):
+            self._outage_announced = False
 
         await self._check_status(variables)
         await self._check_thresholds(variables)
@@ -240,15 +243,17 @@ class UpsMonitor:
             # Credentials will not fix themselves. Say so once, loudly, then
             # stop retrying so the log does not fill with the same rejection.
             logger.error(f"NUT authentication failed: {error}")
-            if self._available is not False:
-                self._available = False
-                if not self._mute_manager.is_ups_muted():
-                    await self._alert(
-                        "UPS Monitoring Failed",
-                        f"{self._client.target} rejected the credentials.\n"
-                        f"Check NUT_USERNAME and NUT_PASSWORD.",
-                    )
-            self._running = False
+            self._available = False
+            if not self._outage_announced and not self._mute_manager.is_ups_muted():
+                self._outage_announced = await self._alert(
+                    "UPS Monitoring Failed",
+                    f"{self._client.target} rejected the credentials.\n"
+                    f"Check NUT_USERNAME and NUT_PASSWORD.",
+                )
+            if self._outage_announced:
+                # Only stop once the user knows; stopping while muted or
+                # while Telegram was down left a dead monitor nobody heard of.
+                self._running = False
             return
 
         if self._available is None:
@@ -264,14 +269,14 @@ class UpsMonitor:
                 logger.debug(f"NUT still unreachable at {self._client.target}: {error}")
             return
 
-        if (
-            self._available is True
-            and self._consecutive_failures >= NUT_UNAVAILABLE_AFTER_FAILURES
-        ):
+        if self._consecutive_failures >= NUT_UNAVAILABLE_AFTER_FAILURES:
+            if self._available is True:
+                logger.warning(f"Lost contact with NUT server {self._client.target}: {error}")
             self._available = False
-            logger.warning(f"Lost contact with NUT server {self._client.target}: {error}")
-            if not self._mute_manager.is_ups_muted():
-                await self._alert(
+            # Retried every failed poll until delivered, so an outage that
+            # starts under a mute is still announced once the mute ends.
+            if not self._outage_announced and not self._mute_manager.is_ups_muted():
+                self._outage_announced = await self._alert(
                     "UPS Monitoring Unavailable",
                     f"Lost contact with {self._client.target} after "
                     f"{self._consecutive_failures} attempts.\n"
@@ -301,29 +306,35 @@ class UpsMonitor:
                 body = f"Mains is back after {elapsed}."
             else:
                 body = "Mains is back."
-            self._on_battery_since = None
-            await self._alert(
+            if await self._alert(
                 "UPS Back On Mains",
                 f"{body}\n{self._describe_now(variables)}",
-            )
+            ):
+                self._on_battery_since = None
+            else:
+                # Keep OB "known" so the next poll sees the transition again.
+                flags = flags | {"OB"}
 
-        if "OB" in appeared:
+        if "OB" in appeared and self._on_battery_since is None:
             self._on_battery_since = time.monotonic()
 
+        undelivered: set[str] = set()
         for flag in NUT_ALERT_FLAGS:
             if flag not in appeared:
                 continue
             cooldown = (
                 _REPLACE_BATTERY_COOLDOWN if flag == "RB" else _FLAG_COOLDOWN
             )
-            await self._rate_limited(
+            if await self._rate_limited(
                 f"flag:{flag}",
                 cooldown,
                 self._flag_title(flag),
                 f"{STATUS_MEANINGS.get(flag, flag)}.\n{self._describe_now(variables)}",
-            )
+            ) is False:
+                undelivered.add(flag)
 
-        self._known_flags = flags
+        # A flag whose alert did not go out stays "new" for the next poll.
+        self._known_flags = flags - undelivered
 
     async def _check_thresholds(self, variables: dict[str, str]) -> None:
         """Warn on a draining battery and on a UPS carrying too much load."""
@@ -436,21 +447,29 @@ class UpsMonitor:
     # Alert plumbing
     # ------------------------------------------------------------------
 
-    async def _alert(self, title: str, message: str) -> None:
-        await self._on_alert(title=title, message=message, alert_type="ups")
+    async def _alert(self, title: str, message: str) -> bool:
+        """True when the alert reached at least one chat."""
+        try:
+            return bool(await self._on_alert(title=title, message=message, alert_type="ups"))
+        except Exception as e:
+            logger.error(f"Failed to send UPS alert {title!r}: {e}")
+            return False
 
     async def _rate_limited(
         self, key: str, cooldown: float, title: str, message: str
-    ) -> None:
+    ) -> bool | None:
+        """True sent, False send failed, None suppressed by the cooldown."""
         now = time.monotonic()
         # -inf, not 0: on a freshly booted host time.monotonic() can be below
         # the cooldown, and 0 would swallow the very first alert.
         last = self._last_alert_times.get(key, float("-inf"))
         if now - last < cooldown:
             logger.debug(f"Suppressing duplicate UPS alert {key} (cooldown)")
-            return
-        self._last_alert_times[key] = now
-        await self._alert(title, message)
+            return None
+        if await self._alert(title, message):
+            self._last_alert_times[key] = now
+            return True
+        return False
 
     def _prune_cooldowns(self) -> None:
         cutoff = time.monotonic() - (_REPLACE_BATTERY_COOLDOWN * 2)

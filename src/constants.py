@@ -97,6 +97,10 @@ NUT_LOAD_THRESHOLD = 80
 # Consecutive poll failures before a previously-reachable NUT server is
 # reported as lost. One dropped poll is normal; three is a real outage.
 NUT_UNAVAILABLE_AFTER_FAILURES = 3
+# Consecutive failed Unraid API polls (system + array combined) before the
+# user is told monitoring is blind. The system poll runs every 30s by default,
+# so this is roughly a minute and a half.
+UNRAID_UNAVAILABLE_AFTER_FAILURES = 3
 # Status flags that get their own alert. CAL is deliberately absent: a runtime
 # calibration puts the UPS on battery on purpose, the same reasoning that keeps
 # a parity sync from reading as a disk failure.

@@ -7,7 +7,8 @@ from typing import Any, Callable, Awaitable, TYPE_CHECKING
 if TYPE_CHECKING:
     from src.config import UnraidConfig
     from src.unraid.client import UnraidClientWrapper
-    from src.alerts.array_mute_manager import ArrayMuteManager
+    from src.alerts.server_mute_manager import ServerMuteManager
+    from src.unraid.monitors.availability import UnraidAvailability
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,9 @@ class ArrayMonitor:
         self,
         client: "UnraidClientWrapper",
         config: "UnraidConfig",
-        on_alert: Callable[..., Awaitable[None]],
-        mute_manager: "ArrayMuteManager",
+        on_alert: Callable[..., Awaitable[bool]],
+        mute_manager: "ServerMuteManager",
+        availability: "UnraidAvailability | None" = None,
     ):
         """Initialize array monitor.
 
@@ -41,12 +43,13 @@ class ArrayMonitor:
             client: Connected UnraidClientWrapper.
             config: Unraid configuration with thresholds.
             on_alert: Async callback for sending alerts.
-            mute_manager: Array mute manager.
+            mute_manager: Server mute manager (the array category).
         """
         self._client = client
         self._config = config
         self._on_alert = on_alert
         self._mute_manager = mute_manager
+        self._availability = availability
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._alerted_disks: set[str] = set()  # Track disks that have been alerted
@@ -96,7 +99,12 @@ class ArrayMonitor:
             status = await self._client.get_array_status()
         except Exception as e:
             logger.error(f"Failed to get array status: {e}")
+            if self._availability is not None:
+                await self._availability.record_failure(e)
             return None
+
+        if self._availability is not None:
+            await self._availability.record_success()
 
         # Check if muted
         if self._mute_manager.is_array_muted():
@@ -142,11 +150,13 @@ class ArrayMonitor:
                 lines.insert(1 if progress is not None else 0, f"Speed: {speed} MB/s")
             if state == "PAUSED":
                 lines.insert(0, "Currently PAUSED.")
-            await self._on_alert(
+            if not await self._on_alert(
                 title="🔄 Parity Operation Running",
                 message="\n".join(lines),
                 alert_type="array",
-            )
+            ):
+                # Not delivered: stay "inactive" so the next poll retries it.
+                return active
 
         elif self._parity_active and not active:
             errors = parity_check.get("errors")
@@ -160,11 +170,12 @@ class ArrayMonitor:
                 "CANCELLED": "⚠️ Parity Operation Cancelled",
                 "FAILED": "🔴 Parity Operation Failed",
             }.get(state, "✅ Parity Operation Finished")
-            await self._on_alert(
+            if not await self._on_alert(
                 title=outcome,
                 message=f"Final status: {state or 'unknown'}\n{error_line}",
                 alert_type="array",
-            )
+            ):
+                return active
             # Let a genuine fault on the rebuilt disk alert now it is no longer
             # excused by the sync.
             self._alerted_disks = {k for k in self._alerted_disks if not k.endswith(":status")}
@@ -206,7 +217,7 @@ class ArrayMonitor:
             total_tb = total / (1024**3)
             free_tb = (total - used) / (1024**3)
 
-            await self._on_alert(
+            sent = await self._on_alert(
                 title="💾 Array Capacity Warning",
                 message=(
                     f"Usage: {usage_percent:.1f}% (threshold: {self._config.array_usage_threshold}%)\n"
@@ -215,7 +226,8 @@ class ArrayMonitor:
                 ),
                 alert_type="array",
             )
-            self._alerted_disks.add(capacity_key)
+            if sent:
+                self._alerted_disks.add(capacity_key)
         except (ValueError, TypeError) as e:
             logger.warning(f"Failed to parse capacity: {e}")
 
@@ -244,15 +256,14 @@ class ArrayMonitor:
                     temp_value = int(temp)
                     if temp_value > self._config.disk_temp_threshold:
                         # Only alert if we haven't already alerted for this disk
-                        if disk_key not in self._alerted_disks:
-                            await self._on_alert(
+                        if disk_key not in self._alerted_disks and await self._on_alert(
                                 title=f"💾 {disk_type} High Temperature",
                                 message=(
                                     f"Disk: {disk_name}\n"
                                     f"Temperature: {temp_value}°C (threshold: {self._config.disk_temp_threshold}°C)"
                                 ),
                                 alert_type="array",
-                            )
+                        ):
                             self._alerted_disks.add(disk_key)
                     elif temp_value <= self._config.disk_temp_threshold - _DISK_TEMP_HYSTERESIS:
                         # Re-arm only once clearly cooler, so a disk sitting
@@ -276,8 +287,7 @@ class ArrayMonitor:
 
             if status and status != "DISK_OK":
                 # Only alert if we haven't already alerted for this disk
-                if status_key not in self._alerted_disks:
-                    await self._on_alert(
+                if status_key not in self._alerted_disks and await self._on_alert(
                         title=f"💾 {disk_type} Problem",
                         message=(
                             f"Disk: {disk_name}\n"
@@ -285,7 +295,7 @@ class ArrayMonitor:
                             f"Expected: DISK_OK"
                         ),
                         alert_type="array",
-                    )
+                ):
                     self._alerted_disks.add(status_key)
             else:
                 # Status recovered - allow re-alerting

@@ -86,7 +86,7 @@ class UnraidNotificationMonitor:
         self,
         client: "UnraidClientWrapper",
         config: "UnraidConfig",
-        on_alert: Callable[..., Awaitable[None]],
+        on_alert: Callable[..., Awaitable[bool]],
         mute_manager: "ServerMuteManager | None" = None,
         state_path: str | None = None,
     ) -> None:
@@ -173,41 +173,48 @@ class UnraidNotificationMonitor:
         # Oldest first, so a burst reads in chronological order.
         fresh.reverse()
 
-        muted = self._mute_manager is not None and self._mute_manager.is_server_muted()
+        if self._mute_manager is not None and self._mute_manager.is_server_muted():
+            # Leave them unseen: marking them here lost a SMART alert that
+            # arrived during an unrelated 24h CPU mute. They relay once the
+            # mute ends.
+            logger.debug(f"Server alerts muted, holding {len(fresh)} notification(s)")
+            return 0
+
         overflow = len(fresh) - NOTIFICATION_MAX_PER_POLL
         to_send = fresh[:NOTIFICATION_MAX_PER_POLL]
 
         relayed = 0
         for notification in to_send:
-            if not muted:
-                try:
-                    await self._on_alert(
-                        title=self._format_title(notification),
-                        message=self._format_message(notification),
-                        alert_type="server",
-                    )
-                except Exception as e:
-                    # Don't mark as seen -- a failed send should be retried.
-                    logger.error(f"Failed to relay notification {notification.get('id')}: {e}")
-                    continue
+            try:
+                sent = await self._on_alert(
+                    title=self._format_title(notification),
+                    message=self._format_message(notification),
+                    alert_type="server",
+                )
+            except Exception as e:
+                logger.error(f"Failed to relay notification {notification.get('id')}: {e}")
+                sent = False
+            if not sent:
+                # Don't mark as seen -- a failed send is retried next poll.
+                continue
             self._remember([notification["id"]])
             relayed += 1
 
         if overflow > 0:
-            # Never drop silently.
+            # Never drop silently. The held-back ones stay unseen and go out
+            # on later polls.
             logger.warning(f"{overflow} further notification(s) held back this poll")
-            if not muted:
-                try:
-                    await self._on_alert(
-                        title="🔔 More Unraid Notifications",
-                        message=(
-                            f"{overflow} further notification(s) this cycle were not sent "
-                            f"to avoid flooding the chat. Check the Unraid web UI."
-                        ),
-                        alert_type="server",
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send notification overflow notice: {e}")
+            try:
+                await self._on_alert(
+                    title="🔔 More Unraid Notifications",
+                    message=(
+                        f"{overflow} further notification(s) are queued and will follow "
+                        f"over the next few polls. The Unraid web UI has them all now."
+                    ),
+                    alert_type="server",
+                )
+            except Exception as e:
+                logger.error(f"Failed to send notification overflow notice: {e}")
 
         if self._state_path:
             await asyncio.to_thread(_save_seen, self._state_path, list(self._seen))

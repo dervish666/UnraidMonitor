@@ -9,6 +9,21 @@ Draft for 0.22.6. Not released; the version is still 0.22.5.
 ### Fixed
 - **A /pull still dropped secondary networks that had an alias, a static IP or a link.** 0.22.5 fixed the missing `networks` proxy but not the call behind it: the endpoint from `docker inspect` was passed to docker-py's `Network.connect()` as-is (`Aliases=`, `IPAMConfig=`, `Links=`), and docker-py only takes snake_case keywords, so it failed with "unexpected keyword argument". Only a secondary network with none of those settings reconnected in 0.22.5. The endpoint is now translated to `aliases`, `links` (as name/alias pairs), `ipv4_address`, `ipv6_address`, `link_local_ips` and `driver_opt`. The old container's short ID, which engines before API 1.45 list as an alias, is not carried over, and the MAC address Docker assigned is not pinned. A network the recreated container has already joined is skipped instead of reported as a failure.
 - The 0.22.5 test for this asserted the broken call on a mock, so it passed. The tests now run docker-py's real `connect()` and check the request body it builds.
+- **Unhealthy-container alerts and auto-heal never fired.** Docker sends health events as `health_status: unhealthy`, and the event loop compared the whole Action to `health_status`, so every health event was dropped. `/status` health went stale for the same reason. The tests built events in the shape the code expected; they now feed the real wire shape through the event loop.
+- **A container that went unhealthy during a mute stayed silent after the mute.** Docker only reports a health change once, and the bot marked it alerted before checking the mute. A held-back container is now re-checked every 30 seconds and announced if it is still unhealthy once the mute ends.
+- **An alert lost to a Telegram outage was gone for good.** Every send method swallowed its own error, so the queue retry never ran and the monitors recorded the alert as sent. Sends now report whether Telegram took them; disk faults, parity events, system alerts, UPS events, image-update digests and relayed Unraid notifications are retried on the next poll when they were not delivered. Network errors and Telegram 5xx responses are retried three times with backoff before that.
+- **`/mute-server` said it muted array alerts and did not.** It wrote one mute store and the array monitor read another. There is now one store; an existing array mute is carried over once. The Mute buttons on a CPU or memory alert now mute system alerts only, where they used to silence the array and UPS as well. One `/mute-server` expiring now sends one notice instead of three.
+- **A UPS outage that started during a mute was never announced.** The outage flag flipped while muted, and only the flip alerted. The bot now tracks what it has told you separately, so the outage is announced once the mute ends, and "Restored" only follows an outage you heard about.
+- **An Unraid notification that arrived during an unrelated mute was lost.** The relay marked it as seen while muted. It is now held and relayed when the mute ends.
+- **A failed automatic memory stop was announced as "Container Stopped".** It now says Docker refused, and the next killable container gets the countdown instead of the monitor sitting in critical with nothing scheduled.
+- **The log watcher skipped errors logged while it reconnected.** After a stream ended it waited 10 seconds and re-followed from "now", missing the restart output that usually explains a crash. It now resumes from when the stream ended.
+
+### Added
+- **Unraid API outage alerts.** After three failed polls in a row the bot says the API is unreachable and that array and system state are unknown, then says once when it is back. The system and array monitors share one counter, so one outage is one alert.
+- /mutes and /manage → Mutes list system, array and UPS mutes separately, each with its own unmute button.
+
+### Changed
+- Image-update registry failures are counted and logged as a warning ("could not reach the registry for 3 of 12 containers") instead of one debug line each, so a rate-limited registry no longer reads as "everything up to date".
 
 ## [0.22.5] - 2026-10-29
 

@@ -35,6 +35,7 @@ def _monitor(notifications, state_path=None, importance="WARNING", muted=False, 
 
     async def on_alert(title, message, alert_type):
         sent.append((title, message))
+        return True
 
     monitor = UnraidNotificationMonitor(client, config, on_alert, mute, state_path)
     if primed:
@@ -123,6 +124,7 @@ async def test_a_failed_send_is_retried_next_poll(tmp_path):
         attempts.append(title)
         if len(attempts) == 1:
             raise RuntimeError("telegram down")
+        return True
 
     monitor = UnraidNotificationMonitor(client, config, flaky, None, str(tmp_path / "s.json"))
     monitor._primed = True
@@ -133,11 +135,42 @@ async def test_a_failed_send_is_retried_next_poll(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_muted_server_suppresses_delivery_but_still_dedups():
+async def test_muted_server_holds_notifications_until_the_mute_ends():
+    """Marking them seen while muted lost a SMART alert behind a CPU mute."""
     monitor, sent, _ = _monitor([_notification("a")], muted=True)
 
-    assert await monitor.check_once() == 1
+    assert await monitor.check_once() == 0
     assert sent == []
+
+    monitor._mute_manager.is_server_muted.return_value = False
+    assert await monitor.check_once() == 1
+    assert len(sent) == 1
+    # And only once.
+    assert await monitor.check_once() == 0
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_send_reporting_false_is_retried_next_poll(tmp_path):
+    """The handler reports a lost send by returning False, not by raising."""
+    client = MagicMock()
+    client.get_notifications = AsyncMock(return_value=[_notification("a")])
+    results = [False, True]
+    attempts = []
+
+    async def flaky(title, message, alert_type):
+        attempts.append(title)
+        return results[len(attempts) - 1]
+
+    monitor = UnraidNotificationMonitor(
+        client, UnraidConfig(notifications_enabled=True), flaky, None, str(tmp_path / "s.json")
+    )
+    monitor._primed = True
+
+    assert await monitor.check_once() == 0
+    assert await monitor.check_once() == 1
+    assert await monitor.check_once() == 0
+    assert len(attempts) == 2
 
 
 @pytest.mark.asyncio
@@ -235,7 +268,7 @@ async def test_empty_feed_priming_survives_a_restart(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_server_alert_handler_raises_when_nothing_delivered():
+async def test_server_alert_handler_reports_false_when_nothing_delivered():
     """The relay only retries if its alert handler reports the failure."""
     from src.monitor_callbacks import make_server_alert_handler
 
@@ -244,8 +277,7 @@ async def test_server_alert_handler_raises_when_nothing_delivered():
     bot = MagicMock()
     bot.send_message = AsyncMock(side_effect=RuntimeError("telegram down"))
     handler = make_server_alert_handler(
-        chat_ids, bot, MagicMock(), lambda s: s, [None], raise_on_failure=True,
+        chat_ids, bot, MagicMock(), lambda s: s, [None],
     )
 
-    with pytest.raises(RuntimeError):
-        await handler("Disk Problem", "d", "server")
+    assert await handler("Disk Problem", "d", "server") is False

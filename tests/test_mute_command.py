@@ -268,23 +268,20 @@ async def test_mutes_command_with_server_and_array_mutes(tmp_path):
     from src.bot.mute_command import mutes_command
     from src.alerts.mute_manager import MuteManager
     from src.alerts.server_mute_manager import ServerMuteManager
-    from src.alerts.array_mute_manager import ArrayMuteManager
     from datetime import timedelta
 
     container_json = tmp_path / "container_mutes.json"
     server_json = tmp_path / "server_mutes.json"
-    array_json = tmp_path / "array_mutes.json"
 
     container_manager = MuteManager(json_path=str(container_json))
     server_manager = ServerMuteManager(json_path=str(server_json))
-    array_manager = ArrayMuteManager(json_path=str(array_json))
 
     # Add mutes
     container_manager.add_mute("plex", timedelta(hours=1))
-    server_manager.mute_server(timedelta(hours=2))
-    array_manager.mute_array(timedelta(hours=3))
+    server_manager.mute_system(timedelta(hours=2))
+    server_manager.mute_array(timedelta(hours=3))
 
-    handler = mutes_command(container_manager, server_manager, array_manager)
+    handler = mutes_command(container_manager, server_manager, server_manager)
 
     message = MagicMock()
     message.text = "/mutes"
@@ -295,8 +292,9 @@ async def test_mutes_command_with_server_and_array_mutes(tmp_path):
     message.answer.assert_called_once()
     response = message.answer.call_args[0][0]
     assert "plex" in response
-    assert "Server alerts muted" in response
+    assert "System alerts muted" in response
     assert "Array alerts muted" in response
+    assert "UPS alerts muted" not in response
 
 
 @pytest.mark.asyncio
@@ -304,14 +302,14 @@ async def test_mutes_command_with_only_array_mute(tmp_path):
     """Test /mutes shows only array mute when nothing else is muted."""
     from src.bot.mute_command import mutes_command
     from src.alerts.mute_manager import MuteManager
-    from src.alerts.array_mute_manager import ArrayMuteManager
+    from src.alerts.server_mute_manager import ServerMuteManager
     from datetime import timedelta
 
     container_json = tmp_path / "container_mutes.json"
     array_json = tmp_path / "array_mutes.json"
 
     container_manager = MuteManager(json_path=str(container_json))
-    array_manager = ArrayMuteManager(json_path=str(array_json))
+    array_manager = ServerMuteManager(json_path=str(array_json))
 
     # Add only array mute
     array_manager.mute_array(timedelta(hours=1))

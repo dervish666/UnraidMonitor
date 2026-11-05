@@ -151,6 +151,10 @@ class LogWatcher:
         # reading a quiet container only wakes when its socket closes, and the
         # executor's threads are joined at interpreter exit.
         self._streams: set[Any] = set()
+        # Wall-clock time each container's last stream ended. The re-follow
+        # asks Docker for lines since then, so errors logged during the retry
+        # sleep (usually the restart that explains a crash) are not skipped.
+        self._stream_ended_at: dict[str, float] = {}
         self._thread_pool = ThreadPoolExecutor(
             max_workers=max(len(containers), 4),
             thread_name_prefix="logwatch",
@@ -252,7 +256,11 @@ class LogWatcher:
             """Blocking function that streams logs and puts them in the queue."""
             nonlocal log_stream
             try:
-                log_stream = container.logs(stream=True, follow=True, tail=0)
+                resume_from = self._stream_ended_at.get(container_name)
+                if resume_from is not None:
+                    log_stream = container.logs(stream=True, follow=True, since=int(resume_from))
+                else:
+                    log_stream = container.logs(stream=True, follow=True, tail=0)
                 self._streams.add(log_stream)
                 for line in log_stream:
                     if not self._running:
@@ -267,6 +275,9 @@ class LogWatcher:
                 if self._running:
                     logger.error(f"Error streaming logs from {container_name}: {e}")
             finally:
+                # Whole seconds: Docker's float `since` is not portable across
+                # API versions. Rounding down re-reads at most a second of lines.
+                self._stream_ended_at[container_name] = time.time()
                 # Close the log stream to release resources
                 if log_stream is not None:
                     self._streams.discard(log_stream)

@@ -51,16 +51,16 @@ async def test_relayed_notification_with_underscores_is_delivered():
     chat_store = MagicMock()
     chat_store.get_all_chat_ids.return_value = [9903160]
     handler = make_server_alert_handler(
-        chat_store, bot, MagicMock(), escape_markdown, [None], raise_on_failure=True,
+        chat_store, bot, MagicMock(), escape_markdown, [None],
     )
     n = _notification()
 
-    # raise_on_failure=True: the relay's "reached no chat" path must not fire
-    await handler(
+    # The relay retries on False; the plain-text fallback must count as delivered.
+    assert await handler(
         UnraidNotificationMonitor._format_title(n),
         UnraidNotificationMonitor._format_message(n),
         "server",
-    )
+    ) is True
 
     assert bot.send_message.call_count == 2
     delivered = bot.send_message.call_args_list[-1].kwargs

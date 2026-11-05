@@ -335,10 +335,10 @@ async def test_disks_command():
 async def test_mute_array_command(tmp_path):
     """Test /mute-array mutes array alerts."""
     from src.bot.unraid_commands import mute_array_command
-    from src.alerts.array_mute_manager import ArrayMuteManager
+    from src.alerts.server_mute_manager import ServerMuteManager
 
     json_file = tmp_path / "array_mutes.json"
-    mute_manager = ArrayMuteManager(json_path=str(json_file))
+    mute_manager = ServerMuteManager(json_path=str(json_file))
 
     handler = mute_array_command(mute_manager)
 
@@ -357,11 +357,11 @@ async def test_mute_array_command(tmp_path):
 async def test_unmute_array_command(tmp_path):
     """Test /unmute-array unmutes array alerts."""
     from src.bot.unraid_commands import unmute_array_command
-    from src.alerts.array_mute_manager import ArrayMuteManager
+    from src.alerts.server_mute_manager import ServerMuteManager
     from datetime import timedelta
 
     json_file = tmp_path / "array_mutes.json"
-    mute_manager = ArrayMuteManager(json_path=str(json_file))
+    mute_manager = ServerMuteManager(json_path=str(json_file))
     mute_manager.mute_array(timedelta(hours=2))
 
     handler = unmute_array_command(mute_manager)

@@ -9,7 +9,6 @@ from src.utils.formatting import extract_container_from_alert, truncate_message,
 if TYPE_CHECKING:
     from src.alerts.mute_manager import MuteManager
     from src.alerts.server_mute_manager import ServerMuteManager
-    from src.alerts.array_mute_manager import ArrayMuteManager
     from src.state import ContainerStateManager
 
 logger = logging.getLogger(__name__)
@@ -130,7 +129,7 @@ def mute_command(
 def mutes_command(
     mute_manager: "MuteManager",
     server_mute_manager: "ServerMuteManager | None" = None,
-    array_mute_manager: "ArrayMuteManager | None" = None,
+    array_mute_manager: "ServerMuteManager | None" = None,
 ) -> Callable[[Message], Awaitable[None]]:
     """Factory for /mutes command handler."""
 
@@ -138,22 +137,14 @@ def mutes_command(
         # Collect container mutes
         container_mutes = mute_manager.get_active_mutes()
 
-        # Check server mutes - look for "server" category in active mutes
-        server_expiry = None
-        if server_mute_manager:
-            server_mutes = server_mute_manager.get_active_mutes()
-            for category, expiry in server_mutes:
-                if category == "server":
-                    server_expiry = expiry
-                    break
-
-        # Check array mutes
-        array_expiry = None
-        if array_mute_manager:
-            array_expiry = array_mute_manager.get_mute_expiry()
+        # System, array and UPS mutes all live in the server mute store.
+        store = server_mute_manager or array_mute_manager
+        server_expiry = store.get_category_expiry("server") if store else None
+        array_expiry = store.get_category_expiry("array") if store else None
+        ups_expiry = store.get_category_expiry("ups") if store else None
 
         # Check if anything is muted
-        if not container_mutes and not server_expiry and not array_expiry:
+        if not container_mutes and not server_expiry and not array_expiry and not ups_expiry:
             await message.answer(
                 "No active mutes.",
                 parse_mode="Markdown",
@@ -168,13 +159,14 @@ def mutes_command(
             for container, expiry in sorted(container_mutes, key=lambda x: x[1]):
                 lines.append(f"  {container}: {format_mute_expiry(expiry)}")
 
-        # Server mutes section
+        if server_expiry or array_expiry or ups_expiry:
+            lines.append("")
         if server_expiry:
-            lines.append(f"\n🔇 *Server alerts muted* {format_mute_expiry(server_expiry)}")
-
-        # Array mutes section
+            lines.append(f"🔇 *System alerts muted* {format_mute_expiry(server_expiry)}")
         if array_expiry:
             lines.append(f"🔇 *Array alerts muted* {format_mute_expiry(array_expiry)}")
+        if ups_expiry:
+            lines.append(f"🔇 *UPS alerts muted* {format_mute_expiry(ups_expiry)}")
 
         mutes_text = truncate_message("\n".join(lines))
         await safe_reply(message, mutes_text)

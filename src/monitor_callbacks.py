@@ -58,17 +58,17 @@ def make_server_alert_handler(
     array_mute_manager: Any = None,
     server_mute_manager: Any = None,
     unraid_config: Any = None,
-    raise_on_failure: bool = False,
-) -> Callable[[str, str, str], Awaitable[None]]:
-    """raise_on_failure: raise when no chat received the alert, for callers
-    that retry a failed send (the notification relay) instead of losing it."""
-    async def on_server_alert(title: str, message: str, alert_type: str) -> None:
+) -> Callable[[str, str, str], Awaitable[bool]]:
+    """Returns True when at least one chat received the alert.
+
+    Monitors commit their dedup/cooldown state only on True, so an alert that
+    hit a Telegram outage is retried on the next poll instead of lost.
+    """
+    async def on_server_alert(title: str, message: str, alert_type: str) -> bool:
         chat_ids = chat_id_store.get_all_chat_ids()
         if not chat_ids:
             logger.warning("No chat ID yet, cannot send server alert")
-            if raise_on_failure:
-                raise RuntimeError("no chat to deliver to")
-            return
+            return False
 
         safe_title = escape_markdown_fn(title)
         prefix = "\U0001f50c *UPS ALERT:*" if alert_type == "ups" else "\U0001f5a5️ *SERVER ALERT:*"
@@ -167,8 +167,7 @@ def make_server_alert_handler(
                 delivered += 1
             except Exception as e:
                 logger.error(f"Failed to send server alert to {cid}: {e}")
-        if raise_on_failure and not delivered:
-            raise RuntimeError("server alert reached no chat")
+        return delivered > 0
     return on_server_alert
 
 
@@ -267,30 +266,48 @@ def make_ask_restart_handler(
     return on_ask_restart
 
 
+_SERVER_MUTE_PREFIX = {"server": "srv_mute", "array": "arr_mute", "ups": "ups_mute"}
+_SERVER_MUTE_LABEL = {"server": "system", "array": "array", "ups": "UPS"}
+
+
 def _remute_keyboard(
     mgr: Any, key: str,
 ) -> InlineKeyboardMarkup | None:
     """Build re-mute buttons appropriate to the manager type."""
-    from src.alerts.array_mute_manager import ArrayMuteManager
     from src.alerts.server_mute_manager import ServerMuteManager
 
-    if isinstance(mgr, ArrayMuteManager):
-        prefix = "arr_mute"
-    elif isinstance(mgr, ServerMuteManager):
-        prefix = "srv_mute"
+    if isinstance(mgr, ServerMuteManager):
+        prefix = _SERVER_MUTE_PREFIX.get(key)
+        if prefix is None:
+            return None
     else:
-        prefix = f"mute:{key}"
         # Minutes, not seconds -- mute_callback clamps rather than rejects, so
         # 3600 here silently meant a 60-hour mute.
-        return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔇 Re-mute 1h", callback_data=f"{prefix}:60"),
-            InlineKeyboardButton(text="🔇 Re-mute 24h", callback_data=f"{prefix}:1440"),
-        ]])
+        prefix = f"mute:{key}"
 
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🔇 Re-mute 1h", callback_data=f"{prefix}:60"),
         InlineKeyboardButton(text="🔇 Re-mute 24h", callback_data=f"{prefix}:1440"),
     ]])
+
+
+def _expiry_notices(mgr: Any, expired: list[str]) -> list[tuple[str, InlineKeyboardMarkup | None]]:
+    """One notice per expired mute, except server categories expiring together.
+
+    /mute-server sets all three categories at once, and three "Mute expired"
+    messages for one command read as a glitch.
+    """
+    from src.alerts.server_mute_manager import ServerMuteManager
+
+    if isinstance(mgr, ServerMuteManager) and len(expired) > 1:
+        names = ", ".join(_SERVER_MUTE_LABEL.get(k, k) for k in expired)
+        return [(f"Mute expired for {names} alerts", None)]
+    if isinstance(mgr, ServerMuteManager):
+        return [
+            (f"Mute expired for {_SERVER_MUTE_LABEL.get(k, k)} alerts", _remute_keyboard(mgr, k))
+            for k in expired
+        ]
+    return [(f"Mute expired for {k}", _remute_keyboard(mgr, k)) for k in expired]
 
 
 def make_mute_maintenance_loop(
@@ -308,14 +325,13 @@ def make_mute_maintenance_loop(
                     mgr.flush()
                     expired = mgr.drain_expired()
                     if expired and alert_manager:
-                        for key in expired:
-                            keyboard = _remute_keyboard(mgr, key)
+                        for notice, keyboard in _expiry_notices(mgr, expired):
                             for cid in chat_id_store.get_all_chat_ids():
                                 try:
                                     await send_with_retry(
                                         bot.send_message,
                                         chat_id=cid,
-                                        text=f"\U0001f514 Mute expired for *{escape_markdown_fn(key)}*",
+                                        text=f"\U0001f514 {escape_markdown_fn(notice)}",
                                         parse_mode="Markdown",
                                         reply_markup=keyboard,
                                     )

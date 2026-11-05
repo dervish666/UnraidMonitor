@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from src.config import UnraidConfig
     from src.unraid.client import UnraidClientWrapper
     from src.alerts.server_mute_manager import ServerMuteManager
+    from src.unraid.monitors.availability import UnraidAvailability
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,9 @@ class UnraidSystemMonitor:
         self,
         client: "UnraidClientWrapper",
         config: "UnraidConfig",
-        on_alert: Callable[..., Awaitable[None]],
+        on_alert: Callable[..., Awaitable[bool]],
         mute_manager: "ServerMuteManager",
+        availability: "UnraidAvailability | None" = None,
     ):
         """Initialize system monitor.
 
@@ -39,11 +41,14 @@ class UnraidSystemMonitor:
             config: Unraid configuration with thresholds.
             on_alert: Async callback for sending alerts.
             mute_manager: Server mute manager.
+            availability: Shared API-availability ladder (also fed by the
+                array monitor), or None to skip outage alerts.
         """
         self._client = client
         self._config = config
         self._on_alert = on_alert
         self._mute_manager = mute_manager
+        self._availability = availability
         self._running = False
         self._last_alert_times: dict[str, float] = {}
         self._cpu_over_polls = 0
@@ -90,8 +95,12 @@ class UnraidSystemMonitor:
             metrics = await self._client.get_system_metrics()
         except Exception as e:
             logger.error(f"Failed to get system metrics: {e}")
+            if self._availability is not None:
+                await self._availability.record_failure(e)
             return None
 
+        if self._availability is not None:
+            await self._availability.record_success()
         self._cached_metrics = metrics
         self._metrics_cache_time = time.monotonic()
 
@@ -162,8 +171,10 @@ class UnraidSystemMonitor:
         if now - last < _ALERT_COOLDOWN:
             logger.debug(f"Suppressing duplicate {key} alert (cooldown)")
             return
-        self._last_alert_times[key] = now
-        await self._on_alert(**kwargs)
+        # Start the cooldown only on delivery: a send lost to a Telegram
+        # outage is retried next poll rather than silenced for 5 minutes.
+        if await self._on_alert(**kwargs):
+            self._last_alert_times[key] = now
 
     async def get_current_metrics(self) -> dict[str, Any] | None:
         """Get current metrics, using cache if fresh.

@@ -107,14 +107,25 @@ class ImageUpdateMonitor:
         self._running = False
 
     async def check_once(self) -> None:
-        updates = await asyncio.to_thread(self._collect_updates)
-        if updates:
-            await self._alert_manager.send_update_alert(updates)
+        found = await asyncio.to_thread(self._collect_updates)
+        if found:
+            sent = await self._alert_manager.send_update_alert(
+                [(name, image_ref) for name, image_ref, _ in found]
+            )
+            if sent:
+                # Only now: recording before the send lost the update for good
+                # whenever Telegram was down at poll time.
+                for name, _, digest in found:
+                    self._notified[name] = digest
+            else:
+                logger.warning(f"Image-update digest not delivered; will retry {len(found)} next cycle")
         if self._state_path:
             await asyncio.to_thread(_save_notified, self._state_path, dict(self._notified))
 
-    def _collect_updates(self) -> list[tuple[str, str]]:
-        updates: list[tuple[str, str]] = []
+    def _collect_updates(self) -> list[tuple[str, str, str]]:
+        """(name, image_ref, remote_digest) for each not-yet-announced update."""
+        updates: list[tuple[str, str, str]] = []
+        failures: list[str] = []
         try:
             containers = self._docker.containers.list()
         except Exception as e:
@@ -139,11 +150,18 @@ class ImageUpdateMonitor:
                     continue
                 if self._notified.get(name) == remote_digest:
                     continue
-                self._notified[name] = remote_digest
-                updates.append((name, image_ref))
+                updates.append((name, image_ref, remote_digest))
             except Exception as e:
+                failures.append(name)
                 logger.debug(f"Image-update check skipped for {name}: {e}")
                 continue
+        if failures:
+            # A registry outage or rate limit makes every check "find nothing";
+            # say so, or a quiet digest reads as "all up to date".
+            logger.warning(
+                f"Image-update check could not reach the registry for {len(failures)} "
+                f"of {len(containers)} container(s): {', '.join(sorted(failures)[:10])}"
+            )
         # Drop dedup entries for containers that no longer exist (only when the
         # container list itself was fetched successfully).
         current = {getattr(c, "name", "") for c in containers}

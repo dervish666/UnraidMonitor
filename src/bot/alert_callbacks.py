@@ -33,7 +33,7 @@ from src.utils.sanitize import sanitize_logs_for_display
 from src.utils.telegram_format import markdown_to_telegram_html
 
 if TYPE_CHECKING:
-    from src.alerts.array_mute_manager import ArrayMuteManager
+    from src.alerts.server_mute_manager import ServerMuteManager
     from src.monitors.memory_monitor import MemoryMonitor
 
 logger = logging.getLogger(__name__)
@@ -787,7 +787,7 @@ def category_mute_callback(
 
 
 def array_mute_callback(
-    array_mute_manager: "ArrayMuteManager",
+    array_mute_manager: "ServerMuteManager",
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for array mute button callback handler."""
 
@@ -858,7 +858,9 @@ def server_mute_callback(
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for server mute button callback handler."""
 
-    return category_mute_callback(server_mute_manager.mute_server, "server", "/unmute-server")
+    # System only: muting a noisy CPU alert must not also silence the array
+    # or a power cut. /mute-server is the everything switch.
+    return category_mute_callback(server_mute_manager.mute_system, "system", "/unmute-server")
 
 
 def server_threshold_callback(

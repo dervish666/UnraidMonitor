@@ -48,35 +48,50 @@ class AlertManagerProxy:
             )
         return self._managers[chat_id]
 
-    async def _send_alert(self, method_name: str, **kwargs: Any) -> None:
+    async def _send_alert(self, method_name: str, **kwargs: Any) -> bool:
         """Generic alert sender that delegates to AlertManager.
 
         Sends to all known chat IDs. Uses a lock to serialize sends
         and a small delay between them, preventing Telegram rate limit
         abuse during alert storms.
+
+        Returns True when at least one chat received the alert, or when it was
+        accepted into the pre-/start queue. Callers commit dedup state on True.
         """
         chat_ids = self.chat_id_store.get_all_chat_ids()
-        if chat_ids:
-            async with self._send_lock:
-                # Flush any queued alerts first
-                if self._queued_alerts or self._retry_alerts:
-                    await self._flush_queue(chat_ids)
-                for chat_id in chat_ids:
-                    try:
-                        manager = self._get_manager(chat_id)
-                        await getattr(manager, method_name)(**kwargs)
-                    except Exception as e:
-                        logger.error(f"Failed to send alert to {chat_id}: {e}")
-                await asyncio.sleep(self._SEND_DELAY)
-        else:
+        if not chat_ids:
             entry = (method_name, kwargs)
             if self._queued_alerts and self._queued_alerts[-1] == entry:
                 logger.info(f"Skipping duplicate queued {method_name.replace('_', ' ')}")
-            elif len(self._queued_alerts) < self.MAX_QUEUED:
+                return True
+            if len(self._queued_alerts) < self.MAX_QUEUED:
                 self._queued_alerts.append(entry)
                 logger.info(f"Queued {method_name.replace('_', ' ')} (no chat ID yet, {len(self._queued_alerts)} queued)")
-            else:
-                logger.warning(f"Alert queue full, dropping {method_name.replace('_', ' ')}")
+                return True
+            logger.warning(f"Alert queue full, dropping {method_name.replace('_', ' ')}")
+            return False
+
+        async with self._send_lock:
+            # Flush any queued alerts first
+            if self._queued_alerts or self._retry_alerts:
+                await self._flush_queue(chat_ids)
+            delivered = await self._deliver_to_all(chat_ids, method_name, kwargs)
+            await asyncio.sleep(self._SEND_DELAY)
+        return delivered
+
+    async def _deliver_to_all(
+        self, chat_ids: set[int], method_name: str, kwargs: dict[str, Any]
+    ) -> bool:
+        """Send to every chat; True if any accepted it."""
+        delivered = False
+        for chat_id in chat_ids:
+            try:
+                manager = self._get_manager(chat_id)
+                if await getattr(manager, method_name)(**kwargs):
+                    delivered = True
+            except Exception as e:
+                logger.error(f"Failed to send alert to {chat_id}: {e}")
+        return delivered
 
     async def _flush_queue(self, chat_ids: set[int]) -> None:
         """Deliver all queued alerts to all chat IDs.
@@ -92,15 +107,7 @@ class AlertManagerProxy:
         logger.info(f"Flushing {len(retrying) + len(fresh)} queued alerts to {len(chat_ids)} users")
         for entry, is_retry in [(e, True) for e in retrying] + [(e, False) for e in fresh]:
             method_name, kwargs = entry
-            delivered = False
-            for chat_id in chat_ids:
-                try:
-                    manager = self._get_manager(chat_id)
-                    await getattr(manager, method_name)(**kwargs)
-                    delivered = True
-                except Exception as e:
-                    logger.error(f"Failed to send queued alert to {chat_id}: {e}")
-            if not delivered:
+            if not await self._deliver_to_all(chat_ids, method_name, kwargs):
                 if is_retry:
                     logger.warning(f"Dropping queued {method_name.replace('_', ' ')} after failed retry")
                 else:
@@ -113,8 +120,8 @@ class AlertManagerProxy:
         image: str,
         uptime_seconds: int | None = None,
         restart_loop_count: int | None = None,
-    ) -> None:
-        await self._send_alert(
+    ) -> bool:
+        return await self._send_alert(
             "send_crash_alert",
             container_name=container_name,
             exit_code=exit_code,
@@ -128,8 +135,8 @@ class AlertManagerProxy:
         container_name: str,
         error_line: str,
         suppressed_count: int = 0,
-    ) -> None:
-        await self._send_alert(
+    ) -> bool:
+        return await self._send_alert(
             "send_log_error_alert",
             container_name=container_name,
             error_line=error_line,
@@ -147,8 +154,8 @@ class AlertManagerProxy:
         memory_limit: int,
         memory_percent: float,
         cpu_percent: float,
-    ) -> None:
-        await self._send_alert(
+    ) -> bool:
+        return await self._send_alert(
             "send_resource_alert",
             container_name=container_name,
             metric=metric,
@@ -161,11 +168,11 @@ class AlertManagerProxy:
             cpu_percent=cpu_percent,
         )
 
-    async def send_recovery_alert(self, container_name: str) -> None:
-        await self._send_alert("send_recovery_alert", container_name=container_name)
+    async def send_recovery_alert(self, container_name: str) -> bool:
+        return await self._send_alert("send_recovery_alert", container_name=container_name)
 
-    async def send_health_alert(self, container_name: str, health_status: str) -> None:
-        await self._send_alert(
+    async def send_health_alert(self, container_name: str, health_status: str) -> bool:
+        return await self._send_alert(
             "send_health_alert",
             container_name=container_name,
             health_status=health_status,
@@ -173,9 +180,9 @@ class AlertManagerProxy:
 
     async def send_autoheal_alert(
         self, container_name: str, attempt: int, max_attempts: int, gave_up: bool, failed: bool = False
-    ) -> None:
-        await self._send_alert("send_autoheal_alert", container_name=container_name,
+    ) -> bool:
+        return await self._send_alert("send_autoheal_alert", container_name=container_name,
                                attempt=attempt, max_attempts=max_attempts, gave_up=gave_up, failed=failed)
 
-    async def send_update_alert(self, updates: list[tuple[str, str]]) -> None:
-        await self._send_alert("send_update_alert", updates=updates)
+    async def send_update_alert(self, updates: list[tuple[str, str]]) -> bool:
+        return await self._send_alert("send_update_alert", updates=updates)

@@ -34,6 +34,7 @@ def _monitor(snapshot):
 
     async def on_alert(title, message, alert_type):
         sent.append((title, message))
+        return True
 
     return ArrayMonitor(client, UnraidConfig(), on_alert, mute), sent
 

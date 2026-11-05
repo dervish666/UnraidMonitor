@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from src.alerts.ignore_manager import IgnoreManager
     from src.alerts.mute_manager import MuteManager
     from src.alerts.server_mute_manager import ServerMuteManager
-    from src.alerts.array_mute_manager import ArrayMuteManager
     from src.state import ContainerStateManager
     from src.monitors.resource_monitor import ResourceMonitor
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
@@ -389,7 +388,7 @@ def _build_mutes_keyboard(
 def _collect_mutes(
     mute_manager: "MuteManager",
     server_mute_manager: "ServerMuteManager | None",
-    array_mute_manager: "ArrayMuteManager | None",
+    array_mute_manager: "ServerMuteManager | None",
 ) -> list[tuple[str, str, str]]:
     """Collect all active mutes as (type, key, display) tuples."""
     mutes: list[tuple[str, str, str]] = []
@@ -398,17 +397,16 @@ def _collect_mutes(
     for container, expiry in mute_manager.get_active_mutes():
         mutes.append(("container", container, f"{container} - {format_mute_expiry(expiry)}"))
 
-    # Server mutes
-    if server_mute_manager:
-        for category, expiry in server_mute_manager.get_active_mutes():
-            if category == "server":
-                mutes.append(("server", "server", f"Server alerts - {format_mute_expiry(expiry)}"))
-
-    # Array mutes
-    if array_mute_manager:
-        array_expiry = array_mute_manager.get_mute_expiry()
-        if array_expiry:
-            mutes.append(("array", "array", f"Array alerts - {format_mute_expiry(array_expiry)}"))
+    # Server, array and UPS mutes share one store; list each category so
+    # each can be cleared on its own.
+    store = server_mute_manager or array_mute_manager
+    if store:
+        labels = {"server": "System alerts", "array": "Array alerts", "ups": "UPS alerts"}
+        for category, expiry in store.get_active_mutes():
+            if category in labels:
+                mutes.append(
+                    (category, category, f"{labels[category]} - {format_mute_expiry(expiry)}")
+                )
 
     return mutes
 
@@ -416,7 +414,7 @@ def _collect_mutes(
 def manage_mutes_callback(
     mute_manager: "MuteManager",
     server_mute_manager: "ServerMuteManager | None",
-    array_mute_manager: "ArrayMuteManager | None",
+    array_mute_manager: "ServerMuteManager | None",
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for manage mutes button callback."""
 
@@ -441,7 +439,7 @@ def manage_mutes_callback(
 def manage_delete_mute_callback(
     mute_manager: "MuteManager",
     server_mute_manager: "ServerMuteManager | None",
-    array_mute_manager: "ArrayMuteManager | None",
+    array_mute_manager: "ServerMuteManager | None",
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
     """Factory for delete mute button callback (mdm:{mute_type}:{key})."""
 
@@ -463,11 +461,14 @@ def manage_delete_mute_callback(
             success = mute_manager.remove_mute(key)
             label = key
         elif mute_type == "server" and server_mute_manager:
-            success = server_mute_manager.unmute_server()
-            label = "Server alerts"
-        elif mute_type == "array" and array_mute_manager:
-            success = array_mute_manager.unmute_array()
+            success = server_mute_manager.unmute_system()
+            label = "System alerts"
+        elif mute_type == "array" and (server_mute_manager or array_mute_manager):
+            success = (server_mute_manager or array_mute_manager).unmute_array()  # type: ignore[union-attr]
             label = "Array alerts"
+        elif mute_type == "ups" and server_mute_manager:
+            success = server_mute_manager.unmute_ups()
+            label = "UPS alerts"
 
         if success:
             await callback.answer(f"Unmuted {label}")
