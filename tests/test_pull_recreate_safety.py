@@ -20,9 +20,12 @@ from src.services.container_control import (
 
 
 class FakeContainer:
-    def __init__(self, docker_: "FakeDocker", name: str, attrs: dict[str, Any], image: str) -> None:
+    def __init__(
+        self, docker_: "FakeDocker", name: str, attrs: dict[str, Any], image: str, cid: str,
+    ) -> None:
         self._docker = docker_
         self.name = name
+        self.id = cid
         self.attrs = attrs
         self.image = MagicMock(tags=[image], id=f"sha256:{image}")
         self.status = "created"
@@ -30,6 +33,9 @@ class FakeContainer:
 
     def stop(self, **_: Any) -> None:
         self.status = "exited"
+        if (self.attrs.get("HostConfig") or {}).get("AutoRemove"):
+            # --rm: the daemon deletes the container once it stops.
+            self._docker.delete(self)
 
     def start(self) -> None:
         if self._docker.start_error and self.attrs.get("_replacement"):
@@ -37,6 +43,8 @@ class FakeContainer:
         self.status = "running"
 
     def rename(self, new_name: str) -> None:
+        if self.removed:
+            raise docker.errors.NotFound(self.name)
         if new_name in self._docker.by_name:
             raise docker.errors.APIError(f"Conflict: name {new_name} in use")
         del self._docker.by_name[self.name]
@@ -46,8 +54,37 @@ class FakeContainer:
     def remove(self, force: bool = False, **_: Any) -> None:
         if self.status == "running" and not force:
             raise docker.errors.APIError("cannot remove a running container")
-        del self._docker.by_name[self.name]
-        self.removed = True
+        self._docker.delete(self)
+
+
+class FakeApi:
+    """The low-level client: create_container returns only an ID."""
+
+    _version = "1.44"
+
+    def __init__(self, docker_: "FakeDocker") -> None:
+        self._docker = docker_
+
+    def create_container(self, image: str, name: str, **kwargs: Any) -> dict[str, str]:
+        return self._docker.create(image, name, kwargs)
+
+    def remove_container(self, cid: str, force: bool = False) -> None:
+        # DELETE /containers/{id} needs no inspect, so it works when inspect does not.
+        match = [c for c in self._docker.by_name.values() if c.id == cid]
+        if not match:
+            raise docker.errors.NotFound(cid)
+        match[0].remove(force=force)
+
+
+class FakeNetwork:
+    def __init__(self, docker_: "FakeDocker", name: str) -> None:
+        self._docker = docker_
+        self.name = name
+
+    def connect(self, container: FakeContainer, **_: Any) -> None:
+        if self.name in self._docker.broken_networks:
+            raise docker.errors.APIError(f"network {self.name} not found")
+        self._docker.connected.append((container.id, self.name))
 
 
 class FakeDocker:
@@ -55,33 +92,54 @@ class FakeDocker:
         self.by_name: dict[str, FakeContainer] = {}
         self.start_error = False
         self.create_error = False
-        self.created: list[tuple[str, dict[str, Any]]] = []
+        self.inspect_error_after_create = False
+        self.broken_networks: set[str] = set()
+        self.connected: list[tuple[str, str]] = []
+        # What the daemon fills into a new container's MaskedPaths.
+        self.default_masked_paths: list[str] | None = None
+        self.created: list[dict[str, Any]] = []
+        self._next_id = 0
         self.containers = MagicMock()
-        self.containers.get.side_effect = self._get
-        self.containers.create.side_effect = self._create
+        self.containers.get.side_effect = self.get
+        self.containers.client.api = FakeApi(self)
         self.images = MagicMock()
         self.networks = MagicMock()
+        self.networks.get.side_effect = lambda name: FakeNetwork(self, name)
+
+    def _new_id(self) -> str:
+        self._next_id += 1
+        return f"{self._next_id:064x}"
 
     def add(self, name: str, attrs: dict[str, Any], image: str = "app:latest") -> FakeContainer:
-        c = FakeContainer(self, name, attrs, image)
+        c = FakeContainer(self, name, attrs, image, attrs.get("Id") or self._new_id())
         c.status = "running"
         self.by_name[name] = c
         return c
 
-    def _get(self, name: str) -> FakeContainer:
-        if name not in self.by_name:
-            raise docker.errors.NotFound(name)
-        return self.by_name[name]
+    def delete(self, c: FakeContainer) -> None:
+        del self.by_name[c.name]
+        c.removed = True
 
-    def _create(self, image: str, name: str, **kwargs: Any) -> FakeContainer:
+    def get(self, name_or_id: str) -> FakeContainer:
+        for c in self.by_name.values():
+            if name_or_id in (c.name, c.id):
+                if self.inspect_error_after_create and c.attrs.get("_replacement"):
+                    raise docker.errors.APIError("500 Server Error: inspect timed out")
+                return c
+        raise docker.errors.NotFound(name_or_id)
+
+    def create(self, image: str, name: str, kwargs: dict[str, Any]) -> dict[str, str]:
         if self.create_error:
             raise docker.errors.APIError("invalid mount config")
         if name in self.by_name:
             raise docker.errors.APIError(f"Conflict: name {name} in use")
-        self.created.append((image, kwargs))
-        c = FakeContainer(self, name, {"_replacement": True, "NetworkSettings": {}}, image)
+        self.created.append({"image": image, **kwargs})
+        host_config = dict(kwargs.get("host_config") or {})
+        host_config["MaskedPaths"] = self.default_masked_paths
+        attrs = {"_replacement": True, "HostConfig": host_config, "NetworkSettings": {}}
+        c = FakeContainer(self, name, attrs, image, self._new_id())
         self.by_name[name] = c
-        return c
+        return {"Id": c.id}
 
 
 def _attrs(**host_config: Any) -> dict[str, Any]:
@@ -104,9 +162,9 @@ async def test_success_replaces_the_original():
     assert result.startswith("✅ radarr updated")
     assert original.removed
     assert fake.by_name["radarr"].status == "running"
-    image, kwargs = fake.created[0]
-    assert image == "app:latest"
-    assert kwargs["volumes"] == ["/mnt/user/appdata/radarr:/config"]
+    kwargs = fake.created[0]
+    assert kwargs["image"] == "app:latest"
+    assert kwargs["host_config"]["Binds"] == ["/mnt/user/appdata/radarr:/config"]
 
 
 async def test_start_failure_removes_only_the_replacement_and_restores_the_original():
@@ -163,12 +221,11 @@ async def test_primary_network_static_ip_and_alias_set_at_create():
 
     await ContainerController(fake, []).pull_and_recreate("pihole")  # type: ignore[arg-type]
 
-    _, kwargs = fake.created[0]
-    assert kwargs["network"] == "br0"
-    assert "network_mode" not in kwargs
-    assert kwargs["networking_config"] == {
+    kwargs = fake.created[0]
+    assert kwargs["host_config"]["NetworkMode"] == "br0"
+    assert kwargs["networking_config"] == {"EndpointsConfig": {
         "br0": {"Aliases": ["pihole"], "IPAMConfig": {"IPv4Address": "192.168.0.53"}}
-    }
+    }}
 
 
 async def test_primary_endpoint_config_is_accepted_by_docker_py():
@@ -204,8 +261,8 @@ async def test_anonymous_volume_is_carried_by_name():
 
     await ContainerController(fake, []).pull_and_recreate("db")  # type: ignore[arg-type]
 
-    _, kwargs = fake.created[0]
-    assert kwargs["volumes"] == [
+    kwargs = fake.created[0]
+    assert kwargs["host_config"]["Binds"] == [
         "/mnt/user/appdata/db:/config",
         f"{'3f9c0e1d' * 8}:/var/lib/postgresql/data:rw",
     ]
@@ -223,12 +280,12 @@ async def test_structured_mounts_and_readonly_rootfs_are_kept():
 
     await ContainerController(fake, []).pull_and_recreate("app")  # type: ignore[arg-type]
 
-    _, kwargs = fake.created[0]
-    assert kwargs["read_only"] is True
-    assert kwargs["volumes_from"] == ["data-only"]
-    assert kwargs["mounts"] == [{"Type": "volume", "Source": "anonvol", "Target": "/cache",
-                                 "ReadOnly": False}]
-    assert "volumes" not in kwargs  # /cache is covered by the structured mount
+    host = fake.created[0]["host_config"]
+    assert host["ReadonlyRootfs"] is True
+    assert host["VolumesFrom"] == ["data-only"]
+    assert host["Mounts"] == [{"Type": "volume", "Source": "anonvol", "Target": "/cache",
+                               "ReadOnly": False}]
+    assert "Binds" not in host  # /cache is covered by the structured mount
 
 
 async def test_unknown_host_setting_is_refused_before_anything_stops():
@@ -260,3 +317,67 @@ def test_daemon_defaults_are_not_mistaken_for_settings():
         ReadonlyPaths=["/proc/bus"], Isolation="", KernelMemory=0,
     )
     assert unsupported_recreate_settings(attrs) == []
+
+
+# -- Boundaries the round-2 review found the fake was missing ---------------
+
+
+async def test_auto_remove_container_is_refused_before_anything_stops():
+    """Stopping a --rm container deletes it, so the rollback would be gone."""
+    fake = FakeDocker()
+    original = fake.add("app", _attrs(AutoRemove=True))
+
+    result = await ContainerController(fake, []).pull_and_recreate("app")  # type: ignore[arg-type]
+
+    assert "Not updating app" in result and "--rm" in result
+    assert original.status == "running" and not original.removed
+    fake.images.pull.assert_not_called()
+
+
+async def test_inspect_failing_after_create_removes_that_replacement_by_id():
+    """docker-py's create() raised after creating, losing the ID with the name held."""
+    fake = FakeDocker()
+    fake.inspect_error_after_create = True
+    original = fake.add("radarr", _attrs())
+
+    result = await ContainerController(fake, []).pull_and_recreate("radarr")  # type: ignore[arg-type]
+
+    assert "restored unchanged" in result
+    assert fake.by_name == {"radarr": original}
+    assert original.status == "running"
+
+
+async def test_failed_secondary_network_keeps_the_original():
+    fake = FakeDocker()
+    fake.broken_networks = {"proxynet"}
+    attrs = _attrs()
+    attrs["NetworkSettings"]["Networks"] = {"bridge": {}, "proxynet": {"Aliases": ["radarr"]}}
+    original = fake.add("radarr", attrs)
+
+    result = await ContainerController(fake, []).pull_and_recreate("radarr")  # type: ignore[arg-type]
+
+    assert "restored unchanged" in result and "proxynet" in result
+    assert fake.by_name == {"radarr": original}
+    assert original.status == "running" and not original.removed
+
+
+async def test_custom_masked_paths_the_daemon_would_not_reproduce_keep_the_original():
+    fake = FakeDocker()
+    fake.default_masked_paths = ["/proc/kcore"]
+    original = fake.add("app", _attrs(MaskedPaths=["/proc/kcore", "/proc/custom"]))
+
+    result = await ContainerController(fake, []).pull_and_recreate("app")  # type: ignore[arg-type]
+
+    assert "MaskedPaths" in result and "restored unchanged" in result
+    assert fake.by_name == {"app": original}
+
+
+async def test_daemon_default_masked_paths_do_not_block_an_update():
+    fake = FakeDocker()
+    fake.default_masked_paths = ["/proc/kcore"]
+    fake.add("app", _attrs(MaskedPaths=["/proc/kcore"], CgroupnsMode="host"))
+
+    result = await ContainerController(fake, []).pull_and_recreate("app")  # type: ignore[arg-type]
+
+    assert result.startswith("✅ app updated")
+    assert fake.created[0]["host_config"]["CgroupnsMode"] == "host"

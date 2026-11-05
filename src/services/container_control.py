@@ -105,7 +105,7 @@ _SIMPLE_HOST_FIELDS: dict[str, str] = {
     "UTSMode": "uts_mode",
     "UsernsMode": "userns_mode",
     "CgroupParent": "cgroup_parent",
-    "AutoRemove": "auto_remove",
+    "CgroupnsMode": "cgroupns",
     "VolumeDriver": "volume_driver",
     "StorageOpt": "storage_opt",
     "DeviceCgroupRules": "device_cgroup_rules",
@@ -120,15 +120,49 @@ _HANDLED_HOST_FIELDS: frozenset[str] = frozenset({
     "DnsSearch", "ExtraHosts", "LogConfig", "Tmpfs", "Ulimits", "Sysctls",
     "SecurityOpt", "PidMode", "IpcMode", "ShmSize", "NanoCpus", "CpuShares",
     "Memory", "MemoryReservation", "Links",
+    # Refused before anything stops when true: see pull_and_recreate().
+    "AutoRemove",
 }) | frozenset(_SIMPLE_HOST_FIELDS)
 
 # Filled in by the daemon (or Windows-only), not chosen by the user; a fresh
 # container gets the same values on its own.
 _DAEMON_HOST_FIELDS: frozenset[str] = frozenset({
-    "ConsoleSize", "CgroupnsMode", "Isolation", "ContainerIDFile", "MaskedPaths",
-    "ReadonlyPaths", "KernelMemory", "KernelMemoryTCP", "Cgroup", "CpuCount",
-    "CpuPercent", "IOMaximumIOps", "IOMaximumBandwidth",
-})
+    "ConsoleSize", "Isolation", "ContainerIDFile", "KernelMemory", "KernelMemoryTCP",
+    "Cgroup", "CpuCount", "CpuPercent", "IOMaximumIOps", "IOMaximumBandwidth",
+}) | frozenset({"MaskedPaths", "ReadonlyPaths"})
+
+# The daemon fills these from Privileged and SecurityOpt (both carried), but
+# the API also lets a user set them and docker-py cannot. Their default list
+# changes between Docker releases, so instead of guessing it the replacement's
+# values are compared with the original's after create, on the same daemon.
+_VERIFIED_AFTER_CREATE: tuple[str, ...] = ("MaskedPaths", "ReadonlyPaths")
+
+
+def _lost_after_create(original: dict[str, Any], replacement: dict[str, Any]) -> list[str]:
+    """Daemon-filled HostConfig fields the replacement did not get the same."""
+    old = original.get("HostConfig") or {}
+    new = replacement.get("HostConfig") or {}
+    return [
+        key for key in _VERIFIED_AFTER_CREATE
+        if list(old.get(key) or []) != list(new.get(key) or [])
+    ]
+
+
+def _create_container_id(containers: Any, image: str, name: str, run_config: dict[str, Any]) -> str:
+    """Create the replacement and return its ID, without the follow-up inspect.
+
+    docker-py's ``containers.create()`` is ``api.create_container()`` then
+    ``get(id)``. When that get fails the container exists, holds the name, and
+    its ID is lost with the exception, so the rollback can neither remove it
+    nor rename the original back. Splitting the calls keeps the ID.
+    """
+    from docker.models.containers import _create_container_args  # type: ignore[attr-defined]
+
+    kwargs = dict(run_config)
+    kwargs.setdefault("command", None)
+    kwargs.update(image=image, name=name, version=containers.client.api._version)
+    resp = containers.client.api.create_container(**_create_container_args(kwargs))
+    return str(resp["Id"])
 
 _EMPTY_VALUES: tuple[Any, ...] = (None, "", 0, False, [], {})
 
@@ -322,16 +356,18 @@ class ContainerController:
 
         The original is never deleted until its replacement is running:
         1. Refuse, before touching anything, if inspect shows settings the
-           extractor cannot carry (a silent drop is worse than no update).
+           extractor cannot carry (a silent drop is worse than no update) or
+           AutoRemove (stopping a --rm container deletes the rollback).
         2. Pull the new image (no changes to the running container).
         3. Stop the original and rename it aside.
-        4. Create the replacement (primary network endpoint included), join
-           its secondary networks, then start it. Create and start are
-           separate calls so a start failure leaves a known container to
-           remove, instead of a half-made one blocking the name.
-        5. On any failure: remove only the replacement this call created,
-           rename the original back and start it. Its networks, volumes and
-           anonymous volumes were never detached.
+        4. Create the replacement by low-level ID (primary network endpoint
+           included), check it kept the daemon-filled paths, join every
+           secondary network, then start it. Each step that fails leaves a
+           known container ID to remove, never a half-made one holding the name.
+        5. On any failure, a missed network included: remove only the
+           replacement this call created, by ID, rename the original back and
+           start it. Its networks, volumes and anonymous volumes were never
+           detached.
         6. On success, remove the original.
         """
         try:
@@ -352,6 +388,15 @@ class ContainerController:
 
             container, image_name, _old_image_id = await asyncio.to_thread(_get_container_info)
             attrs = container.attrs
+
+            if (attrs.get("HostConfig") or {}).get("AutoRemove"):
+                # Stopping a --rm container deletes it, so the original this
+                # recreate keeps as its rollback would be gone.
+                logger.warning(f"Refusing to recreate {container_name}: AutoRemove is set")
+                return (
+                    f"❌ Not updating {container_name}: it was started with --rm, so stopping it "
+                    f"would delete it and nothing could be restored. Container unchanged."
+                )
 
             unsupported = unsupported_recreate_settings(attrs)
             if unsupported:
@@ -409,54 +454,65 @@ class ContainerController:
                     f"The original container was restored unchanged. Check logs for details."
                 )
 
+            containers = self.docker_client.containers
+
+            async def _discard_and_restore(new_id: str, reason: str) -> str:
+                try:
+                    # Only the container this call created, by its ID; never the original.
+                    await asyncio.to_thread(containers.client.api.remove_container, new_id, force=True)
+                except Exception as rm_err:
+                    logger.error(f"Could not remove failed replacement for {container_name}: {rm_err}")
+                    return (
+                        f"❌ CRITICAL: the new {container_name} failed ({reason}) and could not be "
+                        f"removed. The original is stopped as `{backup_name}`."
+                    )
+                return await _restore(reason)
+
             # Step 4: create the replacement.
             try:
-                new_container = await asyncio.to_thread(
-                    self.docker_client.containers.create,
-                    image_name,
-                    name=container_name,
-                    **run_config,
+                new_id = await asyncio.to_thread(
+                    _create_container_id, containers, image_name, container_name, run_config,
                 )
             except Exception as create_err:
                 logger.error(f"Failed to create {container_name}: {create_err}", exc_info=True)
                 return await _restore("could not create the new container")
+            try:
+                new_container = await asyncio.to_thread(containers.get, new_id)
+            except Exception as inspect_err:
+                logger.error(f"Could not inspect the new {container_name}: {inspect_err}", exc_info=True)
+                return await _discard_and_restore(new_id, "could not inspect the new container")
 
-            failed_networks: list[str] = []
-            if secondary_networks:
+            lost = _lost_after_create(attrs, new_container.attrs or {})
+            if lost:
+                logger.error(f"New {container_name} did not keep {', '.join(lost)}")
+                return await _discard_and_restore(
+                    new_id, f"the new container would not keep {', '.join(lost)}",
+                )
+
+            attached = _attached_networks(new_container)
+            for net_name, endpoint in secondary_networks.items():
+                if net_name in attached:
+                    # create() already joined it, e.g. NetworkMode "default"
+                    # is reported as the "bridge" network.
+                    continue
                 try:
-                    attached = _attached_networks(
-                        await asyncio.to_thread(self.docker_client.containers.get, container_name)
+                    network = await asyncio.to_thread(self.docker_client.networks.get, net_name)
+                    await asyncio.to_thread(network.connect, new_container, **endpoint)
+                except Exception as net_err:
+                    # A container cut off from a network it relied on is not
+                    # the container you had; keep the original instead.
+                    logger.error(
+                        f"Failed to reconnect {container_name} to network {net_name}: {net_err}"
                     )
-                except Exception:
-                    attached = set()
-                for net_name, endpoint in secondary_networks.items():
-                    if net_name in attached:
-                        # create() already joined it, e.g. NetworkMode "default"
-                        # is reported as the "bridge" network.
-                        continue
-                    try:
-                        network = await asyncio.to_thread(self.docker_client.networks.get, net_name)
-                        await asyncio.to_thread(network.connect, new_container, **endpoint)
-                    except Exception as net_err:
-                        failed_networks.append(net_name)
-                        logger.warning(
-                            f"Failed to reconnect {container_name} to network {net_name}: {net_err}"
-                        )
+                    return await _discard_and_restore(
+                        new_id, f"could not join network {net_name}",
+                    )
 
             try:
                 await asyncio.to_thread(new_container.start)
             except Exception as start_err:
                 logger.error(f"New {container_name} failed to start: {start_err}", exc_info=True)
-                try:
-                    # Only the container this call created; never the original.
-                    await asyncio.to_thread(new_container.remove, force=True)
-                except Exception as rm_err:
-                    logger.error(f"Could not remove failed replacement for {container_name}: {rm_err}")
-                    return (
-                        f"❌ CRITICAL: the new {container_name} would not start and could not be "
-                        f"removed. The original is stopped as `{backup_name}`."
-                    )
-                return await _restore("the new container would not start")
+                return await _discard_and_restore(new_id, "the new container would not start")
 
             # Step 6: the replacement is running; drop the original.
             leftover = ""
@@ -467,10 +523,7 @@ class ContainerController:
                 leftover = f"\n⚠️ The old container is still there as `{backup_name}`; remove it when happy."
 
             logger.info(f"Recreated container: {container_name}")
-            msg = f"✅ {container_name} updated (pulled {image_name} and recreated)"
-            if failed_networks:
-                msg += f"\n⚠️ Failed to reconnect networks: {', '.join(failed_networks)}"
-            return msg + leftover
+            return f"✅ {container_name} updated (pulled {image_name} and recreated)" + leftover
 
         except docker.errors.NotFound:
             return f"❌ Container '{container_name}' not found"

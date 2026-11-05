@@ -141,7 +141,7 @@ async def test_pull_reconnects_each_secondary_network_with_its_settings():
     new.start = MagicMock()  # type: ignore[method-assign]
     raw = MagicMock(spec=docker.DockerClient)
     raw.containers.get.side_effect = [old, new]
-    raw.containers.create.return_value = new
+    raw.containers.client.api.create_container.return_value = {"Id": new.id}
     raw.networks.get.side_effect = lambda name: real.networks.prepare_model(
         {"Id": f"id-{name}", "Name": name}
     )
@@ -172,7 +172,7 @@ async def test_pull_skips_a_network_the_new_container_already_joined():
     new.start = MagicMock()  # type: ignore[method-assign]
     raw = MagicMock(spec=docker.DockerClient)
     raw.containers.get.side_effect = [old, new]
-    raw.containers.create.return_value = new
+    raw.containers.client.api.create_container.return_value = {"Id": new.id}
     raw.networks.get.side_effect = lambda name: real.networks.prepare_model(
         {"Id": f"id-{name}", "Name": name}
     )
