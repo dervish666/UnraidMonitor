@@ -68,6 +68,9 @@ def sanitize_for_prompt(text: str, max_length: int = 10000) -> str:
     if len(text) > max_length:
         text = text[:max_length] + "\n... (truncated)"
 
+    # Credentials never leave the server, whether in a prompt or a reply.
+    text = redact_secrets(text)
+
     # Apply injection pattern filters
     for pattern, replacement in _INJECTION_PATTERNS:
         text = pattern.sub(replacement, text)
@@ -77,21 +80,38 @@ def sanitize_for_prompt(text: str, max_length: int = 10000) -> str:
 
 # Pre-compile patterns for sensitive data redaction
 _SENSITIVE_DATA_PATTERNS = [
-    # API keys and tokens (common formats)
-    (re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|pwd|credentials?)\s*[=:]\s*[\"']?[\w\-\.]{8,}[\"']?"), r"\1=***REDACTED***"),
+    # Chat/webhook URLs carry their secret in the path
+    (re.compile(r"(?i)https?://(?:hooks\.slack\.com/services|(?:\w+\.)?discord(?:app)?\.com/api/webhooks)/\S+"), "***WEBHOOK_REDACTED***"),
+    # Telegram bot tokens (123456789:AA...)
+    (re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"), "***BOT_TOKEN_REDACTED***"),
+    # Provider API keys with a recognisable prefix
+    (re.compile(r"\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|xox[abprs]-[A-Za-z0-9-]{10,})"), "***API_KEY_REDACTED***"),
+    # AWS-style keys
+    (re.compile(r"(?i)(AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}"), "***AWS_KEY_REDACTED***"),
+    # key=value / key: value credentials, including base64 values
+    (re.compile(r"(?i)\b([\w.-]*(?:api[_-]?key|access[_-]?key|token|secret|pass(?:word|wd|phrase)?|pwd|credentials?|dsn|webhook[_-]?url|auth[_-]?key)[\w.-]*)\s*[=:]\s*[\"']?[\w\-.+/=~:@]{6,}[\"']?"), r"\1=***REDACTED***"),
+    # A key in URL userinfo with no password (Sentry DSN style: https://KEY@host)
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s:@]{6,}@"), r"\1***@"),
     # Bearer tokens
-    (re.compile(r"(?i)Bearer\s+[\w\-\.]+"), "Bearer ***REDACTED***"),
+    (re.compile(r"(?i)Bearer\s+[\w\-\.+/=]+"), "Bearer ***REDACTED***"),
     # Basic auth in URLs
     (re.compile(r"://[^:]+:[^@]+@"), "://***:***@"),
     # Connection strings (database URLs)
     (re.compile(r"(?i)(mysql|postgres|postgresql|mongodb|redis|amqp)://[^\s]+"), r"\1://***REDACTED***"),
-    # AWS-style keys
-    (re.compile(r"(?i)(AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}"), "***AWS_KEY_REDACTED***"),
     # Generic hex tokens (32+ chars, likely secrets)
     (re.compile(r"\b[a-fA-F0-9]{32,}\b"), "***HEX_REDACTED***"),
     # JWT tokens (three base64 segments separated by dots)
     (re.compile(r"eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*"), "***JWT_REDACTED***"),
 ]
+
+
+def redact_secrets(text: str) -> str:
+    """Replace credentials (keys, tokens, passwords, DSNs, webhook URLs) in text."""
+    if not text:
+        return ""
+    for pattern, replacement in _SENSITIVE_DATA_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def sanitize_logs_for_display(logs: str) -> str:
@@ -106,13 +126,7 @@ def sanitize_logs_for_display(logs: str) -> str:
     Returns:
         Logs with sensitive data redacted.
     """
-    if not logs:
-        return ""
-
-    for pattern, replacement in _SENSITIVE_DATA_PATTERNS:
-        logs = pattern.sub(replacement, logs)
-
-    return logs
+    return redact_secrets(logs)
 
 
 def sanitize_container_name(name: str) -> str:

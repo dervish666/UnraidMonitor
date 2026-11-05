@@ -26,6 +26,25 @@ _REBUILD_EXPECTED_STATUSES = {"DISK_INVALID", "DISK_NEW"}
 _PARITY_ACTIVE_STATUSES = {"RUNNING", "PAUSED"}
 
 
+def parity_operation_active(array_status: dict[str, Any]) -> bool:
+    """True while a parity sync, check or rebuild is running or paused."""
+    parity_check = array_status.get("parityCheckStatus") or {}
+    return str(parity_check.get("status") or "").upper() in _PARITY_ACTIVE_STATUSES
+
+
+def disk_status_verdict(status: str, rebuilding: bool) -> str:
+    """Classify one disk status: "ok", "rebuilding" (expected mid-sync) or "fault".
+
+    The one interpretation shared by the array monitor, /array and the NL
+    array tool, so none of them calls a disk being rebuilt broken.
+    """
+    if not status or status == "DISK_OK":
+        return "ok"
+    if rebuilding and status in _REBUILD_EXPECTED_STATUSES:
+        return "rebuilding"
+    return "fault"
+
+
 class ArrayMonitor:
     """Monitors Unraid array disks and capacity, triggering alerts on problems."""
 
@@ -135,7 +154,7 @@ class ArrayMonitor:
             True while a parity operation is running or paused.
         """
         state = str(parity_check.get("status") or "").upper()
-        active = state in _PARITY_ACTIVE_STATUSES
+        active = parity_operation_active({"parityCheckStatus": parity_check})
 
         if active and not self._parity_active:
             progress = parity_check.get("progress")
@@ -276,7 +295,8 @@ class ArrayMonitor:
             status = disk.get("status", "")
             status_key = f"{disk_key}:status"
 
-            if rebuilding and status in _REBUILD_EXPECTED_STATUSES:
+            verdict = disk_status_verdict(status, rebuilding)
+            if verdict == "rebuilding":
                 # Expected while the sync writes to this disk. Deliberately not
                 # added to _alerted_disks, so a real fault appearing later still
                 # alerts.
@@ -285,7 +305,7 @@ class ArrayMonitor:
                 )
                 continue
 
-            if status and status != "DISK_OK":
+            if verdict == "fault":
                 # Only alert if we haven't already alerted for this disk
                 if status_key not in self._alerted_disks and await self._on_alert(
                         title=f"💾 {disk_type} Problem",

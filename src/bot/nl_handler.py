@@ -1,6 +1,6 @@
 """Natural language message handler for Telegram bot."""
+import html
 import logging
-import re
 from typing import Any, Awaitable, Callable
 
 from aiogram.filters import BaseFilter
@@ -26,6 +26,20 @@ class NLFilter(BaseFilter):
         return True
 
 
+_VALID_ACTIONS = frozenset({"restart", "stop", "start", "pull"})
+
+
+def _message_ref(callback: Any) -> tuple[int | None, int | None]:
+    msg = getattr(callback, "message", None)
+    chat = getattr(msg, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    message_id = getattr(msg, "message_id", None)
+    return (
+        chat_id if isinstance(chat_id, int) else None,
+        message_id if isinstance(message_id, int) else None,
+    )
+
+
 def create_nl_handler(processor: Any) -> Callable[[Message], Awaitable[None]]:
     """Create a message handler for natural language queries.
 
@@ -46,26 +60,6 @@ def create_nl_handler(processor: Any) -> Callable[[Message], Awaitable[None]]:
 
         result = await processor.process(user_id=user_id, message=text)
 
-        # Build response
-        reply_markup = None
-        if result.pending_action:
-            action = result.pending_action["action"]
-            container = result.pending_action["container"]
-
-            # Create confirmation buttons
-            reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✅ Yes",
-                        callback_data=f"nl_confirm:{action}:{container}",
-                    ),
-                    InlineKeyboardButton(
-                        text="❌ No",
-                        callback_data="nl_cancel",
-                    ),
-                ]
-            ])
-
         # The LLM returns CommonMark Markdown; render it as Telegram HTML so
         # bold/italic/headings display instead of leaking literal '*' characters.
         # Truncate after conversion so the final HTML stays within Telegram's
@@ -74,9 +68,37 @@ def create_nl_handler(processor: Any) -> Callable[[Message], Awaitable[None]]:
             markdown_to_telegram_html(result.response),
             suffix="\n\n<i>(truncated)</i>",
         )
-        await safe_reply(
+
+        reply_markup = None
+        pending = result.pending_action
+        if pending:
+            verb = pending.action.capitalize()
+            # The model's prose can say anything; this line and the button are
+            # written by the bot from the action that will actually run.
+            html_response += (
+                f"\n\n<b>Confirm:</b> {html.escape(pending.action)} "
+                f"<code>{html.escape(pending.container)}</code>"
+            )
+            reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"✅ {verb} {pending.container}"[:60],
+                        callback_data=f"nl_confirm:{pending.token}",
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Cancel",
+                        callback_data=f"nl_cancel:{pending.token}",
+                    ),
+                ]
+            ])
+
+        sent = await safe_reply(
             message, html_response, parse_mode="HTML", reply_markup=reply_markup
         )
+        sent_chat = getattr(getattr(sent, "chat", None), "id", None)
+        sent_id = getattr(sent, "message_id", None)
+        if pending and isinstance(sent_chat, int) and isinstance(sent_id, int):
+            processor.bind_action(user_id, pending.token, sent_chat, sent_id)
 
     return handler
 
@@ -95,29 +117,18 @@ def create_nl_confirm_callback(processor: Any, controller: Any) -> Callable[[Any
         if callback.data is None or callback.from_user is None:
             return
 
-        # Parse callback data: nl_confirm:action:container
-        parts = callback.data.split(":", 2)
-        if len(parts) != 3:
-            await callback.answer("Invalid action")
+        # nl_confirm:<token>. The token names a pending action held server
+        # side; the button carries no action or container a client could forge.
+        token = callback.data.split(":", 1)[1]
+        chat_id, message_id = _message_ref(callback)
+        pending = processor.claim_action(callback.from_user.id, token, chat_id, message_id)
+        if pending is None:
+            await callback.answer("This confirmation has expired or was already used.")
             return
-
-        _, action, container = parts
-        user_id = callback.from_user.id
-
-        # Validate action and container name to prevent forged callback data
-        _VALID_ACTIONS = {"restart", "stop", "start", "pull"}
+        action, container = pending.action, pending.container
         if action not in _VALID_ACTIONS:
             await callback.answer("Invalid action")
             return
-
-        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.\-]*", container):
-            await callback.answer("Invalid container name")
-            return
-
-        # Clear pending action from memory
-        memory = processor.memory_store.get(user_id)
-        if memory:
-            memory.pending_action = None
 
         # Check if container is protected
         if controller.is_protected(container):
@@ -164,12 +175,12 @@ def create_nl_cancel_callback(processor: Any) -> Callable[[Any], Awaitable[None]
         if callback.from_user is None:
             return
 
-        user_id = callback.from_user.id
-
-        # Clear pending action from memory
-        memory = processor.memory_store.get(user_id)
-        if memory:
-            memory.pending_action = None
+        data = callback.data or ""
+        token = data.split(":", 1)[1] if ":" in data else ""
+        chat_id, message_id = _message_ref(callback)
+        if processor.claim_action(callback.from_user.id, token, chat_id, message_id) is None:
+            await callback.answer("Nothing to cancel.")
+            return
 
         if callback.message:
             await callback.message.edit_text("Action cancelled.")

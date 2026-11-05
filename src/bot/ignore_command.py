@@ -6,6 +6,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from src.utils.formatting import extract_container_from_alert, truncate_message, safe_edit, strip_log_timestamps
+from src.utils.sanitize import redact_secrets
 
 if TYPE_CHECKING:
     from src.alerts.recent_errors import RecentErrorsBuffer
@@ -326,7 +327,8 @@ def ignore_done_callback(
         if added:
             lines = [f"\u2705 *Ignored for {container}:*\n"]
             for pattern, explanation in added:
-                display = pattern[:60] + "..." if len(pattern) > 60 else pattern
+                shown = redact_secrets(pattern)
+                display = shown[:60] + "..." if len(shown) > 60 else shown
                 lines.append(f"  \u2022 `{display}`")
                 if explanation:
                     lines.append(f"    _{explanation}_")
@@ -422,7 +424,8 @@ def ignore_similar_callback(
         recent = recent_errors_buffer.get_recent(container)
         full_error = None
         for error in recent:
-            if strip_log_timestamps(error).startswith(error_preview):
+            # The alert redacted credentials before building the preview.
+            if redact_secrets(strip_log_timestamps(error)).startswith(error_preview):
                 full_error = error
                 break
 
@@ -462,7 +465,8 @@ def ignore_similar_callback(
         if not ignore_manager.add_ignore(container, pattern):
             await callback.answer("Already ignored, or nothing to match on")
             return
-        display = pattern[:60] + "..." if len(pattern) > 60 else pattern
+        shown = redact_secrets(pattern)
+        display = shown[:60] + "..." if len(shown) > 60 else shown
         if callback.message:
             await callback.message.answer(
                 f"\u2705 Ignoring: `{display}`",

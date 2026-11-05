@@ -24,7 +24,24 @@ _REDOS_PATTERNS = [
     re.compile(r"\(\[.*?\]\+\)\+"),  # ([...]+)+
     re.compile(r"\(\.\*\?\)\+"),  # (.*?)+
     re.compile(r"\(\.\+\?\)\+"),  # (.+?)+
+    # Any group holding a quantifier, itself quantified: (a+)+, (\w*x)*, (?:ab+){2,}
+    re.compile(r"\((?:[^()\\]|\\.)*[*+}](?:[^()\\]|\\.)*\)\s*[*+{]"),
+    # A quantified group with alternation: (a|aa)*, (x|y)+
+    re.compile(r"\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*[*+{]"),
 ]
+
+# Inputs that make common backtracking shapes blow up, tried against every
+# regex before it is used. The limit of this check: Python's re has no
+# timeout, so a pattern that hangs a probe leaves a daemon thread spinning
+# until restart. Static rejection above is the first line; this is the net.
+_ADVERSARIAL_PROBES = [
+    "a" * 3000 + "!",
+    "0" * 3000 + "x",
+    " " * 3000 + "x",
+    "ab" * 1500 + "!",
+    "a1-_." * 600 + "\x00",
+]
+_PROBE_SECONDS = 0.5
 
 
 def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
@@ -49,19 +66,19 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
     except re.error as e:
         return False, str(e)
 
-    # Test against a pathological string to catch patterns that cause backtracking.
-    # Uses a daemon thread with a timeout instead of signal.SIGALRM, which is
-    # process-global, only works on the main thread, and blocks the event loop.
-    test_string = "a" * 100
+    # Probe with pathological strings in a daemon thread with a timeout
+    # (signal.SIGALRM is process-global, main-thread only, and would block the
+    # event loop).
     result: list[bool] = []
 
     def _test_regex() -> None:
-        compiled.search(test_string)
+        for probe in _ADVERSARIAL_PROBES:
+            compiled.search(probe)
         result.append(True)
 
     t = threading.Thread(target=_test_regex, daemon=True)
     t.start()
-    t.join(timeout=1.0)
+    t.join(timeout=_PROBE_SECONDS * len(_ADVERSARIAL_PROBES))
 
     if not result:
         return False, "Pattern causes excessive backtracking"
@@ -322,7 +339,17 @@ class IgnoreManager:
                                 IgnorePattern(pattern=item, match_type="substring")
                             )
                         elif isinstance(item, dict):
-                            # New format: IgnorePattern object
+                            # New format: IgnorePattern object. A regex edited
+                            # into the file by hand gets the same checks as one
+                            # added at runtime; a bad one is dropped, loudly.
+                            if item.get("match_type") == "regex":
+                                ok, why = validate_regex_pattern(str(item.get("pattern", "")))
+                                if not ok:
+                                    logger.error(
+                                        f"Dropping unsafe ignore regex for {container}: "
+                                        f"{item.get('pattern')!r} ({why})"
+                                    )
+                                    continue
                             self._runtime_ignores[container].append(
                                 IgnorePattern(
                                     pattern=item.get("pattern", ""),

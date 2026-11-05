@@ -12,6 +12,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from src.constants import IMAGE_UPDATE_MAX_SHOWN
 from src.utils.formatting import format_bytes, format_uptime, strip_log_timestamps, escape_markdown, truncate_callback_data
 from src.utils.telegram_retry import send_with_retry
+from src.utils.sanitize import redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +71,15 @@ class ChatIdStore:
 
     When *json_path* is provided, chat IDs are persisted to disk and
     survive bot restarts so alerts continue flowing immediately.
+
+    Only private chats are stored, and a private chat's ID is the user's ID,
+    so *allowed_users* also prunes chats of users removed from
+    TELEGRAM_ALLOWED_USERS since the file was written.
     """
 
-    def __init__(self, json_path: str | None = None):
+    def __init__(self, json_path: str | None = None, allowed_users: list[int] | None = None):
         self._json_path = json_path
+        self._allowed = set(allowed_users) if allowed_users is not None else None
         self._chat_ids: set[int] = set()
         if json_path:
             self._load()
@@ -88,8 +94,19 @@ class ChatIdStore:
             with open(self._json_path) as f:
                 data = json.load(f)
             if isinstance(data, list):
-                self._chat_ids = {int(cid) for cid in data}
+                loaded = {int(cid) for cid in data}
+                if self._allowed is not None:
+                    dropped = loaded - self._allowed
+                    if dropped:
+                        logger.warning(
+                            f"Dropping {len(dropped)} stored alert chat(s) that are not in "
+                            "TELEGRAM_ALLOWED_USERS"
+                        )
+                    loaded &= self._allowed
+                self._chat_ids = loaded
                 logger.info(f"Loaded {len(self._chat_ids)} chat IDs from {self._json_path}")
+                if self._chat_ids != {int(cid) for cid in data}:
+                    self._save()
         except FileNotFoundError:
             pass
         except (json.JSONDecodeError, ValueError) as e:
@@ -120,6 +137,8 @@ class ChatIdStore:
 
     def set_chat_id(self, chat_id: int) -> None:
         """Add a chat ID to the set (persists to disk if configured)."""
+        if self._allowed is not None and chat_id not in self._allowed:
+            return
         if chat_id not in self._chat_ids:
             self._chat_ids.add(chat_id)
             self._save()
@@ -229,6 +248,9 @@ Uptime: {uptime_str}"""
     ) -> bool:
         """Send a log error alert with ignore button."""
         total_errors = suppressed_count + 1
+
+        # A log line can carry a credential; the alert sits in chat history.
+        error_line = redact_secrets(error_line)
 
         # Truncate long error lines for display
         display_error = error_line

@@ -53,8 +53,9 @@ async def main() -> None:
         sys.exit(1)
 
     bot = create_bot(settings.telegram_bot_token)
-    chat_id_store = ChatIdStore(json_path="data/chat_ids.json")
-    dp = create_dispatcher(cast(list[int], settings.telegram_allowed_users), chat_id_store=chat_id_store)
+    allowed_users = cast(list[int], settings.telegram_allowed_users)
+    chat_id_store = ChatIdStore(json_path="data/chat_ids.json", allowed_users=allowed_users)
+    dp = create_dispatcher(allowed_users, chat_id_store=chat_id_store)
 
     bg = _BackgroundTasks()
     # Liveness heartbeat for the Docker HEALTHCHECK — runs in wizard mode too,

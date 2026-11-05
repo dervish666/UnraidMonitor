@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.services.llm.provider import LLMResponse, ToolCall
+from src.services.llm.provider import LLMResponse, ToolCall, usage_counts, log_usage
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,9 @@ class AnthropicProvider:
             kwargs["tools"] = self._apply_tool_caching(tools)
 
         response = await self._client.messages.create(**kwargs)
-        return self._parse_response(response)
+        parsed = self._parse_response(response)
+        log_usage(self.provider_name, self._model, parsed.usage)
+        return parsed
 
     # -- Internal helpers -----------------------------------------------------
 
@@ -183,4 +185,8 @@ class AnthropicProvider:
             text="\n".join(text_parts),
             stop_reason=stop_reason,
             tool_calls=tool_calls if tool_calls else None,
+            usage=usage_counts(getattr(response, "usage", None), (
+                "input_tokens", "output_tokens",
+                "cache_read_input_tokens", "cache_creation_input_tokens",
+            )),
         )

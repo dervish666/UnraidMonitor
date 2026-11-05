@@ -15,8 +15,10 @@ from src.utils.sanitize import sanitize_container_name, sanitize_for_prompt, san
 
 logger = logging.getLogger(__name__)
 
+# Env var names that hold credentials. "pass" covers PASSWORD, PASSWD and
+# PASSPHRASE; DSN and WEBHOOK URLs embed their secret in the value.
 _SECRET_ENV_PATTERN = re.compile(
-    r"(?i)(key|secret|password|passwd|pwd|token|credential|auth)",
+    r"(?i)(key|secret|pass|pwd|token|credential|auth|dsn|webhook|cookie|session|salt|private|cert)",
 )
 
 

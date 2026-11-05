@@ -25,6 +25,15 @@ Draft for 0.22.6. Not released; the version is still 0.22.5.
 - **`docker stop` was reported as a crash.** Stopping a container from the Unraid UI, a script or the bot emits kill, then die with exit 143 or 137, and the die was alerted as "CRASHED (SIGTERM)". A die within 30 seconds of a kill or stop request is now treated as the stop it was. A kernel OOM kill still alerts, and is labelled "OOM killed" from Docker's `oom` event or `State.OOMKilled` instead of guessing from exit 137.
 - **A sustained problem alerted every 5 minutes.** High CPU, memory and temperature on the server, UPS load, and container CPU or memory now alert once when the problem starts, remind once every 6 hours while it lasts, and send one "back to normal" message when the reading drops 10% under the threshold. A reading wobbling just under the line no longer closes the episode and opens a new one.
 - **Memory pressure warnings flapped at the threshold.** The memory monitor left Warning as soon as usage dipped under the warning line, so 91/89/91 warned twice. Warning now holds until usage drops under the safe threshold, and Critical until it is 2 points under the critical line.
+- **A natural-language confirmation button could be replayed or forged.** The button carried the action and container (`nl_confirm:stop:vaultwarden`), so a second tap ran it again, a cancelled request could still be confirmed, and any button data a client sent was obeyed. The button now carries a one-time token bound to you and to the message it came with; it works once, stops working when you send another message or tap Cancel, and expires after 10 minutes. The button and a bot-written line under the reply name the exact action and container, so the model's wording cannot disagree with what will run.
+- **The model could ask for two actions in one reply and only one was shown.** A second action in the same turn is now refused back to the model, which tells you to ask again.
+- **A malformed tool call from the model ended the whole reply with an error.** Tool arguments are now checked against the tool's schema (numbers given as text are accepted), and a failing tool returns an error the model can read and explain.
+- **The NL tool for Pull said it would not restart the container.** It recreates the container on the new image, and now says so to the model.
+- **Credentials from container logs reached the AI provider and alert messages.** Passwords, tokens, API keys, DSNs, webhook URLs and Telegram bot tokens are now redacted from everything sent to a model and from log-error alerts. The /diagnose environment filter also drops `*_PASS*`, `*_DSN`, `*WEBHOOK*`, session, cookie and salt variables.
+- **Alerts could go to a group chat.** Any message from an allowed user in a group registered that group for every alert. Only private chats are registered now, and stored chats of users no longer in `TELEGRAM_ALLOWED_USERS` are dropped at startup.
+- **An AI-written ignore pattern could hang the log watcher.** Patterns from the model were compiled as regexes, and a model reading attacker-written log lines is a ReDoS source. AI patterns are now stored as plain text that must appear in the error they came from, and generic text shorter than 8 characters is refused. Hand-edited regexes in `ignored_errors.json` are checked on load against nested quantifiers and a set of pathological inputs, and an unsafe one is dropped with an error in the log.
+- **Ignore pattern generation kept the model it started with.** It now follows `/model`, including a provider configured after startup.
+- **Chat and /array called a disk being rebuilt broken.** The NL array tool and /array now use the array monitor's parity-aware reading: during a parity sync, a disk marked invalid is shown as being rebuilt, not as a fault.
 - **High memory was reported twice with different severity.** With memory management on, the Unraid system monitor's "Memory Critical" fired at the same 90% as the memory monitor's Warning. The memory monitor is now the only voice on memory pressure when it is enabled.
 
 ### Added
@@ -32,6 +41,7 @@ Draft for 0.22.6. Not released; the version is still 0.22.5.
 - /mutes and /manage → Mutes list system, array and UPS mutes separately, each with its own unmute button.
 
 ### Changed
+- Every LLM call logs its token usage at INFO (input, output and, for Anthropic, prompt-cache reads and writes), so spend shows up in the container log.
 - Image-update registry failures are counted and logged as a warning ("could not reach the registry for 3 of 12 containers") instead of one debug line each, so a rate-limited registry no longer reads as "everything up to date".
 
 ## [0.22.5] - 2026-10-29

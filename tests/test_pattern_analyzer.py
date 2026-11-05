@@ -45,8 +45,9 @@ class TestPatternAnalyzer:
         )
 
         assert result is not None
-        assert result["pattern"] == "Connection refused to .* on port \\d+"
-        assert result["match_type"] == "regex"
+        # A model regex is never compiled; its longest literal run is kept.
+        assert result["pattern"] == "Connection refused to"
+        assert result["match_type"] == "substring"
         assert "Connection refused" in result["explanation"]
 
     @pytest.mark.asyncio
@@ -98,7 +99,7 @@ class TestPatternAnalyzer:
         mock_provider.model_name = "test-model"
         mock_provider.provider_name = "test"
         mock_provider.chat = AsyncMock(return_value=LLMResponse(
-            text='{"pattern": "error.*timeout", "match_type": "regex", "explanation": "Timeout errors"}',
+            text='{"pattern": "Connection timeout", "match_type": "substring", "explanation": "Timeout errors"}',
             stop_reason="end",
         ))
 
@@ -120,7 +121,7 @@ class TestPatternAnalyzer:
         mock_provider.model_name = "test-model"
         mock_provider.provider_name = "test"
         mock_provider.chat = AsyncMock(return_value=LLMResponse(
-            text='{"pattern": "error.*timeout", "match_type": "regex", "explanation": "Timeout errors"}',
+            text='{"pattern": "Connection timeout", "match_type": "substring", "explanation": "Timeout errors"}',
             stop_reason="end",
         ))
 
@@ -135,7 +136,7 @@ class TestPatternAnalyzer:
 
         result2 = await analyzer.analyze_error("plex", "Connection timeout error", [])
 
-        assert result1 == result2
+        assert result1 is not None and result1 == result2
         assert mock_provider.chat.call_count == 2
 
     @pytest.mark.asyncio
@@ -151,7 +152,7 @@ class TestPatternAnalyzer:
         # Second call: valid response
         mock_provider.chat = AsyncMock(side_effect=[
             LLMResponse(text='not valid json', stop_reason="end"),
-            LLMResponse(text='{"pattern": "err", "match_type": "substring", "explanation": "Errors"}', stop_reason="end"),
+            LLMResponse(text='{"pattern": "Some error", "match_type": "substring", "explanation": "Errors"}', stop_reason="end"),
         ])
 
         analyzer = PatternAnalyzer(provider=mock_provider)
@@ -161,5 +162,5 @@ class TestPatternAnalyzer:
 
         result2 = await analyzer.analyze_error("plex", "Some error", [])
         assert result2 is not None
-        assert result2["pattern"] == "err"
+        assert result2["pattern"] == "Some error"
         assert mock_provider.chat.call_count == 2

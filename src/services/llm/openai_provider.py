@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from src.services.llm.provider import LLMResponse, ToolCall
+from src.services.llm.provider import LLMResponse, ToolCall, usage_counts, log_usage
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,9 @@ class OpenAIProvider:
             kwargs["tools"] = self._translate_tools(tools)
 
         response = await self._client.chat.completions.create(**kwargs)
-        return self._parse_response(response)
+        parsed = self._parse_response(response)
+        log_usage(self.provider_name, self._model, parsed.usage)
+        return parsed
 
     # -- Internal helpers -----------------------------------------------------
 
@@ -200,6 +202,9 @@ class OpenAIProvider:
             text=text,
             stop_reason=stop_reason,
             tool_calls=tool_calls if tool_calls else None,
+            usage=usage_counts(getattr(response, "usage", None), (
+                "prompt_tokens", "completion_tokens", "total_tokens",
+            )),
         )
 
 

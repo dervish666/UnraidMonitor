@@ -632,7 +632,7 @@ class TestAlertManagerErrorTruncation:
         max_chars = 50
         mgr = AlertManager(bot=bot, chat_id=123, error_display_max_chars=max_chars)
 
-        long_error = "A" * 200
+        long_error = "x" * 200
         await mgr.send_log_error_alert(
             container_name="app",
             error_line=long_error,
@@ -640,7 +640,7 @@ class TestAlertManagerErrorTruncation:
 
         text = bot.send_message.call_args[1]["text"]
         # The displayed error should be truncated to max_chars + "..."
-        expected_truncated = "A" * max_chars + "..."
+        expected_truncated = "x" * max_chars + "..."
         assert expected_truncated in text
         # The full 200-char string should NOT appear
         assert long_error not in text
@@ -655,7 +655,7 @@ class TestAlertManagerErrorTruncation:
         max_chars = 100
         mgr = AlertManager(bot=bot, chat_id=123, error_display_max_chars=max_chars)
 
-        exact_error = "B" * max_chars
+        exact_error = "y" * max_chars
         await mgr.send_log_error_alert(
             container_name="app",
             error_line=exact_error,

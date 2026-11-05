@@ -1,17 +1,40 @@
 # src/services/nl_processor.py
 import asyncio
 import logging
+import secrets
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from src.services.nl_tools import get_tool_definitions
+from src.services.nl_tools import ACTION_TOOLS, get_tool_definitions
 from src.utils.api_errors import handle_llm_error
 from src.utils.rate_limiter import PerUserRateLimiter
 from src.utils.sanitize import sanitize_for_prompt
 
 logger = logging.getLogger(__name__)
+
+# A confirmation button stops working after this long, or once the user sends
+# another message, taps it once, or taps Cancel.
+NL_ACTION_TTL_SECONDS = 600
+
+
+@dataclass
+class PendingAction:
+    """One container action waiting for the user's tap, bound to who and where."""
+
+    token: str
+    user_id: int
+    action: str
+    container: str
+    created: float = field(default_factory=time.monotonic)
+    chat_id: int | None = None
+    message_id: int | None = None
+
+    def __getitem__(self, key: str) -> Any:
+        # Dict-style access for callers that read result.pending_action["action"].
+        return getattr(self, key)
 
 @dataclass
 class ConversationMemory:
@@ -21,7 +44,7 @@ class ConversationMemory:
     max_exchanges: int = 5
     messages: deque[dict[str, str]] = field(default_factory=deque)
     last_activity: datetime = field(default_factory=lambda: datetime.now())
-    pending_action: dict[str, Any] | None = None
+    pending_action: PendingAction | None = None
 
     def __post_init__(self) -> None:
         """Set maxlen on deque after dataclass init."""
@@ -132,7 +155,7 @@ class ProcessResult:
     """Result from processing a natural language message."""
 
     response: str
-    pending_action: dict[str, Any] | None = None
+    pending_action: PendingAction | None = None
 
 
 class NLProcessor:
@@ -241,16 +264,22 @@ class NLProcessor:
             messages.append({"role": "user", "content": message})
 
             try:
-                response_text, pending_action = await self._call_llm(provider, messages)
+                response_text, requested = await self._call_llm(provider, messages)
 
                 # Store the exchange
                 memory.add_exchange(message, response_text)
 
-                # Store pending action if any
-                if pending_action:
-                    memory.pending_action = pending_action
+                pending = None
+                if requested:
+                    pending = PendingAction(
+                        token=secrets.token_urlsafe(9),
+                        user_id=user_id,
+                        action=requested["action"],
+                        container=requested["container"],
+                    )
+                    memory.pending_action = pending
 
-                return ProcessResult(response=response_text, pending_action=pending_action)
+                return ProcessResult(response=response_text, pending_action=pending)
 
             except Exception as e:
                 error_result = handle_llm_error(e)
@@ -258,6 +287,37 @@ class NLProcessor:
                 return ProcessResult(
                     response=f"Sorry, {error_result.user_message.lower()} Try using /commands instead."
                 )
+
+    def bind_action(self, user_id: int, token: str, chat_id: int, message_id: int) -> None:
+        """Tie a pending action to the message that carries its buttons."""
+        memory = self.memory_store.get(user_id)
+        pending = memory.pending_action if memory else None
+        if pending is not None and pending.token == token:
+            pending.chat_id = chat_id
+            pending.message_id = message_id
+
+    def claim_action(
+        self, user_id: int, token: str, chat_id: int | None, message_id: int | None,
+    ) -> PendingAction | None:
+        """Take a pending action exactly once.
+
+        Returns None for a token that is unknown, already used, cancelled,
+        superseded by a newer message, expired, from another user, or tapped
+        on a different message than the one it was sent with. There is no
+        await between the check and the clear, so two taps cannot both win.
+        """
+        memory = self.memory_store.get(user_id)
+        pending = memory.pending_action if memory else None
+        if memory is None or pending is None or not secrets.compare_digest(pending.token, token):
+            return None
+        memory.pending_action = None
+        if time.monotonic() - pending.created > NL_ACTION_TTL_SECONDS:
+            return None
+        if pending.message_id is not None and (
+            pending.chat_id != chat_id or pending.message_id != message_id
+        ):
+            return None
+        return pending
 
     def _get_cached_tools(self) -> list[dict[str, Any]]:
         """Return cached tool definitions (built once)."""
@@ -294,12 +354,24 @@ class NLProcessor:
 
             tool_results = []
             for tc in response.tool_calls:
-                result = await self._executor.execute(tc.name, tc.input)
+                if tc.name in ACTION_TOOLS and pending_action is not None:
+                    # One action per message: the confirmation can only name
+                    # one thing, so a second request is refused, not queued.
+                    result = (
+                        "Refused: only one container action can be confirmed per message. "
+                        f"The user is already being asked to {pending_action['action']} "
+                        f"{pending_action['container']}. Tell them to ask again for anything else."
+                    )
+                else:
+                    result = await self._executor.execute(tc.name, tc.input)
 
                 if result.startswith("CONFIRMATION_NEEDED:"):
                     _, action, container = result.split(":", 2)
                     pending_action = {"action": action, "container": container}
-                    result = f"Confirmation needed to {action} {container}."
+                    result = (
+                        f"Confirmation buttons for '{action} {container}' are shown to the user. "
+                        "Nothing has happened yet."
+                    )
 
                 tool_results.append({
                     "role": "tool_result",

@@ -1,11 +1,13 @@
 """Tool definitions for Claude API tool use in natural language chat."""
 
 import asyncio
+import logging
 from typing import Any, TYPE_CHECKING
 
 import docker
 
 from src.state import ContainerStateManager
+from src.unraid.monitors.array_monitor import disk_status_verdict, parity_operation_active
 from src.models import ContainerInfo
 from src.utils.sanitize import sanitize_for_prompt, sanitize_logs
 
@@ -14,6 +16,12 @@ if TYPE_CHECKING:
     from src.monitors.resource_monitor import ResourceMonitor
     from src.alerts.recent_errors import RecentErrorsBuffer
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
+
+logger = logging.getLogger(__name__)
+
+# Tools that change a container. At most one per user message reaches the
+# confirmation step; the processor refuses the rest.
+ACTION_TOOLS = frozenset({"restart_container", "stop_container", "start_container", "pull_container"})
 
 
 def get_tool_definitions() -> list[dict[str, Any]]:
@@ -159,7 +167,7 @@ def get_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "pull_container",
-            "description": "Pull the latest image for a container. This downloads any updates but does not restart the container.",
+            "description": "Pull the latest image for a container and recreate the container on it. The container restarts, so expect brief downtime.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -172,6 +180,48 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             },
         },
     ]
+
+
+_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    tool["name"]: tool["input_schema"] for tool in get_tool_definitions()
+}
+
+
+def validate_tool_args(schema: dict[str, Any], args: Any) -> dict[str, Any] | str:
+    """Check model-supplied tool arguments against a tool's input schema.
+
+    Returns the cleaned arguments, or a reason string. Integers given as
+    numeric strings or whole floats are coerced; anything else of the wrong
+    type is refused. Unknown keys are dropped.
+    """
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return f"arguments must be an object, got {type(args).__name__}"
+    props: dict[str, Any] = schema.get("properties", {})
+    cleaned: dict[str, Any] = {}
+    for key, spec in props.items():
+        if key not in args or args[key] is None:
+            continue
+        value = args[key]
+        expected = spec.get("type")
+        if expected == "string":
+            if not isinstance(value, str):
+                return f"{key}: expected a string, got {type(value).__name__}"
+        elif expected == "integer":
+            if isinstance(value, bool):
+                return f"{key}: expected an integer, got bool"
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            elif isinstance(value, str) and value.strip().lstrip("-").isdigit():
+                value = int(value.strip())
+            elif not isinstance(value, int):
+                return f"{key}: expected an integer, got {type(value).__name__}"
+        cleaned[key] = value
+    for key in schema.get("required", []):
+        if key not in cleaned or (isinstance(cleaned[key], str) and not cleaned[key].strip()):
+            return f"missing required argument {key!r}"
+    return cleaned
 
 
 class NLToolExecutor:
@@ -212,20 +262,25 @@ class NLToolExecutor:
         """Set the container controller (for deferred wiring at startup)."""
         self._controller = controller
 
-    async def execute(self, tool_name: str, args: dict[str, Any]) -> str:
+    async def execute(self, tool_name: str, args: Any) -> str:
         """Execute a tool and return the result as a string.
 
-        Args:
-            tool_name: Name of the tool to execute.
-            args: Arguments to pass to the tool.
-
-        Returns:
-            Result of the tool execution as a string.
+        Model-supplied arguments are checked against the tool's schema first.
+        Any failure comes back as a "Tool error:" string for the model to read,
+        never as an exception that would end the user's whole reply.
         """
+        schema = _TOOL_SCHEMAS.get(tool_name)
         handler = getattr(self, f"_tool_{tool_name}", None)
-        if handler is None:
-            return f"Unknown tool: {tool_name}"
-        result: str = await handler(args)
+        if schema is None or handler is None:
+            return f"Tool error: unknown tool {tool_name!r}"
+        checked = validate_tool_args(schema, args)
+        if isinstance(checked, str):
+            return f"Tool error: {checked}"
+        try:
+            result: str = await handler(checked)
+        except Exception as e:
+            logger.error(f"NL tool {tool_name} failed: {type(e).__name__}: {e}")
+            return f"Tool error: {tool_name} failed ({type(e).__name__})"
         return result
 
     def _resolve_container(self, name: str) -> ContainerInfo | str:
@@ -409,29 +464,56 @@ class NLToolExecutor:
             percent = (used_kb / total_kb) * 100
             lines.append(f"  Capacity: {used_tb:.1f}TB / {total_tb:.1f}TB ({percent:.1f}% used, {free_tb:.1f}TB free)")
 
+        # A sync writes to its target, which reads DISK_INVALID until done;
+        # the same verdict the array monitor alerts on.
+        rebuilding = parity_operation_active(status)
+        if rebuilding:
+            pc = status.get("parityCheckStatus") or {}
+            progress = pc.get("progress")
+            lines.append(
+                "  Parity operation in progress"
+                + (f" ({progress}%)" if progress is not None else "")
+                + ": disks marked 'being rebuilt' are expected, not faults"
+            )
+
+        def describe(disk: dict[str, Any]) -> str:
+            d_status = str(disk.get("status") or "unknown")
+            verdict = disk_status_verdict(d_status, rebuilding)
+            label = d_status.replace("DISK_", "")
+            if verdict == "rebuilding":
+                label += " (being rebuilt, expected)"
+            elif verdict == "fault":
+                label += " (FAULT)"
+            return label
+
         # Parity info
         parities = status.get("parities", [])
         if parities:
             lines.append(f"  Parity Disks: {len(parities)}")
             for p in parities:
                 name = p.get("name", "unknown")
-                p_status = p.get("status", "unknown").replace("DISK_", "")
                 temp = p.get("temp", 0)
-                lines.append(f"    - {name}: {p_status} ({temp}°C)")
+                lines.append(f"    - {name}: {describe(p)} ({temp}°C)")
 
         # Data disk info (status values are like "DISK_OK", "DISK_NP", etc.)
         disks = status.get("disks", [])
         if disks:
             lines.append(f"  Data Disks: {len(disks)} total")
-            unhealthy = [d for d in disks if d.get("status") != "DISK_OK"]
-            if unhealthy:
-                lines.append(f"  Warning: {len(unhealthy)} disk(s) have issues:")
-                for disk in unhealthy:
-                    name = disk.get("name", "unknown")
-                    d_status = disk.get("status", "unknown").replace("DISK_", "")
-                    lines.append(f"    - {name}: {d_status}")
-            else:
-                lines.append("  All disks healthy")
+            flagged = [
+                d for d in disks
+                if disk_status_verdict(str(d.get("status") or ""), rebuilding) != "ok"
+            ]
+            faults = [
+                d for d in flagged
+                if disk_status_verdict(str(d.get("status") or ""), rebuilding) == "fault"
+            ]
+            if faults:
+                lines.append(f"  Warning: {len(faults)} disk(s) have issues:")
+            if flagged:
+                for disk in flagged:
+                    lines.append(f"    - {disk.get('name', 'unknown')}: {describe(disk)}")
+            if not faults:
+                lines.append("  No disk faults")
 
         # Cache info
         caches = status.get("caches", [])

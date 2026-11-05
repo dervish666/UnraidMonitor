@@ -545,12 +545,13 @@ async def start_monitoring(
 
     registry = await _build_provider_registry(config, settings, ai_config)
 
-    pattern_analyzer_provider = registry.get_provider("pattern_analyzer")
+    # Resolved from the registry on each call, so a model picked later with
+    # /model (or a provider added after startup) is used without a restart.
     pattern_analyzer = PatternAnalyzer(
-        provider=pattern_analyzer_provider,
+        registry=registry,
         max_tokens=ai_config.pattern_analyzer_max_tokens,
         context_lines=ai_config.pattern_analyzer_context_lines,
-    ) if pattern_analyzer_provider else None
+    )
 
     state = ContainerStateManager()
 

@@ -10,6 +10,7 @@ from aiogram.enums import ChatAction
 
 from src.alerts.mute_manager import parse_duration
 from src.utils.formatting import truncate_message, safe_reply, format_mute_expiry, format_uptime
+from src.unraid.monitors.array_monitor import disk_status_verdict, parity_operation_active
 
 if TYPE_CHECKING:
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
@@ -381,19 +382,19 @@ def array_command(
         parity_count = len(parities)
         cache_count = len(caches)
 
-        # Check for issues
+        # Check for issues, with the array monitor's parity-aware verdict: a
+        # disk being rebuilt reads DISK_INVALID and is not a fault.
+        rebuilding = parity_operation_active(array)
         issues = []
-        for disk in disks:
-            if disk.get("status") != "DISK_OK":
-                issues.append(f"  ⚠️ {disk.get('name', 'unknown')}: {disk.get('status', 'UNKNOWN').replace('DISK_', '')}")
-
-        for parity in parities:
-            if parity.get("status") != "DISK_OK":
-                issues.append(f"  ⚠️ {parity.get('name', 'unknown')}: {parity.get('status', 'UNKNOWN').replace('DISK_', '')}")
-
-        for cache in caches:
-            if cache.get("status") != "DISK_OK":
-                issues.append(f"  ⚠️ {cache.get('name', 'unknown')}: {cache.get('status', 'UNKNOWN').replace('DISK_', '')}")
+        for device in [*disks, *parities, *caches]:
+            d_status = str(device.get("status") or "UNKNOWN")
+            verdict = disk_status_verdict(d_status, rebuilding)
+            if verdict == "ok":
+                continue
+            label = d_status.replace("DISK_", "")
+            icon = "🔄" if verdict == "rebuilding" else "⚠️"
+            suffix = " (being rebuilt)" if verdict == "rebuilding" else ""
+            issues.append(f"  {icon} {device.get('name', 'unknown')}: {label}{suffix}")
 
         # Build response
         lines = [

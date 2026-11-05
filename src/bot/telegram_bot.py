@@ -148,8 +148,14 @@ class AuthMiddleware(BaseMiddleware):
             logger.warning(f"Unauthorized access attempt from user {user_id}")
             return None
 
-        # Capture chat ID for alerts if store is provided (Messages have .chat directly)
-        if self.chat_id_store is not None and isinstance(event, Message) and event.chat:
+        # Capture the chat for alerts. Private chats only: an allowed user
+        # typing in a group would otherwise send every alert to the group.
+        if (
+            self.chat_id_store is not None
+            and isinstance(event, Message)
+            and event.chat
+            and event.chat.type == "private"
+        ):
             self.chat_id_store.set_chat_id(event.chat.id)
 
         return await handler(event, data)
@@ -544,7 +550,7 @@ def register_commands(
         if nl_processor is not None and controller is not None:
             from src.bot.nl_handler import NLFilter, create_nl_handler, create_nl_confirm_callback, create_nl_cancel_callback
             dp.callback_query.register(create_nl_confirm_callback(nl_processor, controller), F.data.startswith("nl_confirm:"))
-            dp.callback_query.register(create_nl_cancel_callback(nl_processor), F.data == "nl_cancel")
+            dp.callback_query.register(create_nl_cancel_callback(nl_processor), F.data.startswith("nl_cancel"))
             dp.message.register(create_nl_handler(nl_processor), NLFilter())
 
         # Must be last: an unfiltered handler claims every callback not matched above.
