@@ -235,16 +235,22 @@ def _unraid_status(client: Any, system: Any, array: Any, notifications: Any) -> 
         )
     detail = ""
     ladder = getattr(system or array, "availability", None)
-    if isinstance(ladder, UnraidAvailability):
-        detail = ladder.describe()
-    elif not client.is_connected and isinstance(getattr(client, "last_error", None), str):
+    if not isinstance(ladder, UnraidAvailability):
+        ladder = None
+    if not client.is_connected and isinstance(getattr(client, "last_error", None), str):
         detail = client.last_error
     suffix = f" ({escape_markdown(detail)})" if detail else ""
     health = [f"  Unraid: {'✅ Connected' if client.is_connected else '🔴 Disconnected'}{suffix}"]
     subs = [(label, mon) for label, mon in (
         ("System", system), ("Array", array), ("Notifications", notifications),
     ) if mon]
-    health.extend(f"    {label}: {'✅' if mon.is_running else '🔴'}" for label, mon in subs)
+    # Each poller's own streak: a fresh system poll says nothing about the array.
+    failing = ladder.failing() if ladder else []
+    for label, mon in subs:
+        poll = ladder.pollers.get(label.lower()) if ladder else None
+        ok = mon.is_running and not (poll and poll.consecutive_failures)
+        note = f" ({escape_markdown(poll.describe())})" if poll else ""
+        health.append(f"    {label}: {'✅' if ok else '🔴'}{note}")
 
     if not client.is_connected:
         nouns = {"System": "system", "Array": "array", "Notifications": "notification"}
@@ -253,6 +259,12 @@ def _unraid_status(client: Any, system: Any, array: Any, notifications: Any) -> 
         return StatusItem(
             "Unraid", BROKEN, health,
             detail=f"can't reach the server. {what} wait until it reconnects.",
+        )
+    if failing:
+        return StatusItem(
+            "Unraid", BROKEN, health,
+            detail=f"connected, but {_join(failing)} polls keep failing. "
+            "That state is unknown, not healthy.",
         )
     stopped = [label.lower() for label, mon in subs if not mon.is_running]
     if stopped:

@@ -135,11 +135,11 @@ class ArrayMonitor:
         except Exception as e:
             logger.error(f"Failed to get array status: {e}")
             if self._availability is not None:
-                await self._availability.record_failure(e)
+                await self._availability.record_failure("array", e)
             return None
 
         if self._availability is not None:
-            await self._availability.record_success()
+            await self._availability.record_success("array")
 
         # Check if muted
         if self._mute_manager.is_array_muted():

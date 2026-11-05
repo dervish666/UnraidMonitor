@@ -107,11 +107,11 @@ class UnraidSystemMonitor:
         except Exception as e:
             logger.error(f"Failed to get system metrics: {e}")
             if self._availability is not None:
-                await self._availability.record_failure(e)
+                await self._availability.record_failure("system", e)
             return None
 
         if self._availability is not None:
-            await self._availability.record_success()
+            await self._availability.record_success("system")
         self._cached_metrics = metrics
         self._metrics_cache_time = time.monotonic()
 

@@ -87,7 +87,7 @@ src/services/auto_healer.py - AutoHealer for opt-in auto-restart of unhealthy co
 src/unraid/client.py - UnraidClientWrapper with direct GraphQL API access
 src/unraid/monitors/system_monitor.py - UnraidSystemMonitor for CPU/memory/temp alerts
 src/unraid/monitors/array_monitor.py - ArrayMonitor for disk health, usage, and parity-operation progress
-src/unraid/monitors/availability.py - UnraidAvailability: shared API-outage ladder (alert once after N failed polls, once on recovery)
+src/unraid/monitors/availability.py - UnraidAvailability: API-outage ladder with one failure streak per poller (alert once when any poller reaches N failed polls, once when none is failing)
 src/unraid/monitors/notification_monitor.py - UnraidNotificationMonitor relaying Unraid's own notification feed (opt-in, importance floor)
 
 # Utils

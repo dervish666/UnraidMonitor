@@ -53,7 +53,7 @@ Draft for 0.22.6. Not released; the version is still 0.22.5.
 - **A stale delete button in /manage → Ignores could delete the wrong pattern.** Buttons carried a list position, which shifted after another delete. They now carry a key derived from the pattern.
 
 ### Added
-- **Unraid API outage alerts.** After three failed polls in a row the bot says the API is unreachable and that array and system state are unknown, then says once when it is back. The system and array monitors share one counter, so one outage is one alert.
+- **Unraid API outage alerts.** After three failed polls in a row the bot says the API is unreachable and that array and system state are unknown, then says once when it is back. The system and array monitors each keep their own streak, so a healthy system poll does not hide a failing array poll, and one outage is still one alert. /health shows each poller's last success and failures.
 - /mutes and /manage → Mutes list system, array and UPS mutes separately, each with its own unmute button.
 - /health shows when each monitor last succeeded, its failure streak and last error (Docker events, resources, Unraid, UPS).
 - An unknown slash command gets a reply pointing at /help instead of silence. /help lists /ups.

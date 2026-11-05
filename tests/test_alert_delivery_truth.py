@@ -225,6 +225,46 @@ async def test_unraid_outage_alerts_once_and_recovery_once(tmp_path):
     assert calls == ["Unraid API Unavailable", "Unraid API Restored"]
 
 
+async def test_failing_array_poll_alerts_despite_healthy_system_polls(tmp_path):
+    """An hour of 30s system successes interleaved with 5-minute array failures.
+
+    One shared counter let every system success reset the array's streak, so
+    the array outage never alerted and /health read fresh.
+    """
+    from src.bot.health_command import BROKEN, _unraid_status
+
+    mute = ServerMuteManager(str(tmp_path / "m.json"))
+    on_alert, calls = _handler_over([True])
+    ladder = UnraidAvailability(on_alert, mute, threshold=3)
+    client = MagicMock()
+    client.is_connected = True
+    client.get_system_metrics = AsyncMock(return_value={"cpu_percent": 1, "memory_percent": 1})
+    client.get_array_status = AsyncMock(side_effect=RuntimeError("GraphQL error: array"))
+    alerts = AsyncMock(return_value=True)
+    system = UnraidSystemMonitor(client, UnraidConfig(), alerts, mute, ladder)
+    array = ArrayMonitor(client, UnraidConfig(), alerts, mute, ladder)
+    system._running = array._running = True
+
+    for second in range(0, 3600, 30):
+        await system.check_once()
+        if second % 300 == 0:
+            await array.check_once()
+
+    assert calls == ["Unraid API Unavailable"]
+    assert ladder.available is False
+    item = _unraid_status(client, system, array, None)
+    assert item.state == BROKEN
+    assert "array polls keep failing" in (item.detail or "")
+    assert any("Array: 🔴" in line and "12 failed polls" in line for line in item.health)
+    assert any("System: ✅" in line for line in item.health)
+
+    client.get_array_status = AsyncMock(return_value={"state": "STARTED", "disks": []})
+    await array.check_once()
+    await system.check_once()
+    assert calls == ["Unraid API Unavailable", "Unraid API Restored"]
+    assert ladder.available is True
+
+
 async def test_unraid_outage_under_mute_is_announced_after_it(tmp_path):
     mute = ServerMuteManager(str(tmp_path / "m.json"))
     mute.mute_server(timedelta(hours=1))
@@ -232,11 +272,11 @@ async def test_unraid_outage_under_mute_is_announced_after_it(tmp_path):
     ladder = UnraidAvailability(on_alert, mute, threshold=2)
 
     for _ in range(3):
-        await ladder.record_failure("down")
+        await ladder.record_failure("system", "down")
     assert calls == []
 
     mute.unmute_server()
-    await ladder.record_failure("still down")
+    await ladder.record_failure("system", "still down")
     assert calls == ["Unraid API Unavailable"]
 
 
