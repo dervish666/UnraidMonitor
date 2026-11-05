@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
+  # release.yml runs this whole workflow before it publishes anything.
+  workflow_call:
 
 # Read-only token for every job unless a job asks for more.
 permissions:

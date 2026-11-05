@@ -238,7 +238,9 @@ class TestNLToolExecutor:
     async def test_get_container_logs_truncates_long_output(self, executor, mock_docker):
         """Test that long logs are truncated by sanitize_logs."""
         # Create multi-line log that exceeds 3000 characters total
-        long_log = (b"line: " + b"A" * 100 + b"\n") * 50  # ~5350 bytes
+        # Prose, not a long run of one letter: that looks like a hex secret and is
+        # redacted (before truncation) down to a short placeholder.
+        long_log = (b"line: " + b"request served in 12ms " * 5 + b"\n") * 50  # ~6050 bytes
         mock_docker.containers.get.return_value.logs.return_value = long_log
         result = await executor.execute(
             "get_container_logs", {"name": "plex", "lines": 100}

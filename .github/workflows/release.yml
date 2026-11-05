@@ -15,8 +15,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The full CI run (lint, types, tests, lock/requirements check, audits,
+  # image build) on the tagged commit. A tag can be pushed on a commit CI
+  # never saw, so nothing is published until this passes.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   publish:
     name: Build and push linux/amd64
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

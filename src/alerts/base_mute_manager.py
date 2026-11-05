@@ -116,8 +116,14 @@ class BaseMuteManager:
                 self._dirty = True
 
     def drain_expired(self) -> list[str]:
-        """Return and clear the list of recently expired mute keys."""
+        """Return and clear the list of recently expired mute keys.
+
+        Sweeps first: is-muted checks expire keys one at a time, so without
+        this one /mute-server (three categories, one expiry) drained as up
+        to three separate notices on different maintenance passes.
+        """
         with self._lock:
+            self._clean_expired()
             expired = self._recently_expired[:]
             self._recently_expired.clear()
             return expired

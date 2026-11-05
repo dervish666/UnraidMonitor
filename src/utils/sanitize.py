@@ -54,6 +54,10 @@ def sanitize_for_prompt(text: str, max_length: int = 10000) -> str:
     # Normalize Unicode (fullwidth → ASCII, etc.)
     text = unicodedata.normalize("NFKC", text)
 
+    # Credentials never leave the server, whether in a prompt or a reply.
+    # Before truncation, so a cut cannot leave a partial secret unmatched.
+    text = redact_secrets(text)
+
     # Truncate individual lines to prevent single-line flooding
     lines = text.split("\n")
     truncated_lines = []
@@ -68,9 +72,6 @@ def sanitize_for_prompt(text: str, max_length: int = 10000) -> str:
     if len(text) > max_length:
         text = text[:max_length] + "\n... (truncated)"
 
-    # Credentials never leave the server, whether in a prompt or a reply.
-    text = redact_secrets(text)
-
     # Apply injection pattern filters
     for pattern, replacement in _INJECTION_PATTERNS:
         text = pattern.sub(replacement, text)
@@ -82,6 +83,8 @@ def sanitize_for_prompt(text: str, max_length: int = 10000) -> str:
 _SENSITIVE_DATA_PATTERNS = [
     # Chat/webhook URLs carry their secret in the path
     (re.compile(r"(?i)https?://(?:hooks\.slack\.com/services|(?:\w+\.)?discord(?:app)?\.com/api/webhooks)/\S+"), "***WEBHOOK_REDACTED***"),
+    # Telegram Bot API URLs: /bot<id>:<token>/ has no word boundary before the id
+    (re.compile(r"/bot\d{6,}:[A-Za-z0-9_-]{20,}"), "/bot***BOT_TOKEN_REDACTED***"),
     # Telegram bot tokens (123456789:AA...)
     (re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"), "***BOT_TOKEN_REDACTED***"),
     # Provider API keys with a recognisable prefix
