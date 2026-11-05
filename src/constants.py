@@ -180,6 +180,13 @@ AUTOHEAL_WINDOW_MINUTES = 60
 # Shown once when BOT_VERSION first differs from data/announced_version.json.
 ANNOUNCED_VERSION_PATH = "data/announced_version.json"
 WHATS_NEW: dict[str, list[str]] = {
+    "0.23.0": [
+        "Unhealthy-container alerts and auto-heal work. Docker's health events were being missed entirely",
+        "An alert lost to a Telegram outage is retried instead of forgotten, and /mute-server really mutes array and UPS alerts too",
+        "A problem that lasts sends one alert, one reminder every 6 hours, and one recovery message, instead of a page every 5 minutes",
+        "Chat confirmation buttons work once, for the exact action shown, and expire after 10 minutes",
+        "The bot starts without Docker, /health says when each monitor last succeeded, and a corrupt settings file is kept aside and named here instead of silently replaced",
+    ],
     "0.22.5": [
         "Ollama models now get tools only if Ollama says they support them, so models like Gemma 2 chat normally instead of failing",
         "Pull now reconnects every network a container was on, not just the main one",

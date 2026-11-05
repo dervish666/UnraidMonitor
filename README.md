@@ -38,6 +38,14 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 | <img src="screenshots/manage-dashboard.png" alt="The /manage dashboard showing server CPU, RAM and uptime with buttons for Status, Resources, Server, Disks, Manage Ignores, Manage Mutes and Features" width="420"> | <img src="screenshots/command-menu.png" alt="Telegram autocomplete listing the bot commands with a one-line description of each" width="420"> |
 | **The `/manage` hub.** Server vitals at the top, then every panel one tap away, feature toggles included. | **Commands, if you want them.** The menu is built from what your install actually has enabled, so it never offers something the bot cannot do. |
 
+## What's New in v0.23.0
+
+- **Health alerts and auto-heal work** - Docker's unhealthy events were being missed, so neither ever fired. A container that goes unhealthy during a mute is announced when the mute ends
+- **Alerts survive a Telegram outage** - A failed send is retried on the next poll instead of being recorded as sent, and `/mute-server` now mutes system, array and UPS alerts as it says
+- **One alert per problem** - A sustained high reading sends one alert, a reminder every 6 hours and a recovery message, instead of repeating every 5 minutes. `docker stop` is no longer reported as a crash
+- **Safer actions** - Restart buttons on alerts ask for confirmation, chat confirmations are single-use and expire, and `/pull` never removes a container until its replacement is running
+- **Sturdier startup and state** - The bot runs without Docker and picks it up later, `/health` shows when each monitor last succeeded, config typos are named, and a corrupt data file is kept aside and reported instead of replaced
+
 ## What's New in v0.22.5
 
 - **Ollama models get tools only when they support them** - The bot now asks Ollama which models can use tools instead of guessing from the name, so models like Gemma 2 chat normally instead of failing

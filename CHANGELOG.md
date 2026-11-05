@@ -4,7 +4,7 @@ All notable changes to UnraidMonitor will be documented in this file.
 
 ## [Unreleased]
 
-Draft for 0.22.6. Not released; the version is still 0.22.5.
+## [0.23.0] - 2026-11-05
 
 ### Fixed
 - **A /pull still dropped secondary networks that had an alias, a static IP or a link.** 0.22.5 fixed the missing `networks` proxy but not the call behind it: the endpoint from `docker inspect` was passed to docker-py's `Network.connect()` as-is (`Aliases=`, `IPAMConfig=`, `Links=`), and docker-py only takes snake_case keywords, so it failed with "unexpected keyword argument". Only a secondary network with none of those settings reconnected in 0.22.5. The endpoint is now translated to `aliases`, `links` (as name/alias pairs), `ipv4_address`, `ipv6_address`, `link_local_ips` and `driver_opt`. The old container's short ID, which engines before API 1.45 list as an alias, is not carried over, and the MAC address Docker assigned is not pinned. A network the recreated container has already joined is skipped instead of reported as a failure.
