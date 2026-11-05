@@ -236,6 +236,7 @@ def _init_unraid(
             on_alert=on_server_alert,
             mute_manager=uc.server_mute_manager,
             availability=uc.availability,
+            memory_alerts=not config.memory_management.enabled,
         )
 
         uc.array_monitor = ArrayMonitor(

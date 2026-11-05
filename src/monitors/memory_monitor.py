@@ -10,7 +10,7 @@ import docker
 import psutil
 
 from src.config import MemoryConfig
-from src.constants import MEMORY_TOP_CONSUMERS
+from src.constants import MEMORY_CRITICAL_EXIT_MARGIN, MEMORY_TOP_CONSUMERS
 from src.monitors.resource_monitor import parse_container_stats
 from src.utils.formatting import format_bytes
 
@@ -286,7 +286,9 @@ class MemoryMonitor:
             if percent >= self._config.critical_threshold:
                 self._state = MemoryState.CRITICAL
                 await self._handle_critical(percent)
-            elif percent < self._config.warning_threshold:
+            elif percent < self._config.safe_threshold:
+                # Hysteresis: hovering between safe and warning stays WARNING,
+                # so a reading wobbling across the warning line alerts once.
                 self._state = MemoryState.NORMAL
                 self._killed_containers.clear()
                 self._failed_kills.clear()
@@ -299,10 +301,10 @@ class MemoryMonitor:
             # later climb back re-enters CRITICAL through WARNING and alerts,
             # which it could not do while parked here after a cancelled or
             # skipped kill.
-            if percent < self._config.critical_threshold:
+            if percent < self._config.critical_threshold - MEMORY_CRITICAL_EXIT_MARGIN:
                 if self._killed_containers:
                     self._state = MemoryState.RECOVERING
-                elif percent < self._config.warning_threshold:
+                elif percent < self._config.safe_threshold:
                     self._state = MemoryState.NORMAL
                     self._failed_kills.clear()
                     self._restart_prompted = False

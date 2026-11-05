@@ -341,6 +341,7 @@ class TestAlertManagerProxy:
                 image="linuxserver/radarr:latest",
                 uptime_seconds=None,
                 restart_loop_count=None,
+                oom_killed=False,
             )
 
     @pytest.mark.asyncio
@@ -408,7 +409,7 @@ class TestAlertManagerProxy:
             # The queued alerts should have been delivered
             mock_mgr.send_crash_alert.assert_called_once_with(
                 container_name="radarr", exit_code=1, image="img1",
-                uptime_seconds=None, restart_loop_count=None,
+                uptime_seconds=None, restart_loop_count=None, oom_killed=False,
             )
             mock_mgr.send_log_error_alert.assert_called_once_with(
                 container_name="sonarr", error_line="connection failed",
@@ -496,8 +497,8 @@ class TestAlertManagerExitCodes:
     """Tests for exit code interpretation in send_crash_alert."""
 
     @pytest.mark.asyncio
-    async def test_exit_code_137_oom_killed(self):
-        """Exit code 137 should show (OOM killed) in the alert text."""
+    async def test_exit_code_137_alone_is_sigkill_not_oom(self):
+        """137 is SIGKILL from anyone (docker kill, a stop timeout); OOM needs evidence."""
         from src.alerts.manager import AlertManager
 
         bot = MagicMock()
@@ -512,7 +513,12 @@ class TestAlertManagerExitCodes:
 
         text = bot.send_message.call_args[1]["text"]
         assert "137" in text
-        assert "(OOM killed)" in text
+        assert "(SIGKILL)" in text
+        assert "OOM" not in text
+
+        await mgr.send_crash_alert(container_name="app", exit_code=137, image="app:latest",
+                                   oom_killed=True)
+        assert "(OOM killed)" in bot.send_message.call_args[1]["text"]
 
     @pytest.mark.asyncio
     async def test_exit_code_143_sigterm(self):

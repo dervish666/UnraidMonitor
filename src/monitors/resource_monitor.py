@@ -8,6 +8,7 @@ from typing import Any, TYPE_CHECKING
 
 import docker
 
+from src.constants import ALERT_REMINDER_SECONDS, EPISODE_RECOVERY_RATIO
 from src.utils.formatting import format_bytes
 
 if TYPE_CHECKING:
@@ -165,6 +166,9 @@ class ViolationState:
     started_at: datetime
     current_value: float
     threshold: float
+    # monotonic time of the last delivered alert; None until the episode is
+    # announced. Once set, the violation only ends below the recovery ratio.
+    alerted_at: float | None = None
 
 
 class ResourceMonitor:
@@ -246,11 +250,14 @@ class ResourceMonitor:
             logger.warning(f"Failed to get stats for {name}: {e}")
             return None
 
-    def _check_thresholds(self, stats: ContainerStats) -> None:
+    def _check_thresholds(self, stats: ContainerStats) -> list[ViolationState]:
         """Check if container exceeds thresholds and track violations.
 
         Args:
             stats: Current container stats.
+
+        Returns:
+            Announced violations that just ended (owed a recovery message).
         """
         cpu_threshold, memory_threshold = self._config.get_thresholds(stats.name)
 
@@ -259,9 +266,10 @@ class ResourceMonitor:
             self._violations[stats.name] = {}
 
         container_violations = self._violations[stats.name]
+        recovered: list[ViolationState] = []
 
         # Check CPU
-        self._update_violation(
+        recovered += self._update_violation(
             container_violations,
             metric="cpu",
             current_value=stats.cpu_percent,
@@ -269,7 +277,7 @@ class ResourceMonitor:
         )
 
         # Check Memory
-        self._update_violation(
+        recovered += self._update_violation(
             container_violations,
             metric="memory",
             current_value=stats.memory_percent,
@@ -279,6 +287,7 @@ class ResourceMonitor:
         # Clean up empty violation dicts
         if not container_violations:
             del self._violations[stats.name]
+        return recovered
 
     def _update_violation(
         self,
@@ -286,8 +295,8 @@ class ResourceMonitor:
         metric: str,
         current_value: float,
         threshold: int,
-    ) -> None:
-        """Update violation state for a single metric.
+    ) -> list[ViolationState]:
+        """Update violation state for a single metric; returns it if it just ended.
 
         Args:
             violations: Container's violation dict to update.
@@ -299,6 +308,7 @@ class ResourceMonitor:
             if metric in violations:
                 # Update existing violation
                 violations[metric].current_value = current_value
+                violations[metric].threshold = threshold
             else:
                 # Start new violation
                 violations[metric] = ViolationState(
@@ -308,8 +318,16 @@ class ResourceMonitor:
                     threshold=threshold,
                 )
         elif metric in violations:
-            # Violation cleared
-            del violations[metric]
+            violation = violations[metric]
+            violation.current_value = current_value
+            if violation.alerted_at is None:
+                # Never announced: a dip resets the sustained timer.
+                del violations[metric]
+            elif current_value <= threshold * EPISODE_RECOVERY_RATIO:
+                del violations[metric]
+                return [violation]
+            # Announced and in the band just under the threshold: hold it.
+        return []
 
     def _is_sustained(self, violation: ViolationState) -> bool:
         """Check if a violation has exceeded the sustained threshold.
@@ -336,7 +354,7 @@ class ResourceMonitor:
         return [v for v in container_violations.values() if self._is_sustained(v)]
 
     async def _send_alert(self, stats: ContainerStats, violation: ViolationState) -> None:
-        """Send an alert for a sustained violation.
+        """Alert once per sustained episode, then remind every ALERT_REMINDER_SECONDS.
 
         Args:
             stats: Current container stats.
@@ -347,19 +365,13 @@ class ResourceMonitor:
             logger.debug(f"Suppressed resource alert for muted container: {stats.name}")
             return
 
-        # Use rate limiter key that includes metric to allow separate cpu/memory alerts
-        rate_key = f"{stats.name}:{violation.metric}"
-
-        if not self._rate_limiter.should_alert(rate_key):
-            self._rate_limiter.record_suppressed(rate_key)
-            logger.debug(f"Rate-limited {violation.metric} alert for {stats.name}")
+        now = time.monotonic()
+        if violation.alerted_at is not None and now - violation.alerted_at < ALERT_REMINDER_SECONDS:
             return
-
-        self._rate_limiter.record_alert(rate_key)
 
         duration = int((datetime.now() - violation.started_at).total_seconds())
 
-        await self._alert_manager.send_resource_alert(
+        sent = await self._alert_manager.send_resource_alert(
             container_name=stats.name,
             metric=violation.metric,
             current_value=violation.current_value,
@@ -369,6 +381,18 @@ class ResourceMonitor:
             memory_limit=stats.memory_limit,
             memory_percent=stats.memory_percent,
             cpu_percent=stats.cpu_percent,
+        )
+        if sent:
+            violation.alerted_at = now
+
+    async def _send_recovery(self, name: str, violation: ViolationState) -> None:
+        if self._mute_manager and self._mute_manager.is_muted(name):
+            return
+        await self._alert_manager.send_resource_recovery(
+            container_name=name,
+            metric=violation.metric,
+            current_value=violation.current_value,
+            threshold=int(violation.threshold),
         )
 
     async def start(self) -> None:
@@ -407,7 +431,8 @@ class ResourceMonitor:
         active_names = {s.name for s in stats_list}
 
         for stats in stats_list:
-            self._check_thresholds(stats)
+            for ended in self._check_thresholds(stats):
+                await self._send_recovery(stats.name, ended)
 
             # Check for sustained violations and send alerts
             sustained = self._get_sustained_violations(stats.name)

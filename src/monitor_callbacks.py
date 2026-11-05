@@ -71,7 +71,12 @@ def make_server_alert_handler(
             return False
 
         safe_title = escape_markdown_fn(title)
-        prefix = "\U0001f50c *UPS ALERT:*" if alert_type == "ups" else "\U0001f5a5️ *SERVER ALERT:*"
+        if alert_type == "recovery":
+            prefix = "✅ *RECOVERED:*"
+        elif alert_type == "ups":
+            prefix = "\U0001f50c *UPS ALERT:*"
+        else:
+            prefix = "\U0001f5a5️ *SERVER ALERT:*"
         alert_text = f"{prefix} {safe_title}\n\n{message}"
         keyboard = None
 

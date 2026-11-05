@@ -15,6 +15,8 @@ import time
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from src.constants import (
+    ALERT_REMINDER_SECONDS,
+    EPISODE_RECOVERY_RATIO,
     NUT_ALERT_FLAGS,
     NUT_UNAVAILABLE_AFTER_FAILURES,
 )
@@ -132,6 +134,9 @@ class UpsMonitor:
         self._known_flags: set[str] = set()
         self._on_battery_since: float | None = None
         self._last_alert_times: dict[str, float] = {}
+        # High-load episode: last delivered alert, and when it began.
+        self._load_alerted_at: float | None = None
+        self._load_started: float | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -356,20 +361,42 @@ class UpsMonitor:
             )
 
         load = _as_float(variables.get("ups.load"))
-        if load is not None and load > self._config.load_threshold:
+        threshold = self._config.load_threshold
+        if load is not None and load > threshold:
+            # One alert per episode, a reminder every ALERT_REMINDER_SECONDS,
+            # then one "normal" message. It used to repeat every 5 minutes.
+            now = time.monotonic()
+            if self._load_alerted_at is not None and now - self._load_alerted_at < ALERT_REMINDER_SECONDS:
+                return
             nominal = variables.get("ups.realpower.nominal")
             watts = ""
             nominal_value = _as_float(nominal)
             if nominal_value:
                 watts = f" (about {nominal_value * load / 100:.0f}W of {nominal_value:.0f}W)"
-            await self._rate_limited(
-                "load",
-                _THRESHOLD_COOLDOWN,
+            still = ""
+            if self._load_started is not None:
+                still = f"\nStill high after {(now - self._load_started) / 3600:.0f}h."
+            if await self._alert(
                 "UPS Load High",
                 f"Load at {load:.0f}%{watts} "
-                f"(threshold: {self._config.load_threshold}%).\n"
-                f"Runtime on battery would be shorter than usual.",
-            )
+                f"(threshold: {threshold}%).\n"
+                f"Runtime on battery would be shorter than usual.{still}",
+            ):
+                self._load_alerted_at = now
+                if self._load_started is None:
+                    self._load_started = now
+        elif (
+            load is not None
+            and self._load_alerted_at is not None
+            and load <= threshold * EPISODE_RECOVERY_RATIO
+        ):
+            if await self._on_alert(
+                title="UPS Load Normal",
+                message=f"Load at {load:.0f}% (threshold: {threshold}%).",
+                alert_type="recovery",
+            ):
+                self._load_alerted_at = None
+                self._load_started = None
 
     # ------------------------------------------------------------------
     # Reading for /ups and the alert bodies
@@ -480,3 +507,5 @@ class UpsMonitor:
         """Forget cooldowns and known flags, so an unmute re-reports reality."""
         self._last_alert_times.clear()
         self._known_flags = set()
+        self._load_alerted_at = None
+        self._load_started = None

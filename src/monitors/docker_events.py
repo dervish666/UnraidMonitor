@@ -189,6 +189,11 @@ class DockerEventMonitor:
     MAX_BACKOFF_SECONDS = 60
     MAX_QUEUE_SIZE = 1000  # Prevent unbounded memory growth
     RECONCILE_SECONDS = 30  # Re-check unannounced unhealthy containers
+    # A die within this long of a kill/stop event for the same container is an
+    # intentional stop (docker stop, /restart, /pull, auto-heal, memory kill,
+    # the Unraid Stop button, appdata backup), not a crash. docker stop always
+    # emits kill before die, so the kill event covers the bot's own actions too.
+    INTENTIONAL_STOP_WINDOW = 30.0
 
     def __init__(
         self,
@@ -221,6 +226,10 @@ class DockerEventMonitor:
         # this a container that stays unhealthy past its mute stays silent.
         self._unhealthy_pending: set[str] = set()
         self._last_reconcile = time.monotonic()
+        # monotonic time of the last kill/stop and oom event per container,
+        # written from the events thread, read by the alert task.
+        self._stopped_at: dict[str, float] = {}
+        self._oom_at: dict[str, float] = {}
         self._auto_healer: Any | None = None
 
     @property
@@ -436,8 +445,14 @@ class DockerEventMonitor:
                 if container_name in self.ignored_containers:
                     continue
 
+                if action in ("kill", "stop"):
+                    self._stopped_at[container_name] = time.monotonic()
+                elif action == "oom":
+                    self._oom_at[container_name] = time.monotonic()
+
+                oom_killed = False
                 if action in ("start", "die", "health_status"):
-                    self._handle_event(event)
+                    oom_killed = self._handle_event(event)
 
                 # Queue start events for recovery alert processing (thread-safe)
                 if action == "start" and self.alert_manager:
@@ -456,7 +471,15 @@ class DockerEventMonitor:
 
                 # Queue die events for crash alert processing (thread-safe)
                 if action == "die" and self.alert_manager:
-                    self._queue_alert(event, "crash")
+                    now = time.monotonic()
+                    self._queue_alert({
+                        **event,
+                        "_oom": oom_killed
+                        or now - self._oom_at.get(container_name, float("-inf"))
+                        < self.INTENTIONAL_STOP_WINDOW,
+                        "_intentional": now - self._stopped_at.get(container_name, float("-inf"))
+                        < self.INTENTIONAL_STOP_WINDOW,
+                    }, "crash")
 
         except docker.errors.APIError as e:
             logger.error(f"Docker API error: {e}")
@@ -467,10 +490,10 @@ class DockerEventMonitor:
                 raise
             logger.debug(f"Suppressed exception during shutdown: {e}")
 
-    def _handle_event(self, event: dict[str, Any]) -> None:
-        """Handle a Docker event."""
+    def _handle_event(self, event: dict[str, Any]) -> bool:
+        """Refresh the container's state. Returns State.OOMKilled for a die."""
         if not self._client:
-            return
+            return False
 
         container_name = event.get("Actor", {}).get("Attributes", {}).get("name", "")
         action = event.get("Action", "")
@@ -481,10 +504,13 @@ class DockerEventMonitor:
             container = self._client.containers.get(container_name)
             info = parse_container(container)
             self.state_manager.update(info)
+            state = container.attrs.get("State") if isinstance(container.attrs, dict) else None
+            return bool(isinstance(state, dict) and state.get("OOMKilled") is True)
         except docker.errors.NotFound:
             logger.warning(f"Container {container_name} not found after event")
         except Exception as e:
             logger.error(f"Error handling event for {container_name}: {e}")
+        return False
 
     async def _handle_crash_event(self, event: dict[str, Any]) -> None:
         """Handle a container crash event and send alert if appropriate."""
@@ -510,6 +536,11 @@ class DockerEventMonitor:
             logger.debug(f"Ignoring crash alert for ignored container: {container_name}")
             return
 
+        oom_killed = bool(event.get("_oom"))
+        if event.get("_intentional") and not oom_killed:
+            logger.info(f"{container_name} exited {exit_code} after a stop/kill request; not a crash")
+            return
+
         # Always track the crash for restart loop detection (even if muted/rate-limited)
         self._crash_tracker.record_crash(container_name)
 
@@ -533,6 +564,7 @@ class DockerEventMonitor:
                 image=self._get_container_image(container_name),
                 uptime_seconds=self._get_container_uptime(container_name),
                 restart_loop_count=crash_count,
+                oom_killed=oom_killed,
             )
             return
 
@@ -554,6 +586,7 @@ class DockerEventMonitor:
             exit_code=exit_code,
             image=self._get_container_image(container_name),
             uptime_seconds=self._get_container_uptime(container_name),
+            oom_killed=oom_killed,
         )
 
     async def _handle_recovery_event(self, event: dict[str, Any]) -> None:

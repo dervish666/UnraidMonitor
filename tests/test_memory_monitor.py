@@ -438,10 +438,11 @@ class TestStateMachine:
 
     @pytest.mark.asyncio
     @patch("src.monitors.memory_monitor.psutil")
-    async def test_returns_to_normal_below_warning(
+    async def test_returns_to_normal_below_safe(
         self, mock_psutil, memory_config, mock_docker_client, mock_on_alert, mock_on_ask_restart
     ):
-        mock_psutil.virtual_memory.return_value = MagicMock(percent=85.0)
+        # Hysteresis: WARNING is left below safe_threshold (80), not warning (90).
+        mock_psutil.virtual_memory.return_value = MagicMock(percent=79.0)
 
         monitor = MemoryMonitor(
             docker_client=mock_docker_client,

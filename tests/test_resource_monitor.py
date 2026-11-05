@@ -721,22 +721,20 @@ async def test_resource_monitor_send_alert():
 
     await monitor._send_alert(stats, violation)
 
-    mock_rate_limiter.should_alert.assert_called_once()
-    mock_rate_limiter.record_alert.assert_called_once()
     mock_alert_manager.send_resource_alert.assert_called_once()
+    assert violation.alerted_at is not None
 
 
 @pytest.mark.asyncio
-async def test_resource_monitor_send_alert_rate_limited():
-    """Test that rate limiter prevents alert spam."""
+async def test_resource_monitor_send_alert_once_per_episode():
+    """A sustained violation alerts once, not on every poll."""
     from src.monitors.resource_monitor import ResourceMonitor, ContainerStats, ViolationState
     from src.config import ResourceConfig
     from datetime import datetime, timedelta
 
     mock_alert_manager = MagicMock()
-    mock_alert_manager.send_resource_alert = AsyncMock()
+    mock_alert_manager.send_resource_alert = AsyncMock(return_value=True)
     mock_rate_limiter = MagicMock()
-    mock_rate_limiter.should_alert.return_value = False
 
     monitor = ResourceMonitor(
         docker_client=MagicMock(),
@@ -761,10 +759,10 @@ async def test_resource_monitor_send_alert_rate_limited():
     )
 
     await monitor._send_alert(stats, violation)
+    await monitor._send_alert(stats, violation)
 
-    mock_rate_limiter.should_alert.assert_called_once()
-    mock_rate_limiter.record_suppressed.assert_called_once()
-    mock_alert_manager.send_resource_alert.assert_not_called()
+    # One alert per episode: the second poll inside the reminder window is quiet.
+    mock_alert_manager.send_resource_alert.assert_called_once()
 
 
 @pytest.mark.asyncio

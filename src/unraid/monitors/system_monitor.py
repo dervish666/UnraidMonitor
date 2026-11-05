@@ -5,6 +5,8 @@ import logging
 import time
 from typing import Any, Callable, Awaitable, TYPE_CHECKING
 
+from src.constants import ALERT_REMINDER_SECONDS, EPISODE_RECOVERY_RATIO
+
 if TYPE_CHECKING:
     from src.config import UnraidConfig
     from src.unraid.client import UnraidClientWrapper
@@ -13,8 +15,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Minimum seconds between repeated alerts of the same type
-_ALERT_COOLDOWN = 300  # 5 minutes
 # Consecutive over-threshold polls before a CPU usage alert: one 30s sample is
 # a compile or a scan, two in a row is load worth hearing about.
 _CPU_SUSTAINED_POLLS = 2
@@ -33,6 +33,7 @@ class UnraidSystemMonitor:
         on_alert: Callable[..., Awaitable[bool]],
         mute_manager: "ServerMuteManager",
         availability: "UnraidAvailability | None" = None,
+        memory_alerts: bool = True,
     ):
         """Initialize system monitor.
 
@@ -43,6 +44,8 @@ class UnraidSystemMonitor:
             mute_manager: Server mute manager.
             availability: Shared API-availability ladder (also fed by the
                 array monitor), or None to skip outage alerts.
+            memory_alerts: False when memory_management is on, so the
+                MemoryMonitor is the only voice on memory pressure.
         """
         self._client = client
         self._config = config
@@ -50,7 +53,11 @@ class UnraidSystemMonitor:
         self._mute_manager = mute_manager
         self._availability = availability
         self._running = False
-        self._last_alert_times: dict[str, float] = {}
+        self._memory_alerts = memory_alerts
+        # Open episodes: key -> monotonic time of the last delivered alert,
+        # and when the episode began (for the reminder text).
+        self._episodes: dict[str, float] = {}
+        self._episode_started: dict[str, float] = {}
         self._cpu_over_polls = 0
         self._cached_metrics: dict[str, Any] | None = None
         self._cached_array: dict[str, Any] | None = None
@@ -111,70 +118,87 @@ class UnraidSystemMonitor:
 
         # Check CPU temperature (None when not available from GraphQL schema)
         cpu_temp = metrics.get("cpu_temperature")
-        if cpu_temp is not None and cpu_temp > self._config.cpu_temp_threshold:
-            await self._rate_limited_alert(
-                key="cpu_temp",
-                title="High CPU Temperature",
-                message=f"Temperature: {cpu_temp:.1f}°C (threshold: {self._config.cpu_temp_threshold}°C)\n"
-                        f"Current load: {metrics.get('cpu_percent', 0):.1f}%",
-                alert_type="server",
-            )
+        if cpu_temp is not None:
+            threshold = self._config.cpu_temp_threshold
+            if cpu_temp > threshold:
+                await self._episode_alert(
+                    key="cpu_temp",
+                    title="High CPU Temperature",
+                    message=f"Temperature: {cpu_temp:.1f}°C (threshold: {threshold}°C)\n"
+                            f"Current load: {metrics.get('cpu_percent', 0):.1f}%",
+                )
+            elif cpu_temp <= threshold * EPISODE_RECOVERY_RATIO:
+                await self._episode_recover(
+                    "cpu_temp", "CPU Temp Normal", f"CPU at {cpu_temp:.1f}°C (threshold {threshold}°C)."
+                )
 
         # Check CPU usage
         cpu_percent = metrics.get("cpu_percent", 0)
-        if cpu_percent > self._config.cpu_usage_threshold:
+        cpu_threshold = self._config.cpu_usage_threshold
+        if cpu_percent > cpu_threshold:
             self._cpu_over_polls += 1
         else:
             self._cpu_over_polls = 0
         if self._cpu_over_polls >= _CPU_SUSTAINED_POLLS:
             temp_info = f"\nTemperature: {cpu_temp:.1f}°C" if cpu_temp is not None else ""
-            await self._rate_limited_alert(
+            await self._episode_alert(
                 key="cpu_usage",
                 title="High CPU Usage",
-                message=f"Usage: {cpu_percent:.1f}% (threshold: {self._config.cpu_usage_threshold}%){temp_info}",
-                alert_type="server",
+                message=f"Usage: {cpu_percent:.1f}% (threshold: {cpu_threshold}%){temp_info}",
+            )
+        elif cpu_percent <= cpu_threshold * EPISODE_RECOVERY_RATIO:
+            await self._episode_recover(
+                "cpu_usage", "CPU Load Normal", f"CPU at {cpu_percent:.1f}% (threshold {cpu_threshold}%)."
             )
 
-        # Check memory usage
+        # Check memory usage. With memory management on, MemoryMonitor owns
+        # memory pressure (its Warning fires at the same 90% this "Critical"
+        # did, so the user got both with contradictory severity).
         memory_percent = metrics.get("memory_percent", 0)
-        if memory_percent > self._config.memory_usage_threshold:
+        mem_threshold = self._config.memory_usage_threshold
+        if self._memory_alerts and memory_percent > mem_threshold:
             memory_gb = metrics.get("memory_used", 0) / (1024**3)
             memory_total_gb = metrics.get("memory_total", 0) / (1024**3)
             used_line = (
                 f"Used: {memory_gb:.1f} of {memory_total_gb:.1f} GB"
                 if memory_total_gb else f"Used: {memory_gb:.1f} GB"
             )
-            await self._rate_limited_alert(
+            await self._episode_alert(
                 key="memory",
                 title="Memory Critical",
-                message=f"Usage: {memory_percent:.1f}% (threshold: {self._config.memory_usage_threshold}%)\n"
+                message=f"Usage: {memory_percent:.1f}% (threshold: {mem_threshold}%)\n"
                         f"{used_line}",
-                alert_type="server",
             )
-
-        # Clean stale alert cooldowns
-        stale_cutoff = time.monotonic() - (_ALERT_COOLDOWN * 2)
-        stale_keys = [k for k, t in self._last_alert_times.items() if t < stale_cutoff]
-        for k in stale_keys:
-            del self._last_alert_times[k]
+        elif self._memory_alerts and memory_percent <= mem_threshold * EPISODE_RECOVERY_RATIO:
+            await self._episode_recover(
+                "memory", "Memory Normal", f"Memory at {memory_percent:.1f}% (threshold {mem_threshold}%)."
+            )
 
         return metrics
 
-    async def _rate_limited_alert(self, key: str, **kwargs: Any) -> None:
-        """Send an alert only if cooldown has elapsed for this key."""
+    async def _episode_alert(self, key: str, title: str, message: str) -> None:
+        """Alert once per episode, then remind every ALERT_REMINDER_SECONDS.
+
+        The episode (and its timer) starts only on delivery: a send lost to a
+        Telegram outage is retried next poll.
+        """
         now = time.monotonic()
-        # Default to -inf (not 0) so the first alert always fires: on a
-        # freshly-booted host time.monotonic() can be < _ALERT_COOLDOWN, and a
-        # sentinel of 0 would wrongly suppress the very first alert within the
-        # first few minutes of uptime.
-        last = self._last_alert_times.get(key, float("-inf"))
-        if now - last < _ALERT_COOLDOWN:
-            logger.debug(f"Suppressing duplicate {key} alert (cooldown)")
+        last = self._episodes.get(key)
+        if last is not None and now - last < ALERT_REMINDER_SECONDS:
             return
-        # Start the cooldown only on delivery: a send lost to a Telegram
-        # outage is retried next poll rather than silenced for 5 minutes.
-        if await self._on_alert(**kwargs):
-            self._last_alert_times[key] = now
+        if last is not None:
+            message += f"\n\nStill going after {(now - self._episode_started[key]) / 3600:.0f}h."
+        if await self._on_alert(title=title, message=message, alert_type="server"):
+            self._episodes[key] = now
+            self._episode_started.setdefault(key, now)
+
+    async def _episode_recover(self, key: str, title: str, message: str) -> None:
+        """Close an open episode with one "back to normal" message."""
+        if key not in self._episodes:
+            return
+        if await self._on_alert(title=title, message=message, alert_type="recovery"):
+            del self._episodes[key]
+            self._episode_started.pop(key, None)
 
     async def get_current_metrics(self) -> dict[str, Any] | None:
         """Get current metrics, using cache if fresh.

@@ -27,6 +27,7 @@ class AlertSender(Protocol):
         image: str,
         uptime_seconds: int | None = None,
         restart_loop_count: int | None = None,
+        oom_killed: bool = False,
     ) -> bool: ...
 
     async def send_log_error_alert(
@@ -47,6 +48,10 @@ class AlertSender(Protocol):
         memory_limit: int,
         memory_percent: float,
         cpu_percent: float,
+    ) -> bool: ...
+
+    async def send_resource_recovery(
+        self, container_name: str, metric: str, current_value: float, threshold: int,
     ) -> bool: ...
 
     async def send_health_alert(self, container_name: str, health_status: str) -> bool: ...
@@ -166,14 +171,19 @@ class AlertManager:
         image: str,
         uptime_seconds: int | None = None,
         restart_loop_count: int | None = None,
+        oom_killed: bool = False,
     ) -> bool:
         """Send a container crash alert with quick action buttons."""
         uptime_str = format_uptime(uptime_seconds) if uptime_seconds else "unknown"
 
         # Interpret common exit codes
+        # 137 is SIGKILL from anyone; only Docker's oom event or
+        # State.OOMKilled says the kernel did it for memory.
         exit_reason = ""
-        if exit_code == 137:
+        if oom_killed:
             exit_reason = " (OOM killed)"
+        elif exit_code == 137:
+            exit_reason = " (SIGKILL)"
         elif exit_code == 143:
             exit_reason = " (SIGTERM)"
         elif exit_code == 139:
@@ -331,6 +341,19 @@ Exceeded for: {duration_str}
         )
 
         return await self._deliver(text, keyboard, f"Sent resource alert for {container_name} ({metric})", "Failed to send resource alert")
+
+    async def send_resource_recovery(
+        self, container_name: str, metric: str, current_value: float, threshold: int,
+    ) -> bool:
+        """Close a resource episode: the container is back under its threshold."""
+        label = "CPU" if metric == "cpu" else "Memory"
+        text = (
+            f"✅ *{escape_markdown(container_name)}* {label} back to normal: "
+            f"{current_value:.0f}% (threshold {threshold}%)."
+        )
+        return await self._deliver(
+            text, None, f"Sent {metric} recovery for {container_name}", "Failed to send resource recovery",
+        )
 
     async def send_health_alert(self, container_name: str, health_status: str) -> bool:
         """Send alert when a container's health check transitions to unhealthy."""

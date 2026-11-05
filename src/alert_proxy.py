@@ -120,6 +120,7 @@ class AlertManagerProxy:
         image: str,
         uptime_seconds: int | None = None,
         restart_loop_count: int | None = None,
+        oom_killed: bool = False,
     ) -> bool:
         return await self._send_alert(
             "send_crash_alert",
@@ -128,6 +129,7 @@ class AlertManagerProxy:
             image=image,
             uptime_seconds=uptime_seconds,
             restart_loop_count=restart_loop_count,
+            oom_killed=oom_killed,
         )
 
     async def send_log_error_alert(
@@ -166,6 +168,14 @@ class AlertManagerProxy:
             memory_limit=memory_limit,
             memory_percent=memory_percent,
             cpu_percent=cpu_percent,
+        )
+
+    async def send_resource_recovery(
+        self, container_name: str, metric: str, current_value: float, threshold: int,
+    ) -> bool:
+        return await self._send_alert(
+            "send_resource_recovery", container_name=container_name, metric=metric,
+            current_value=current_value, threshold=threshold,
         )
 
     async def send_recovery_alert(self, container_name: str) -> bool:

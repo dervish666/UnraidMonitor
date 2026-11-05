@@ -28,6 +28,9 @@ DEFAULT_MEMORY_PERCENT = 85
 MEMORY_WARNING_THRESHOLD = 90
 MEMORY_CRITICAL_THRESHOLD = 95
 MEMORY_SAFE_THRESHOLD = 80
+# CRITICAL is left only this many points under the critical threshold, so a
+# reading wobbling across the line does not re-alert on every poll.
+MEMORY_CRITICAL_EXIT_MARGIN = 2
 MEMORY_KILL_DELAY_SECONDS = 60
 MEMORY_STABILIZATION_WAIT = 180
 MEMORY_TOP_CONSUMERS = 5  # Containers listed in the "Top memory users" alert section
@@ -101,6 +104,14 @@ NUT_UNAVAILABLE_AFTER_FAILURES = 3
 # user is told monitoring is blind. The system poll runs every 30s by default,
 # so this is roughly a minute and a half.
 UNRAID_UNAVAILABLE_AFTER_FAILURES = 3
+
+# Ongoing-condition alerts (system CPU/memory/temperature, UPS load, container
+# CPU/memory) fire once per episode, remind at this interval while it lasts,
+# and say once when it ends. A 5-minute repeat was 288 messages a day.
+ALERT_REMINDER_SECONDS = 6 * 3600
+# An episode ends only once the value is this fraction of its threshold or
+# lower, so a reading sitting on the line does not flap alert/recovered.
+EPISODE_RECOVERY_RATIO = 0.9
 # Status flags that get their own alert. CAL is deliberately absent: a runtime
 # calibration puts the UPS on battery on purpose, the same reasoning that keeps
 # a parity sync from reading as a disk failure.
