@@ -103,6 +103,32 @@ _ADVERSARIAL_PROBES = (
 )
 
 
+def search_form(pattern: str) -> str:
+    """The pattern as searched: a leading greedy or lazy .* removed.
+
+    Only whether a line matches is used, and under search() a leading .*
+    cannot change that (it can match nothing), but it makes the engine
+    rescan the rest of the line from every start: .*(GET|POST) /api/.* took
+    about 60ms per 3000-character line, against under 1ms without it.
+    """
+    try:
+        parsed = _sre_parse.parse(pattern, re.IGNORECASE)
+    except re.error:
+        return pattern
+    while (
+        len(parsed) > 1
+        and parsed[0][0] in (_sre.MAX_REPEAT, _sre.MIN_REPEAT)
+        and parsed[0][1][:2] == (0, _sre.MAXREPEAT)
+        and list(parsed[0][1][2]) == [(_sre.ANY, None)]
+    ):
+        prefix = ".*?" if pattern.startswith(".*?") else ".*"
+        if not pattern.startswith(prefix):
+            break  # flags or a group in front: leave it alone
+        pattern = pattern[len(prefix):]
+        parsed = _sre_parse.parse(pattern, re.IGNORECASE)
+    return pattern
+
+
 def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
     """Validate a regex pattern for safety and correctness.
 
@@ -123,9 +149,12 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
     if why:
         return False, f"Pattern may cause performance issues ({why})"
 
+    # One search per probe: each probe is one line, judged against the
+    # one-line limit (five in one search refused fair patterns on a slow CPU).
     try:
-        if regex_worker().search(pattern, _ADVERSARIAL_PROBES) is None:
-            return False, "Pattern causes excessive backtracking"
+        for probe in _ADVERSARIAL_PROBES:
+            if regex_worker().search(search_form(pattern), (probe,)) is None:
+                return False, "Pattern causes excessive backtracking"
     except RegexWorkerError as e:
         # Says nothing about the pattern; the match-time limit still applies.
         logger.error(f"Could not probe regex {pattern!r}: {e}")
@@ -159,8 +188,12 @@ class IgnorePattern:
             return any(needle in text.lower() for text in texts)
         if self.disabled:
             return False
+        found: bool | None = False
         try:
-            found = regex_worker().search(self.pattern, texts)
+            for text in texts:  # one limit per text, so the stripped copy does not halve it
+                found = regex_worker().search(search_form(self.pattern), (text,))
+                if found is not False:
+                    break
         except RegexWorkerError:
             return False  # logged by the worker; the line is let through
         if found is None:

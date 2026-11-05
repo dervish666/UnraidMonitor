@@ -5,7 +5,8 @@ backtracking pattern on a long log line used to stall the whole bot, and
 static analysis of the pattern kept missing shapes (six review rounds, a new
 bypass each time, and each tighter rule refused ordinary filters). A search
 that overruns here is abandoned by killing the child: the caller waits at
-most REGEX_MATCH_TIMEOUT_SECONDS whatever the pattern.
+most REGEX_MATCH_TIMEOUT_SECONDS per search whatever the pattern (plus about
+0.1s to start a fresh child after an overrun).
 
 The child is a bare ``python -I -c`` running the stdlib loop below, not a
 multiprocessing spawn: spawn re-imports the bot's entry module (aiogram, the
@@ -24,7 +25,11 @@ import time
 
 logger = logging.getLogger(__name__)
 
-REGEX_MATCH_TIMEOUT_SECONDS = 0.25
+# Per search, one log line. A pattern that overruns pays this once and is then
+# disabled, so the limit is generous: the slowest ordinary filter measured
+# (\\w+\\s+\\w+x) takes about 40ms on a 3000-character line on an M1, and an
+# Unraid CPU may be several times slower.
+REGEX_MATCH_TIMEOUT_SECONDS = 0.5
 _START_TIMEOUT_SECONDS = 10.0
 # After the worker fails twice in a row, regex ignores are skipped (fail open)
 # for this long instead of paying a start attempt on every log line.

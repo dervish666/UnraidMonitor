@@ -25,6 +25,10 @@ LOG_STREAM_RETRY_SECONDS = 10.0
 LOG_QUEUE_MAX_LINES = 10000
 # Lines handled per wake-up before yielding to the rest of the bot.
 LOG_DRAIN_BATCH = 500
+# Within a batch, yield at least this often: a regex ignore under its own
+# time limit still costs tens of ms per long line, and 500 of them held the
+# event loop for over 30s.
+LOG_DRAIN_YIELD_SECONDS = 0.05
 # A single log line longer than this is cut. Error matching and alerts need
 # the start of a line; a 5 MB base64 blob on one line only costs memory.
 LOG_MAX_LINE_CHARS = 4000
@@ -401,11 +405,15 @@ class LogWatcher:
                 if len(batch) == LOG_DRAIN_BATCH:
                     wake.set()  # More waiting; take it on the next pass
 
+                last_yield = time.monotonic()
                 for line in batch:
                     if line is _END:
                         ended = True
                         break
                     await self._handle_line(container_name, line, continuation)
+                    if time.monotonic() - last_yield >= LOG_DRAIN_YIELD_SECONDS:
+                        await asyncio.sleep(0)
+                        last_yield = time.monotonic()
                 # Let other containers' watchers and the bot run between batches.
                 await asyncio.sleep(0)
         finally:

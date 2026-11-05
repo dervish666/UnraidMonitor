@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from src.alerts.ignore_manager import IgnoreManager, validate_regex_pattern
+from src.alerts.ignore_manager import IgnoreManager, IgnorePattern, validate_regex_pattern
 from src.alerts.regex_worker import REGEX_MATCH_TIMEOUT_SECONDS, RegexWorker
 
 # What a 0.22 install has on disk: the analyzer's regexes plus a substring.
@@ -212,3 +212,33 @@ def test_worker_starts_without_the_bot_imports():
         assert time.monotonic() - started < 1.0
     finally:
         worker.close()
+
+
+@pytest.mark.parametrize(("pattern", "expected"), [
+    (".*(GET|POST) /api/.*", "(GET|POST) /api/.*"),
+    (".*?foo", "foo"),
+    (".*.*foo", "foo"),
+    (".*", ".*"),            # nothing left to search for: unchanged
+    (".*+foo", ".*+foo"),    # possessive: not the same pattern without it
+    ("(?i).*foo", "(?i).*foo"),
+    (".*|x", ".*|x"),        # top-level alternation
+    ("^.*error.*$", "^.*error.*$"),
+])
+def test_search_form_drops_only_a_leading_dot_star(pattern, expected):
+    from src.alerts.ignore_manager import search_form
+
+    assert search_form(pattern) == expected
+
+
+@pytest.mark.parametrize("pattern", [
+    ".*(GET|POST) /api/.*",
+    ".*(GET|POST|PUT) .*",
+    ".*(?:error|fail).*",
+    ".*timeout.*",
+])
+def test_leading_dot_star_filters_load_fast(pattern):
+    """Round 7 review (Opus): these took 270-370ms over the probes and were refused."""
+    started = time.monotonic()
+    assert validate_regex_pattern(pattern) == (True, "")
+    assert time.monotonic() - started < 1.0
+    assert IgnorePattern(pattern, "regex").matches("POST /api/x error timeout") is True
