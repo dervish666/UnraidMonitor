@@ -214,6 +214,11 @@ class ResourceMonitor:
         Returns:
             List of ContainerStats for all running containers.
         """
+        stats, _ = await self._collect_stats()
+        return stats
+
+    async def _collect_stats(self) -> tuple[list[ContainerStats], int]:
+        """(readings, how many running containers had none)."""
         containers = await asyncio.to_thread(
             self._docker.containers.list, filters={"status": "running"}
         )
@@ -228,7 +233,8 @@ class ResourceMonitor:
                     return None
 
         results = await asyncio.gather(*(fetch_one(c) for c in containers))
-        return [s for s in results if s is not None]
+        readings = [s for s in results if s is not None]
+        return readings, len(results) - len(readings)
 
     async def get_container_stats(self, name: str) -> ContainerStats | None:
         """Get current stats for a specific container.
@@ -450,7 +456,11 @@ class ResourceMonitor:
             self._last_cleanup = now
             self._rate_limiter.cleanup_stale()
 
-        stats_list = await self.get_all_stats()
+        stats_list, failed = await self._collect_stats()
+        if failed and not stats_list:
+            # Nothing running reads as an empty list too; this is not that.
+            # Raising lets the loop record the failure in /health.
+            raise RuntimeError(f"stats failed for all {failed} running containers")
         active_names = {s.name for s in stats_list}
 
         for stats in stats_list:

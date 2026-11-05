@@ -262,11 +262,11 @@ async def test_container_resource_episode_alerts_once_then_recovers():
     config = ResourceConfig(enabled=True, sustained_threshold_seconds=0)
     monitor = ResourceMonitor(MagicMock(), config, alerts, RateLimiter())
 
-    def poll(cpu: float) -> list[ContainerStats]:
+    def poll(cpu: float) -> tuple[list[ContainerStats], int]:
         return [ContainerStats(name="plex", cpu_percent=cpu, memory_percent=10.0,
-                               memory_bytes=1, memory_limit=10)]
+                               memory_bytes=1, memory_limit=10)], 0
 
-    with patch.object(monitor, "get_all_stats", new=AsyncMock()) as collect:
+    with patch.object(monitor, "_collect_stats", new=AsyncMock()) as collect:
         collect.return_value = poll(config.default_cpu_percent + 10)
         for _ in range(10):
             await monitor._poll_cycle()

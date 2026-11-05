@@ -318,6 +318,7 @@ def _register_memory_commands(
     memory_monitor: "MemoryMonitor | None",
     protected_containers: list[str] | None,
     memory_config: "MemoryConfig | None" = None,
+    state: ContainerStateManager | None = None,
 ) -> None:
     """Register memory management commands and kill/restart button callbacks.
 
@@ -333,7 +334,7 @@ def _register_memory_commands(
     )
     if memory_monitor is not None:
         dp.callback_query.register(
-            mem_kill_callback(memory_monitor, protected_containers=protected_containers),
+            mem_kill_callback(memory_monitor, protected_containers=protected_containers, state=state),
             F.data.startswith("mem_kill:"),
         )
         dp.callback_query.register(mem_cancel_kill_callback(memory_monitor), F.data == "mem_cancel_kill")
@@ -537,7 +538,7 @@ def register_commands(
             dp, unraid_system_monitor, server_mute_manager, array_mute_manager,
             array_monitor, unraid_config, ups_monitor,
         )
-        _register_memory_commands(dp, memory_monitor, protected_containers, memory_config)
+        _register_memory_commands(dp, memory_monitor, protected_containers, memory_config, state)
 
         if ignore_manager is not None and mute_manager is not None:
             _register_manage_commands(

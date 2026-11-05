@@ -8,7 +8,14 @@ src.main`` so the supervisor (Docker) sees the same process.
 import logging
 import os
 import sys
+import time
 from typing import TYPE_CHECKING
+
+from src.constants import (
+    DEAD_MONITORS_RESTART_MIN_INTERVAL_SECONDS,
+    DEAD_MONITORS_RESTART_STATE,
+)
+from src.utils.json_store import atomic_write_json, load_json
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -70,3 +77,40 @@ async def restart_bot(
         # execv only returns (or raises) on failure — the process was NOT
         # replaced, so clear the guard to allow a retry.
         _restart_in_progress = False
+
+
+async def restart_after_monitors_died(
+    bot: "Bot",
+    chat_id_store: "ChatIdStore",
+    state_path: str = DEAD_MONITORS_RESTART_STATE,
+    now: float | None = None,
+) -> bool:
+    """Restart the process because every monitor task died; False if refused.
+
+    Docker Engine only marks a container unhealthy when its HEALTHCHECK
+    fails, it does not restart it, so the bot restarts itself. The time of
+    the last such restart is written to disk first, and a second one inside
+    DEAD_MONITORS_RESTART_MIN_INTERVAL_SECONDS is refused, so a monitor that
+    dies on every start cannot turn this into an exec loop.
+    """
+    now = time.time() if now is None else now
+    last = load_json(state_path, dict, "dead-monitor restart")
+    last_at = last.get("at") if isinstance(last, dict) else None
+    if isinstance(last_at, (int, float)) and now - last_at < DEAD_MONITORS_RESTART_MIN_INTERVAL_SECONDS:
+        logger.critical(
+            "Every monitor has stopped again within "
+            f"{DEAD_MONITORS_RESTART_MIN_INTERVAL_SECONDS // 60} minutes of the last automatic "
+            "restart. Not restarting again; check the log and restart the container."
+        )
+        return False
+    try:
+        atomic_write_json(state_path, {"at": now})
+    except OSError as e:
+        logger.critical(f"Every monitor has stopped, but the restart guard cannot be saved ({e}); not restarting")
+        return False
+    logger.critical("Every monitor has stopped; restarting the bot")
+    await restart_bot(
+        bot, chat_id_store,
+        notice="⚠️ Every monitor in the bot stopped. Restarting it now; check the container log.",
+    )
+    return True

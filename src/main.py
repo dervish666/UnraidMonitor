@@ -15,7 +15,7 @@ from src.alerts.manager import ChatIdStore
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_setup_wizard
 from src.bot.setup_wizard import SetupWizard
 from src.background import _BackgroundTasks
-from src.restart import restart_bot
+from src.restart import restart_after_monitors_died, restart_bot
 from src.startup import start_monitoring
 from src.utils.heartbeat import heartbeat_loop
 
@@ -63,7 +63,13 @@ async def main() -> None:
     # Liveness heartbeat for the Docker HEALTHCHECK — runs in wizard mode too,
     # so a container mid-setup doesn't report unhealthy.
     bg.add_task(
-        asyncio.create_task(heartbeat_loop(alive=bg.any_monitor_alive), name="heartbeat"),
+        asyncio.create_task(
+            heartbeat_loop(
+                alive=bg.any_monitor_alive,
+                on_dead=lambda: restart_after_monitors_died(bot, chat_id_store),
+            ),
+            name="heartbeat",
+        ),
         monitor=False,
     )
 

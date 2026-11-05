@@ -263,6 +263,19 @@ def escape_markdown(text: str) -> str:
     return text
 
 
+_INT_TEXT = re.compile(r"-?[0-9]+")
+
+
+def parse_int(text: str) -> int | None:
+    """An optionally negative ASCII integer, else None.
+
+    ``lstrip("-").isdigit()`` let "--1" through to int(), which raised, and
+    isdigit() also accepts characters such as "²" that int() rejects.
+    """
+    stripped = text.strip()
+    return int(stripped) if _INT_TEXT.fullmatch(stripped) else None
+
+
 _CUT_MARK = "…"
 
 

@@ -65,8 +65,9 @@ class _BackgroundTasks:
     def any_monitor_alive(self) -> bool:
         """False once every monitoring task has ended and at least one crashed.
 
-        The heartbeat stops then, so the Docker HEALTHCHECK fails and the
-        container is restarted instead of idling as "healthy". With no
+        The heartbeat stops then, so Docker shows the container unhealthy,
+        and after a grace period the bot restarts itself (Docker Engine does
+        not restart an unhealthy container). With no
         monitors registered yet (setup wizard, startup), or with every monitor
         disabled and returned cleanly, it is True: a restart would change nothing.
         """

@@ -100,6 +100,11 @@ class MemoryMonitor:
         return self._running
 
     @property
+    def killed_containers(self) -> list[str]:
+        """Containers stopped for memory and waiting on a restart answer."""
+        return list(self._killed_containers)
+
+    @property
     def pressure_active(self) -> bool:
         """True while a pressure event is open (anything but NORMAL)."""
         return self._state != MemoryState.NORMAL

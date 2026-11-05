@@ -340,7 +340,13 @@ class LogWatcher:
             try:
                 resume_from = self._stream_ended_at.get(container_name)
                 if resume_from is not None:
-                    log_stream = container.logs(stream=True, follow=True, since=int(resume_from))
+                    # tail bounds the read: without it docker-py sends
+                    # tail="all", and dockerd decodes the whole json-file log
+                    # to find the `since` point, every retry, for a stopped
+                    # container that may hold gigabytes.
+                    log_stream = container.logs(
+                        stream=True, follow=True, since=int(resume_from), tail=LOG_QUEUE_MAX_LINES,
+                    )
                 else:
                     log_stream = container.logs(stream=True, follow=True, tail=0)
                 self._streams.add(log_stream)

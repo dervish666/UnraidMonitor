@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Awaitable, Any, TYPE_CHECKING
+from typing import Callable, Awaitable, Any, Iterable, TYPE_CHECKING
 
 from aiogram.types import CallbackQuery, Message
 from aiogram.enums import ChatAction
@@ -45,15 +45,19 @@ async def _validate_and_resolve(
     callback: CallbackQuery,
     container_name: str,
     state: ContainerStateManager | None,
+    candidates: Callable[[], Iterable[str]] | None = None,
 ) -> str | None:
     """Shared tail of callback parsing: name-format check + optional state lookup.
 
     Answers the callback with the error itself; returns the resolved container
-    name (or the validated raw name when *state* is None), else None.
+    name (or the validated raw name when *state* is None), else None. A name
+    cut to fit the button resolves against *state*, else against *candidates*
+    (the names that button could have been built for).
     """
     if container_name.endswith("…"):
         # Cut to fit the 64-byte button (fit_callback); resolve by prefix.
-        resolved = resolve_cut_name(container_name, state.get_all_names()) if state else None
+        pool = state.get_all_names() if state else (candidates() if candidates else None)
+        resolved = resolve_cut_name(container_name, pool) if pool is not None else None
         if resolved is None:
             await callback.answer("Name too long for this button; use the command with the full name")
             return None
@@ -74,6 +78,7 @@ async def _validate_and_resolve(
 async def _parse_container_callback(
     callback: CallbackQuery,
     state: ContainerStateManager | None = None,
+    candidates: Callable[[], Iterable[str]] | None = None,
 ) -> str | None:
     """Parse ``prefix:container_name`` callback data.
 
@@ -86,7 +91,7 @@ async def _parse_container_callback(
     if len(parts) < 2:
         await callback.answer("Invalid callback data")
         return None
-    return await _validate_and_resolve(callback, parts[1], state)
+    return await _validate_and_resolve(callback, parts[1], state, candidates)
 
 
 async def _parse_valued_callback(
@@ -415,13 +420,19 @@ async def _confirm_stale_memory_action(
 def mem_kill_callback(
     memory_monitor: "MemoryMonitor",
     protected_containers: list[str] | None = None,
+    state: ContainerStateManager | None = None,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
-    """Factory for memory kill button callback handler."""
+    """Factory for memory kill button callback handler.
+
+    *state* is only the pool a cut name resolves against: the buttons name
+    whichever containers used the most memory.
+    """
     _protected = set(protected_containers or [])
+    known = state.get_all_names if state else None
 
     async def handler(callback: CallbackQuery) -> None:
         # Format: mem_kill:container_name
-        container_name = await _parse_container_callback(callback)
+        container_name = await _parse_container_callback(callback, candidates=known)
         if container_name is None:
             return
 
@@ -476,7 +487,9 @@ def mem_restart_callback(
     _protected = set(protected_containers or [])
 
     async def handler(callback: CallbackQuery) -> None:
-        container_name = await _parse_container_callback(callback)
+        container_name = await _parse_container_callback(
+            callback, candidates=lambda: memory_config.restart_containers,
+        )
         if container_name is None:
             return
 
@@ -543,7 +556,9 @@ def mem_restart_yes_callback(
     """Factory for memory restart Yes button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        container_name = await _parse_container_callback(callback)
+        container_name = await _parse_container_callback(
+            callback, candidates=lambda: memory_monitor.killed_containers,
+        )
         if container_name is None:
             return
 
@@ -576,7 +591,9 @@ def mem_restart_no_callback(
     """Factory for memory restart No button callback handler."""
 
     async def handler(callback: CallbackQuery) -> None:
-        container_name = await _parse_container_callback(callback)
+        container_name = await _parse_container_callback(
+            callback, candidates=lambda: memory_monitor.killed_containers,
+        )
         if container_name is None:
             return
 

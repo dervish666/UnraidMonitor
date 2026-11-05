@@ -184,10 +184,10 @@ async def test_resource_recovery_is_kept_until_delivered():
     monitor = ResourceMonitor(MagicMock(), config, alerts, RateLimiter())
 
     def poll_at(cpu: float):
-        monitor.get_all_stats = AsyncMock(return_value=[  # type: ignore[method-assign]
+        monitor._collect_stats = AsyncMock(return_value=([  # type: ignore[method-assign]
             ContainerStats(name="plex", cpu_percent=cpu, memory_percent=10,
                            memory_bytes=1, memory_limit=10),
-        ])
+        ], 0))
         return monitor._poll_cycle()
 
     await poll_at(95)

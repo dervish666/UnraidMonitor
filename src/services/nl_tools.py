@@ -9,6 +9,7 @@ import docker
 from src.state import ContainerStateManager
 from src.unraid.monitors.array_monitor import disk_status_verdict, parity_writing
 from src.models import ContainerInfo
+from src.utils.formatting import parse_int
 from src.utils.sanitize import sanitize_for_prompt, sanitize_logs
 from src.services.docker_client import DockerClientLike
 
@@ -214,8 +215,11 @@ def validate_tool_args(schema: dict[str, Any], args: Any) -> dict[str, Any] | st
                 return f"{key}: expected an integer, got bool"
             if isinstance(value, float) and value.is_integer():
                 value = int(value)
-            elif isinstance(value, str) and value.strip().lstrip("-").isdigit():
-                value = int(value.strip())
+            elif isinstance(value, str):
+                parsed = parse_int(value)
+                if parsed is None:
+                    return f"{key}: expected an integer, got {value[:20]!r}"
+                value = parsed
             elif not isinstance(value, int):
                 return f"{key}: expected an integer, got {type(value).__name__}"
         cleaned[key] = value

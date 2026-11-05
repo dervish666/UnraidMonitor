@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from aiogram.types import Message
 
 from src.bot.control_commands import build_confirmation, create_ctrl_confirm_callback
-from src.bot.model_command import model_select_callback
+from src.bot.model_command import model_provider_callback, model_select_callback
 from src.models import ContainerInfo
 from src.services.container_control import ContainerController
 from src.state import ContainerStateManager
@@ -54,23 +54,40 @@ async def test_long_container_confirm_button_fits_and_runs():
     container.restart.assert_called_once()
 
 
-async def test_long_ollama_model_button_selects_the_full_tag():
-    model_id = "hf.co/bartowski/Qwen2.5-Coder-32B-Instruct-GGUF:Q4_K_M"
+async def test_two_long_quantisations_are_each_selectable():
+    """Both tags cut to the same prefix, so neither button could pick its model."""
+    q4 = "hf.co/bartowski/Qwen2.5-Coder-32B-Instruct-GGUF:Q4_K_M"
+    q8 = "hf.co/bartowski/Qwen2.5-Coder-32B-Instruct-GGUF:Q8_0"
     provider = MagicMock()
     provider.name = "ollama"
-    provider.available_models = [MagicMock(id=model_id), MagicMock(id="llama3.2:3b")]
+    provider.display_name = "Ollama"
+    provider.available_models = [
+        MagicMock(id=q4, supports_tools=True), MagicMock(id=q8, supports_tools=True),
+        MagicMock(id="llama3.2:3b", supports_tools=True),
+    ]
+    for m in provider.available_models:
+        m.name = m.id
     registry = MagicMock()
     registry.get_available_providers.return_value = [provider]
-    registry.get_current_model.return_value = ("ollama", model_id)
+    registry.get_current_model.return_value = ("ollama", "llama3.2:3b")
 
-    data = fit_callback("model_select:ollama:", model_id)
-    assert len(data.encode()) <= 64
-    callback = MagicMock()
-    callback.data = data
-    callback.answer = AsyncMock()
-    callback.message = MagicMock(spec=Message)
-    callback.message.edit_text = AsyncMock()
+    # Render the picker through its real handler and read the buttons it sent.
+    picker = MagicMock()
+    picker.data = "model:ollama"
+    picker.answer = AsyncMock()
+    picker.message = MagicMock(spec=Message)
+    picker.message.edit_text = AsyncMock()
+    await model_provider_callback(registry)(picker)
+    markup = picker.message.edit_text.await_args.kwargs["reply_markup"]
+    data = {row[0].text: row[0].callback_data for row in markup.inline_keyboard[:-1]}
+    assert all(len(d.encode()) <= 64 for d in data.values())
+    assert data[q4] != data[q8]
 
-    await model_select_callback(registry)(callback)
-
-    registry.set_model.assert_called_once_with("ollama", model_id)
+    for model_id in (q4, q8):
+        callback = MagicMock()
+        callback.data = data[model_id]
+        callback.answer = AsyncMock()
+        callback.message = MagicMock(spec=Message)
+        callback.message.edit_text = AsyncMock()
+        await model_select_callback(registry)(callback)
+        registry.set_model.assert_called_with("ollama", model_id)

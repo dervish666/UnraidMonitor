@@ -64,6 +64,11 @@ HEARTBEAT_PATH = "/tmp/unraidmonitor-heartbeat"
 HEARTBEAT_INTERVAL_SECONDS = 60
 # Dockerfile HEALTHCHECK fails when the file is older than this (3 missed beats).
 HEARTBEAT_MAX_AGE_SECONDS = 180
+# Every monitor dead: wait this long, then restart the process once.
+DEAD_MONITORS_RESTART_GRACE_SECONDS = 120
+# At most one such restart per this window (persisted, so execv cannot loop).
+DEAD_MONITORS_RESTART_MIN_INTERVAL_SECONDS = 1800
+DEAD_MONITORS_RESTART_STATE = "data/dead_monitor_restart.json"
 
 # ---------------------------------------------------------------------------
 # Unraid monitoring defaults

@@ -8,18 +8,42 @@ Usage:
     /model <feature> default    — reset feature to use global default
 """
 
+import hashlib
 import logging
-from typing import Callable, Awaitable, TYPE_CHECKING
+from typing import Callable, Awaitable, Iterable, TYPE_CHECKING
 
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
-
-from src.utils.formatting import fit_callback, resolve_cut_name
 
 if TYPE_CHECKING:
     from src.services.llm.registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _model_key(model_id: str) -> str:
+    """Stable short key for a model whose id is too long for a button."""
+    return "#" + hashlib.sha1(model_id.encode("utf-8")).hexdigest()[:12]
+
+
+def model_select_data(provider_name: str, model_id: str) -> str:
+    """``model_select:<provider>:<model>``, or a hash key when that passes 64 bytes.
+
+    Cutting the name broke quantised Ollama tags: hf.co/org/model-GGUF:Q4_K_M
+    and :Q8_0 cut to the same prefix, so neither could be picked.
+    """
+    data = f"model_select:{provider_name}:{model_id}"
+    if len(data.encode("utf-8")) <= 64:
+        return data
+    return f"model_select:{provider_name}:{_model_key(model_id)}"
+
+
+def _resolve_model(value: str, model_ids: Iterable[str]) -> str | None:
+    ids = list(model_ids)
+    if value.startswith("#"):
+        return next((m for m in ids if _model_key(m) == value), None)
+    return value if value in ids else None
+
 
 # Maps user-facing feature names to internal registry keys
 _FEATURE_ALIASES: dict[str, str] = {
@@ -192,7 +216,7 @@ def model_provider_callback(registry: "ProviderRegistry") -> Callable[[CallbackQ
                 label = f"✓ {label}"
             if not m.supports_tools:
                 label = f"{label} (no tools)"
-            buttons.append([InlineKeyboardButton(text=label, callback_data=fit_callback(f"model_select:{provider_name}:", m.id))])
+            buttons.append([InlineKeyboardButton(text=label, callback_data=model_select_data(provider_name, m.id))])
 
         buttons.append([InlineKeyboardButton(text="← Back", callback_data="model:back")])
 
@@ -220,14 +244,15 @@ def model_select_callback(registry: "ProviderRegistry") -> Callable[[CallbackQue
         # else is a spoofed callback — reject rather than persist it.
         providers = registry.get_available_providers()
         provider = next((p for p in providers if p.name == provider_name), None)
-        if provider is not None:
-            # Long Ollama tags (hf.co/...:Q4_K_M) are cut to fit the button.
-            model_name = resolve_cut_name(
-                model_name, [m.id for m in provider.available_models]
-            ) or model_name
-        if provider is None or model_name not in {m.id for m in provider.available_models}:
+        # Long Ollama tags (hf.co/...:Q4_K_M) arrive as a hash key.
+        resolved_name = (
+            _resolve_model(model_name, [m.id for m in provider.available_models])
+            if provider is not None else None
+        )
+        if resolved_name is None:
             await callback.answer("Invalid selection")
             return
+        model_name = resolved_name
 
         registry.set_model(provider_name, model_name)
 

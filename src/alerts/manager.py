@@ -6,7 +6,10 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
 from src.constants import IMAGE_UPDATE_MAX_SHOWN
-from src.utils.formatting import format_bytes, format_uptime, strip_log_timestamps, escape_markdown, truncate_callback_data
+from src.utils.formatting import (
+    escape_markdown, format_bytes, format_uptime, parse_int, strip_log_timestamps,
+    truncate_callback_data,
+)
 from src.utils.telegram_retry import send_with_retry
 from src.utils.sanitize import redact_secrets
 from src.utils.json_store import atomic_write_json, load_json, log_rejected
@@ -95,8 +98,8 @@ class ChatIdStore:
         for cid in data:
             if isinstance(cid, int) and not isinstance(cid, bool):
                 loaded.add(cid)
-            elif isinstance(cid, str) and cid.lstrip("-").isdigit():
-                loaded.add(int(cid))
+            elif isinstance(cid, str) and (parsed := parse_int(cid)) is not None:
+                loaded.add(parsed)
             else:
                 rejected.append(repr(cid)[:20])
         log_rejected(self._json_path, rejected)
