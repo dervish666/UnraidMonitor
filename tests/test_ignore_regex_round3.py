@@ -86,6 +86,10 @@ def test_pre_branch_ignores_load_match_and_survive_a_save(tmp_path):
     r"(\d+)\1q",
     r"\d+.\d+ms",
     r"\w+.\w+=",
+    # Round 5 review (Sol): small bounded repeats in a row, and an
+    # astral-only class that a BMP sample saw as empty.
+    r"z{0,16}z{0,16}z{0,16}z{0,16}z{0,16}z{0,16}Q",
+    "[^\x00-\uffff]+\\w+[^\x00-\uffff]+\\w+Q",
 ])
 def test_backtracking_shapes_are_refused(pattern):
     ok, why = validate_regex_pattern(pattern)
@@ -104,6 +108,10 @@ def test_backtracking_shapes_are_refused(pattern):
     r"Connection refused to .* on port \d+",  # the trailing repeat has nothing after it to fail
     r".*foo.*",
     r"\S+@\S+",
+    r"^.*error.*$",
+    r"https?://\S+",
+    r"\w+\s+\w+x",
+    r"-?\d+ms",
     r"\d{1,20}:\d{1,20}",
     r"upstream timed out .* client: (\d{1,3}\.){3}\d{1,3}",
     r"\d+\s+\d+",

@@ -106,9 +106,12 @@ def _literal_codes(items: Any) -> set[int]:
 
 
 # The domain one-character bodies are compared over: the whole Basic
-# Multilingual Plane (a Latin-1 sample let Ж*Ж*Ж*$ through) plus any astral
-# code point the pattern itself names.
+# Multilingual Plane (a Latin-1 sample let Ж*Ж*Ж*$ through), any astral code
+# point the pattern itself names, and astral letters, digits and symbols that
+# \\w, \\d and negated classes reach (an astral-only class sampled as empty and
+# looked disjoint from \\w).
 _BMP = range(0x10000)
+_ASTRAL_SAMPLES = (0x10400, 0x1D7CE, 0x1F600, 0x20000, 0x10FFFF)
 
 
 def _char_set(state: Any, items: Any, extra: frozenset[int]) -> frozenset[int] | None:
@@ -117,7 +120,7 @@ def _char_set(state: Any, items: Any, extra: frozenset[int]) -> frozenset[int] |
     if sub.getwidth() != (1, 1):
         return None
     compiled = _sre_compile.compile(sub, re.IGNORECASE)
-    return frozenset(c for c in (*_BMP, *extra) if compiled.fullmatch(chr(c)))
+    return frozenset(c for c in (*_BMP, *_ASTRAL_SAMPLES, *extra) if compiled.fullmatch(chr(c)))
 
 
 def _inline(items: Any) -> Iterator[tuple[Any, Any]]:
@@ -141,10 +144,12 @@ def _adjacent_repeat_risk(state: Any, items: Any, top: bool = True) -> str:
     run is refused. So \\d+\\s+\\d+ and ^\\[\\w+\\] .*error load, .*foo.*x does
     not (on a line of repeated "foo" it is cubic). Anything this cannot
     reduce to one character counts as overlapping. A possessive repeat never
-    gives text back, so it does not start a run. The last item of the whole
+    gives text back, so it does not start a run. Any repeat of varying
+    length counts (z{0,16} as much as z*). The last item of the whole
     pattern is exempt: with nothing after it left to fail, its split with the
     run is settled by the first success, so 0.22-style
-    "Connection refused to .* on port \\d+" still loads (z*z*$ does not: $ can fail).
+    "Connection refused to .* on port \\d+" still loads (z*z*$ does not: $ can
+    fail), and so is a final .* before $, so ^.*error.*$ loads.
     """
     extra = frozenset(c for c in _literal_codes(items) if c >= 0x10000)
     sets: dict[int, frozenset[int] | None] = {}
@@ -160,15 +165,30 @@ def _adjacent_repeat_risk(state: Any, items: Any, top: bool = True) -> str:
 
     run: list[Any] = []
     flat = list(_inline(items))
+
+    def settled(index: int) -> bool:
+        """Nothing after this item can fail: it ends the pattern, or it is .*
+        followed only by $ (a log line has no newline for . to stop at)."""
+        if not top:
+            return False
+        rest = flat[index + 1:]
+        if not rest:
+            return True
+        op, av = flat[index]
+        return (
+            op in _REPEATS and av[1] == _sre.MAXREPEAT and list(av[2]) == [(_sre.ANY, None)]
+            and all(o is _sre.AT and a in (_sre.AT_END, _sre.AT_END_STRING) for o, a in rest)
+        )
+
     for index, (op, av) in enumerate(flat):
-        # \\d{1,9999} splits text as freely as \\d+, and a backreference
-        # matches whatever its group took, so both join runs like + and *.
-        unbounded_repeat = op in _REPEATS and av[1] > _MAX_BOUNDED_REPEAT
-        if op is _sre.GROUPREF and run and not (top and index == len(flat) - 1):
+        # Any repeat of varying length joins a run: six z{0,16} in a row
+        # split text as freely as z*, and a backreference matches whatever
+        # its group took.
+        unbounded_repeat = op in _REPEATS and av[1] > av[0]
+        if op is _sre.GROUPREF and run and not settled(index):
             return "a backreference follows a repeat that can match the same text"
         if unbounded_repeat:
-            last = top and index == len(flat) - 1
-            if not last and any(overlaps(prev, av[2]) for prev in run):
+            if not settled(index) and any(overlaps(prev, av[2]) for prev in run):
                 return "two repeats in one run can match the same text"
             # Overlapping none of the run, a required repeat (+) also ends it.
             kept = run if av[0] == 0 else []
