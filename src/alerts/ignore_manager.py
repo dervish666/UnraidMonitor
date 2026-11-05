@@ -6,7 +6,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import Any, Iterator, Literal
+
+import re._constants as _sre  # stdlib regex parser, as used by re.compile
+import re._parser as _sre_parse
 
 from src.utils.formatting import strip_log_timestamps
 from src.utils.json_store import atomic_write_json, load_json, log_rejected
@@ -16,23 +19,79 @@ logger = logging.getLogger(__name__)
 # Maximum length for regex patterns to prevent complexity attacks
 MAX_REGEX_LENGTH = 200
 
-# Patterns that could cause catastrophic backtracking (ReDoS)
-_REDOS_PATTERNS = [
-    re.compile(r"\(\.\*\)\+"),  # (.*)+
-    re.compile(r"\(\.\+\)\+"),  # (.+)+
-    re.compile(r"\(\[.*?\]\+\)\+"),  # ([...]+)+
-    re.compile(r"\(\.\*\?\)\+"),  # (.*?)+
-    re.compile(r"\(\.\+\?\)\+"),  # (.+?)+
-    # Any group holding a quantifier, itself quantified: (a+)+, (\w*x)*, (?:ab+){2,}
-    re.compile(r"\((?:[^()\\]|\\.)*[*+}](?:[^()\\]|\\.)*\)\s*[*+{]"),
-    # A quantified group with alternation: (a|aa)*, (x|y)+
-    re.compile(r"\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*[*+{]"),
-]
+# Backtracking safety is judged on the parsed pattern, not its text: a text
+# heuristic missed ((z|zz))+$, which took seconds on 38 characters. A repeat
+# that can run more than once is refused when what it repeats can match the
+# same text more than one way (an inner repeat or an alternation), except a
+# small bounded repeat whose inner choices stay few, the shape of
+# (\d{1,3}\.){3}\d{1,3} and (?:\d{2}:){2}\d{2}, which the 0.22 analyzer
+# told the model to write.
+_REPEATS = (_sre.MAX_REPEAT, _sre.MIN_REPEAT, _sre.POSSESSIVE_REPEAT)
+_MAX_BOUNDED_REPEAT = 16
+_MAX_BOUNDED_WAYS = 1000
+
+
+def _children(op: object, av: Any) -> list[Any]:
+    """Sub-patterns nested under one parsed node."""
+    if op in _REPEATS:
+        return [av[2]]
+    if op is _sre.SUBPATTERN:
+        return [av[3]]
+    if op is _sre.BRANCH:
+        return list(av[1])
+    if op in (_sre.ASSERT, _sre.ASSERT_NOT):
+        return [av[1]]
+    if op is _sre.ATOMIC_GROUP:
+        return [av]
+    if op is _sre.GROUPREF_EXISTS:
+        return [sub for sub in av[1:] if sub is not None]
+    return []
+
+
+def _shape(items: Any) -> tuple[bool, bool, int]:
+    """(has an unbounded repeat, has an alternation, product of repeat choices)."""
+    unbounded = branch = False
+    ways = 1
+    for op, av in items:
+        if op in _REPEATS:
+            lo, hi = av[0], av[1]
+            if hi == _sre.MAXREPEAT:
+                unbounded = True
+            else:
+                ways *= hi - lo + 1
+        elif op is _sre.BRANCH:
+            branch = True
+        for sub in _children(op, av):
+            sub_unbounded, sub_branch, sub_ways = _shape(sub)
+            unbounded |= sub_unbounded
+            branch |= sub_branch
+            ways *= sub_ways
+    return unbounded, branch, ways
+
+
+def _backtracking_risk(items: Any) -> str:
+    """Why this parsed pattern could backtrack exponentially, or ''."""
+    for op, av in items:
+        if op in _REPEATS and av[1] > 1:
+            unbounded, branch, ways = _shape(av[2])
+            if av[1] == _sre.MAXREPEAT:
+                if unbounded or branch or ways > 1:
+                    return "a repeated group contains another repeat or an alternation"
+            elif unbounded or branch:
+                return "a repeated group contains an unbounded repeat or an alternation"
+            elif ways > 1 and (av[1] > _MAX_BOUNDED_REPEAT or ways ** av[1] > _MAX_BOUNDED_WAYS):
+                return "a repeated group has too many ways to match"
+        for sub in _children(op, av):
+            why = _backtracking_risk(sub)
+            if why:
+                return why
+    return ""
+
 
 # Inputs that make common backtracking shapes blow up, tried against every
 # regex before it is used. The limit of this check: Python's re has no
 # timeout, so a pattern that hangs a probe leaves a daemon thread spinning
-# until restart. Static rejection above is the first line; this is the net.
+# until restart. The parsed check above is the guarantee; this is the net.
 _ADVERSARIAL_PROBES = [
     "a" * 3000 + "!",
     "0" * 3000 + "x",
@@ -55,15 +114,13 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
     if len(pattern) > MAX_REGEX_LENGTH:
         return False, f"Pattern too long (max {MAX_REGEX_LENGTH} chars)"
 
-    # Check for ReDoS patterns
-    for redos in _REDOS_PATTERNS:
-        if redos.search(pattern):
-            return False, "Pattern may cause performance issues (nested quantifiers)"
-
     try:
         compiled = re.compile(pattern)
+        why = _backtracking_risk(_sre_parse.parse(pattern))
     except re.error as e:
         return False, str(e)
+    if why:
+        return False, f"Pattern may cause performance issues ({why})"
 
     # Probe with pathological strings in a daemon thread with a timeout
     # (signal.SIGALRM is process-global, main-thread only, and would block the
@@ -134,6 +191,10 @@ class IgnoreManager:
         self._config_ignores = config_ignores
         self._json_path = Path(json_path)
         self._runtime_ignores: dict[str, list[IgnorePattern]] = {}
+        # Entries the loader refused (an unsafe regex, a malformed item), kept
+        # raw and written back untouched by every save. Dropping them meant
+        # the first save after an upgrade erased the user's patterns.
+        self._preserved: dict[str, Any] = {}
         self._lock = threading.RLock()
         self._defer_save = False
         self._load_runtime_ignores()
@@ -339,6 +400,7 @@ class IgnoreManager:
         """
         with self._lock:
             self._runtime_ignores = {}
+            self._preserved = {}
             data = load_json(self._json_path, dict, "runtime ignores")
             if data is None:
                 return
@@ -346,8 +408,10 @@ class IgnoreManager:
             for container, patterns in data.items():
                 if not isinstance(patterns, list):
                     rejected.append(str(container))
+                    self._preserved[str(container)] = patterns
                     continue
                 kept: list[IgnorePattern] = []
+                set_aside: list[Any] = []
                 for item in patterns:
                     if isinstance(item, str) and item:
                         # Old format: plain string -> substring pattern
@@ -355,20 +419,25 @@ class IgnoreManager:
                         continue
                     if not isinstance(item, dict):
                         rejected.append(f"{container}: {item!r}"[:60])
+                        set_aside.append(item)
                         continue
                     pattern = item.get("pattern")
                     match_type = item.get("match_type", "substring")
                     if not isinstance(pattern, str) or not pattern or match_type not in ("substring", "regex"):
                         rejected.append(f"{container}: {pattern!r}"[:60])
+                        set_aside.append(item)
                         continue
                     # A regex edited into the file by hand gets the same checks
-                    # as one added at runtime; a bad one is dropped, loudly.
+                    # as one added at runtime. A bad one is never compiled, but
+                    # stays in the file for the user to fix.
                     if match_type == "regex":
                         ok, why = validate_regex_pattern(pattern)
                         if not ok:
                             logger.error(
-                                f"Dropping unsafe ignore regex for {container}: {pattern!r} ({why})"
+                                f"Not using unsafe ignore regex for {container}: {pattern!r} "
+                                f"({why}). It stays in {self._json_path}; edit or delete it there."
                             )
+                            set_aside.append(item)
                             continue
                     explanation = item.get("explanation")
                     added = item.get("added")
@@ -380,13 +449,15 @@ class IgnoreManager:
                     ))
                 if kept:
                     self._runtime_ignores[str(container)] = kept
+                if set_aside:
+                    self._preserved[str(container)] = set_aside
             log_rejected(str(self._json_path), rejected)
 
     def _save_runtime_ignores(self) -> None:
         """Save runtime ignores atomically."""
         with self._lock:
             # Convert to serializable format (exclude _compiled_regex)
-            data = {
+            data: dict[str, Any] = {
                 container: [
                     {
                         "pattern": p.pattern,
@@ -398,6 +469,11 @@ class IgnoreManager:
                 ]
                 for container, patterns in self._runtime_ignores.items()
             }
+            for container, raw in self._preserved.items():
+                if isinstance(raw, list):
+                    data[container] = data.get(container, []) + raw
+                elif container not in data:
+                    data[container] = raw
             try:
                 atomic_write_json(self._json_path, data, indent=2)
             except OSError as e:
