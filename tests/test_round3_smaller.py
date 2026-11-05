@@ -19,8 +19,8 @@ from src.monitors.memory_monitor import KillResult
 from src.state import ContainerStateManager
 from src.utils.formatting import fit_callback
 
-LONG = "binhex-sabnzbdvpn-with-a-very-long-descriptive-name-for-x"  # 57 chars
-assert len(LONG) >= 55
+LONG = "binhex-sabnzbdvpn-with-a-very-long-descriptive-name-for-xyz1"
+assert len(LONG) == 60
 
 
 def _callback(data: str) -> MagicMock:
