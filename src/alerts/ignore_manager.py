@@ -161,9 +161,8 @@ class IgnorePattern:
             return False
         try:
             found = regex_worker().search(self.pattern, texts)
-        except RegexWorkerError as e:
-            logger.error(f"Regex ignore {self.pattern!r} not checked: {e}")
-            return False
+        except RegexWorkerError:
+            return False  # logged by the worker; the line is let through
         if found is None:
             self.disabled = True
             logger.error(
@@ -228,10 +227,15 @@ class IgnoreManager:
                     return True
 
             # Check runtime ignores (can be regex or substring)
+            texts = (message,) if message_stripped == message else (message, message_stripped)
             for ignore_pattern in self._runtime_ignores.get(container, []):
-                texts = (message,) if message_stripped == message else (message, message_stripped)
+                was_disabled = ignore_pattern.disabled
                 if ignore_pattern.matches(*texts):
                     return True
+                if ignore_pattern.disabled and not was_disabled:
+                    # It just overran its limit. Let this line through rather
+                    # than risk another limit (and worker restart) per regex.
+                    return False
 
             return False
 

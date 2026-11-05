@@ -157,3 +157,58 @@ def test_worker_answers_again_after_an_overrun():
         assert worker.search(r"timeout after \d+ms", ("all good",)) is False
     finally:
         worker.close()
+
+
+def test_several_slow_patterns_cost_one_limit_per_line(tmp_path):
+    """Round 7 review: six overrunning regexes on one line stalled the loop 11.5s."""
+    path = tmp_path / "ignored_errors.json"
+    entries = [
+        {"pattern": f"^ERROR z+z+z+{end}", "match_type": "regex", "explanation": None, "added": None}
+        for end in "QRSTUV"
+    ]
+    path.write_text(json.dumps({"sonarr": entries}))
+    manager = IgnoreManager({}, str(path))
+    line = "ERROR " + "z" * 3993 + "!"
+
+    for _ in range(6):  # each line stops at the first regex that overruns
+        started = time.monotonic()
+        assert not manager.is_ignored("sonarr", line)
+        assert time.monotonic() - started < REGEX_MATCH_TIMEOUT_SECONDS + 1
+    started = time.monotonic()
+    assert not manager.is_ignored("sonarr", line)  # all six disabled now
+    assert time.monotonic() - started < 0.1
+
+
+def test_validation_runs_every_probe_even_after_a_match():
+    """a|0+0+Q matches the first probe at once; the "0"*3000 probe then hangs."""
+    ok, why = validate_regex_pattern(r"a|0+0+Q")
+    assert not ok and "backtracking" in why
+
+
+def test_worker_that_never_starts_is_reaped_and_skipped(monkeypatch):
+    import src.alerts.regex_worker as rw
+
+    monkeypatch.setattr(rw, "_CHILD", "import time; time.sleep(60)")
+    monkeypatch.setattr(rw, "_START_TIMEOUT_SECONDS", 0.3)
+    worker = RegexWorker()
+    try:
+        with pytest.raises(rw.RegexWorkerError):
+            worker.search("x", ("x",))
+        assert worker._proc is None  # both failed starts killed and waited for
+        started = time.monotonic()
+        with pytest.raises(rw.RegexWorkerError):  # backing off: no third start
+            worker.search("x", ("x",))
+        assert time.monotonic() - started < 0.05
+    finally:
+        worker.close()
+
+
+def test_worker_starts_without_the_bot_imports():
+    """Spawn re-imported the entry module: about 2s and 180 MiB per start."""
+    worker = RegexWorker()
+    try:
+        started = time.monotonic()
+        assert worker.search("ok", ("all ok",)) is True
+        assert time.monotonic() - started < 1.0
+    finally:
+        worker.close()

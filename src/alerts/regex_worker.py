@@ -6,38 +6,52 @@ static analysis of the pattern kept missing shapes (six review rounds, a new
 bypass each time, and each tighter rule refused ordinary filters). A search
 that overruns here is abandoned by killing the child: the caller waits at
 most REGEX_MATCH_TIMEOUT_SECONDS whatever the pattern.
+
+The child is a bare ``python -I -c`` running the stdlib loop below, not a
+multiprocessing spawn: spawn re-imports the bot's entry module (aiogram, the
+LLM SDKs), which cost about 2s and 180 MiB per start, and a restart after an
+overrun happens on the event loop.
 """
 
+import json
 import logging
-import multiprocessing
-import re
+import os
+import select
+import subprocess
+import sys
 import threading
-from multiprocessing.connection import Connection
-from typing import Any
+import time
 
 logger = logging.getLogger(__name__)
 
 REGEX_MATCH_TIMEOUT_SECONDS = 0.25
-# A fresh child imports the bot's entry module under spawn; allow for that.
-_START_TIMEOUT_SECONDS = 30.0
+_START_TIMEOUT_SECONDS = 10.0
+# After the worker fails twice in a row, regex ignores are skipped (fail open)
+# for this long instead of paying a start attempt on every log line.
+_BROKEN_BACKOFF_SECONDS = 300.0
 
-
-def _serve(conn: Connection) -> None:
-    """Child loop: compile on first use, answer each (pattern, texts) with a bool."""
-    compiled: dict[str, re.Pattern[str]] = {}
-    conn.send("ready")
-    while True:
-        try:
-            pattern, texts = conn.recv()
-        except EOFError:
-            return
-        try:
-            regex = compiled.get(pattern)
-            if regex is None:
-                regex = compiled[pattern] = re.compile(pattern, re.IGNORECASE)
-            conn.send(any(regex.search(text) for text in texts))
-        except re.error:
-            conn.send(False)
+# One request per line: [pattern, [texts...]]. Every text is searched (so a
+# validation probe that matches early cannot hide a later one that hangs);
+# the reply is "1" if any matched, "0" otherwise or if the pattern is invalid.
+_CHILD = r"""
+import json, re, sys
+compiled = {}
+out = sys.stdout.buffer
+out.write(b"ready\n"); out.flush()
+for line in iter(sys.stdin.buffer.readline, b""):
+    pattern, texts = json.loads(line)
+    try:
+        regex = compiled.get(pattern)
+        if regex is None:
+            regex = compiled[pattern] = re.compile(pattern, re.IGNORECASE)
+        found = False
+        for text in texts:
+            if regex.search(text):
+                found = True
+    except re.error:
+        found = False
+    out.write(b"1\n" if found else b"0\n"); out.flush()
+"""
 
 
 class RegexWorkerError(RuntimeError):
@@ -50,49 +64,75 @@ class RegexWorker:
     def __init__(self, timeout: float = REGEX_MATCH_TIMEOUT_SECONDS) -> None:
         self._timeout = timeout
         self._lock = threading.Lock()
-        # spawn, not fork: forking a process that runs Docker stream threads
-        # can copy a held malloc or logging lock into the child.
-        self._ctx = multiprocessing.get_context("spawn")
-        self._process: Any = None
-        self._conn: Connection | None = None
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._broken_until = 0.0
 
-    def _start(self) -> Connection:
-        parent, child = self._ctx.Pipe()
-        process = self._ctx.Process(target=_serve, args=(child,), daemon=True, name="regex-worker")
-        process.start()
-        child.close()
-        if not parent.poll(_START_TIMEOUT_SECONDS):
-            process.kill()
-            raise RuntimeError("regex worker did not start")
-        parent.recv()
-        self._process, self._conn = process, parent
-        return parent
+    def _read_line(self, proc: subprocess.Popen[bytes], timeout: float) -> bytes | None:
+        """One reply line, or None if it did not arrive in time."""
+        assert proc.stdout is not None
+        fd = proc.stdout.fileno()
+        deadline = time.monotonic() + timeout
+        data = b""
+        while not data.endswith(b"\n"):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                return None
+            chunk = os.read(fd, 64)
+            if not chunk:
+                raise EOFError("regex worker exited")
+            data += chunk
+        return data.strip()
+
+    def _start(self) -> subprocess.Popen[bytes]:
+        # Held in self._proc before the handshake, so a failed start is reaped by _stop().
+        self._proc = proc = subprocess.Popen(
+            [sys.executable, "-I", "-c", _CHILD],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        )
+        if self._read_line(proc, _START_TIMEOUT_SECONDS) != b"ready":
+            raise RegexWorkerError("regex worker did not start")
+        return proc
 
     def _stop(self) -> None:
-        if self._process is not None:
-            self._process.kill()
-            self._process.join(timeout=5)
-        if self._conn is not None:
-            self._conn.close()
-        self._process = self._conn = None
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.error(f"Regex worker {proc.pid} did not exit after kill")
+        for pipe in (proc.stdin, proc.stdout):
+            if pipe is not None:
+                pipe.close()
 
     def search(self, pattern: str, texts: tuple[str, ...]) -> bool | None:
         """Whether the pattern matches any text; None when the search ran out of time."""
+        request = (json.dumps([pattern, list(texts)]) + "\n").encode()
         with self._lock:
+            if time.monotonic() < self._broken_until:
+                raise RegexWorkerError("regex worker unavailable")
             for attempt in (1, 2):  # a child that died between calls gets one restart
                 try:
-                    conn = self._conn or self._start()
-                    conn.send((pattern, texts))
-                    if conn.poll(self._timeout):
-                        return bool(conn.recv())
-                except (OSError, EOFError, RuntimeError) as e:
+                    proc = self._proc or self._start()
+                    assert proc.stdin is not None
+                    proc.stdin.write(request)
+                    proc.stdin.flush()
+                    reply = self._read_line(proc, self._timeout)
+                except (OSError, EOFError, RegexWorkerError) as e:
                     logger.error(f"Regex worker failed ({e}); restarting it")
                     self._stop()
                     if attempt == 2:
+                        self._broken_until = time.monotonic() + _BROKEN_BACKOFF_SECONDS
+                        logger.error(
+                            f"Regex ignores skipped for {_BROKEN_BACKOFF_SECONDS:.0f}s: worker unavailable"
+                        )
                         raise RegexWorkerError(str(e)) from e
                     continue
-                self._stop()  # the child is still searching: kill it, start fresh next time
-                return None
+                if reply is None:
+                    self._stop()  # still searching: kill it; the next call starts a fresh one
+                    return None
+                return reply == b"1"
             raise AssertionError("unreachable")
 
     def close(self) -> None:
