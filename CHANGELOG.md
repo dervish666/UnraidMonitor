@@ -44,6 +44,9 @@ Draft for 0.22.6. Not released; the version is still 0.22.5.
 - **A wrong `nut.ups_name` looked like "no NUT server".** `ERR UNKNOWN-UPS` now shows as a misconfiguration in /health and the startup message.
 - **A read-only parity check was announced as a sync or rebuild.** The bot reads `correcting`: a non-correcting check is named as a check, says the array stays protected, and no longer excuses a disk marked invalid.
 - **/health said "Connected" over a failing Unraid API.** Health now follows the last query, and the connection test treats a GraphQL error answer as a failure.
+- **A corrupt state file was silently replaced by defaults.** A mutes, ignores, chat-ID or model-selection file that would not parse was logged once and then overwritten by the next save, losing whatever was in it. It is now moved aside as `<name>.corrupt-<timestamp>` and named on the startup message. One malformed entry no longer discards the whole file: valid entries are kept and the rejected ones are named in the log.
+- **A mute that failed to save looked saved.** The save error was logged, the change was marked clean, and the mute vanished at the next restart. A failed save now stays pending and is retried every 5 minutes and at shutdown, and the reply to /mute, /unmute, the mute buttons and /manage says the change only lasts until restart.
+- **State files could be left half-written by a power cut.** Every data file is now written through one helper that fsyncs the file and its directory around the atomic rename.
 - **A stale delete button in /manage → Ignores could delete the wrong pattern.** Buttons carried a list position, which shifted after another delete. They now carry a key derived from the pattern.
 
 ### Added

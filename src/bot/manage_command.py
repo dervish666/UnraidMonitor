@@ -14,6 +14,7 @@ from src.bot.commands import format_status_summary
 from src.bot.resources_command import format_resources_summary
 from src.bot.unraid_commands import format_server_brief, format_server_detailed, format_disks
 
+from src.alerts.base_mute_manager import save_note_of
 from src.alerts.ignore_manager import ignore_key
 
 if TYPE_CHECKING:
@@ -453,22 +454,28 @@ def manage_delete_mute_callback(
 
         success = False
         label = ""
+        owner: object = None
 
         if mute_type == "container":
             success = mute_manager.remove_mute(key)
-            label = key
+            label, owner = key, mute_manager
         elif mute_type == "server" and server_mute_manager:
             success = server_mute_manager.unmute_system()
-            label = "System alerts"
+            label, owner = "System alerts", server_mute_manager
         elif mute_type == "array" and (server_mute_manager or array_mute_manager):
-            success = (server_mute_manager or array_mute_manager).unmute_array()  # type: ignore[union-attr]
+            owner = server_mute_manager or array_mute_manager
+            success = owner.unmute_array()  # type: ignore[union-attr]
             label = "Array alerts"
         elif mute_type == "ups" and server_mute_manager:
             success = server_mute_manager.unmute_ups()
-            label = "UPS alerts"
+            label, owner = "UPS alerts", server_mute_manager
 
         if success:
-            await callback.answer(f"Unmuted {label}")
+            note = save_note_of(owner).strip()
+            if note:
+                await callback.answer(f"Unmuted {label}. {note}", show_alert=True)
+            else:
+                await callback.answer(f"Unmuted {label}")
 
             # Re-render mutes list
             mutes = _collect_mutes(mute_manager, server_mute_manager, array_mute_manager)

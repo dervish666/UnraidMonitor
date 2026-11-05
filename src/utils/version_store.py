@@ -1,44 +1,25 @@
-import json
 import logging
-import os
-import tempfile
-from pathlib import Path
+
+from src.utils.json_store import atomic_write_json, load_json
 
 logger = logging.getLogger(__name__)
 
 
 def read_announced_version(path: str) -> str | None:
-    """Return the last-announced bot version, or None if unset/unreadable."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        version = data.get("version")
-        return version if isinstance(version, str) else None
-    except FileNotFoundError:
+    """Return the last-announced bot version, or None if unset/unreadable.
+
+    A corrupt file is set aside by load_json (it used to be deleted).
+    """
+    data = load_json(path, dict, "announced version")
+    if data is None:
         return None
-    except (json.JSONDecodeError, OSError, AttributeError) as e:
-        logger.warning(f"Failed to read announced version from {path}: {e}")
-        # Drop the corrupted file so the next write starts clean (best-effort).
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-        return None
+    version = data.get("version")
+    return version if isinstance(version, str) else None
 
 
 def write_announced_version(path: str, version: str) -> None:
     """Persist the announced bot version atomically."""
     try:
-        parent = Path(path).parent
-        parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(parent), prefix=".tmp_version_", suffix=".json")
-        try:
-            os.fchmod(fd, 0o644)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"version": version}, f)
-            os.replace(tmp, path)
-        except Exception:
-            os.unlink(tmp)
-            raise
-    except Exception as e:
+        atomic_write_json(path, {"version": version})
+    except OSError as e:
         logger.error(f"Failed to write announced version to {path}: {e}")

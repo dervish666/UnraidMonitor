@@ -345,10 +345,19 @@ def build_startup_lines(
     version: str,
     ai_lines: list[str],
     ai_problems: list[str],
+    set_aside: list[str] | None = None,
 ) -> list[str]:
-    """Collapsed startup layout: header, problems, summary, watching, AI."""
+    """Collapsed startup layout: header, problems, summary, watching, AI.
+
+    *set_aside* lists data files that could not be read and were moved to
+    ``.corrupt-<ts>`` this run: mutes, ignores or chat IDs the user set may be
+    gone, and only this message tells them.
+    """
     problems: list[str] = []
     count = 0
+    for moved in set_aside or []:
+        problems.append(f"🟠 Unreadable data file set aside, defaults used: {escape_markdown(moved)}")
+        count += 1
 
     for item in items:
         if item.in_summary and item.state == BROKEN:

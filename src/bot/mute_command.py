@@ -5,6 +5,7 @@ from aiogram.types import Message
 
 from src.alerts.mute_manager import parse_duration
 from src.utils.formatting import extract_container_from_alert, truncate_message, safe_reply, format_mute_expiry, escape_markdown, format_uptime
+from src.alerts.base_mute_manager import save_note_of
 
 if TYPE_CHECKING:
     from src.alerts.mute_manager import MuteManager
@@ -120,6 +121,7 @@ def mute_command(
             f"🔇 *Muted {escape_markdown(container)}* {format_mute_expiry(expiry)}\n\n"
             f"All alerts suppressed for {format_uptime(int(duration.total_seconds()))}.\n"
             f"Use `/unmute {container}` to unmute early."
+            f"{save_note_of(mute_manager)}"
         )
         await safe_reply(message, mute_msg)
 
@@ -211,7 +213,11 @@ def unmute_command(
 
         # Try to unmute
         if mute_manager.remove_mute(container):
-            await safe_reply(message, f"🔔 *Unmuted {escape_markdown(container)}*\n\nAlerts are now enabled.")
+            await safe_reply(
+                message,
+                f"🔔 *Unmuted {escape_markdown(container)}*\n\nAlerts are now enabled."
+                f"{save_note_of(mute_manager)}",
+            )
         else:
             await message.answer(f"{container} is not muted.")
 

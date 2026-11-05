@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,6 +12,7 @@ from src.services.llm.anthropic_provider import AnthropicProvider
 from src.services.llm.ollama_provider import OllamaProvider
 from src.services.llm.openai_provider import OpenAIProvider
 from src.services.llm.provider import LLMProvider, ModelInfo
+from src.utils.json_store import atomic_write_json, load_json
 
 logger = logging.getLogger(__name__)
 
@@ -493,15 +491,12 @@ class ProviderRegistry:
         Also merges any persisted per-feature overrides into ``_feature_models``.
         """
         path = self._persistence_path()
-        if not path.exists():
+        # Not a JSON object -> set aside as .corrupt-<ts>, defaults apply.
+        data = load_json(path, dict, "model selection")
+        if data is None:
             return None
 
         try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError(f"expected a JSON object, got {type(data).__name__}")
-
             if data.get("version") is None and self._migrate_legacy_selection(data):
                 self._write_selection(data)
 
@@ -516,7 +511,7 @@ class ProviderRegistry:
             model = data.get("model")
             if isinstance(provider, str) and isinstance(model, str):
                 return (provider, model)
-        except (json.JSONDecodeError, OSError, KeyError, ValueError) as exc:
+        except (KeyError, ValueError) as exc:
             logger.warning("Failed to load persisted model selection: %s", exc)
 
         return None
@@ -584,23 +579,8 @@ class ProviderRegistry:
         """Atomically write *data* to the selection file."""
         path = self._persistence_path()
 
-        # Atomic write, matching version_store/base_mute_manager: a crash
-        # mid-write must not leave a half-written selection behind.
         try:
-            parent = Path(path).parent
-            parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=str(parent), prefix=".tmp_model_", suffix=".json")
-            try:
-                os.fchmod(fd, 0o644)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-                os.replace(tmp, path)
-            except Exception:
-                try:
-                    os.unlink(tmp)
-                except OSError as unlink_exc:
-                    logger.warning("Could not remove temp file %s: %s", tmp, unlink_exc)
-                raise
+            atomic_write_json(path, data, indent=2)
         except OSError as exc:
             logger.error("Failed to persist model selection: %s", exc)
 

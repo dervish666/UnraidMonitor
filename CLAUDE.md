@@ -100,6 +100,7 @@ src/utils/sanitize.py - Prompt injection prevention, sensitive data redaction
 src/utils/telegram_format.py - markdown_to_telegram_html: escape-first rendering of LLM output for HTML parse mode
 src/utils/telegram_retry.py - Telegram API retry logic for rate limit handling
 src/utils/version_store.py - read/write data/announced_version.json for startup What's new gate (atomic)
+src/utils/json_store.py - atomic_write_json (fsync + rename + dir fsync), load_json (quarantines unreadable files as .corrupt-<ts>), quarantined_files() for the startup message
 
 ## Project Overview
 
@@ -283,7 +284,7 @@ Messages use Markdown parse mode. Use `safe_reply()` and `safe_edit()` from `src
 - **All async** - Every component uses async/await. Tests use `pytest-asyncio` with `asyncio_mode = "auto"`
 - **Partial name matching** - Container commands accept partial names (e.g., `/logs rad` matches `radarr`)
 - **Graceful degradation** - Bot works without any LLM API keys; AI features just disable. Models without tool support get a note appended to NL responses
-- **JSON persistence** - Mutes and ignores stored in `data/*.json` files (IgnoreManager uses `batch_updates()` context manager to defer saves)
+- **JSON persistence** - Every `data/*.json` file is written with `atomic_write_json()` and read with `load_json()` (`src/utils/json_store.py`); never `json.dump` to a data file directly. A file that does not parse, or has the wrong root type, is renamed `.corrupt-<ts>` and listed on the startup message instead of being overwritten by the next save; loaders keep valid entries and log rejected ones with `log_rejected()`. Mute managers set `_dirty` before saving and clear it only when the write succeeds, so a failed save is retried by `flush()`; `save_note_of(manager)` gives the line a reply appends when the change is not on disk. IgnoreManager uses `batch_updates()` to defer saves
 - **Protected containers** - Listed in `config.yaml`, cannot be controlled via Telegram
 - **Confirmation prompts** - Destructive actions (restart, stop, start, pull) require inline button confirmation (✅ Confirm / ❌ Cancel)
 - **Europe/London timezone** - Default timezone for displayed timestamps (configurable via `TZ` env var)

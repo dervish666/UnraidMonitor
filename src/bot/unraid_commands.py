@@ -11,6 +11,7 @@ from aiogram.enums import ChatAction
 from src.alerts.mute_manager import parse_duration
 from src.utils.formatting import truncate_message, safe_reply, format_mute_expiry, format_uptime
 from src.unraid.monitors.array_monitor import disk_status_verdict, parity_writing
+from src.alerts.base_mute_manager import save_note_of
 
 if TYPE_CHECKING:
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
@@ -225,7 +226,7 @@ def mute_server_command(
             message,
             f"🔇 *Muted all server alerts* {format_mute_expiry(expiry)}\n\n"
             f"System, array, and UPS alerts suppressed.\n"
-            f"Use `/unmute-server` to unmute early.",
+            f"Use `/unmute-server` to unmute early.{save_note_of(mute_manager)}",
         )
 
     return handler
@@ -241,7 +242,7 @@ def unmute_server_command(
             await safe_reply(
                 message,
                 "🔔 *Unmuted all server alerts*\n\n"
-                "System, array, and UPS alerts are now enabled.",
+                f"System, array, and UPS alerts are now enabled.{save_note_of(mute_manager)}",
             )
         else:
             await message.answer("Server alerts are not currently muted.")
@@ -284,7 +285,7 @@ def mute_array_command(
             message,
             f"🔇 *Muted array alerts* {format_mute_expiry(expiry)}\n\n"
             f"Disk and parity alerts suppressed.\n"
-            f"Use `/unmute-array` to unmute early.",
+            f"Use `/unmute-array` to unmute early.{save_note_of(mute_manager)}",
         )
 
     return handler
@@ -303,7 +304,7 @@ def unmute_array_command(
             await safe_reply(
                 message,
                 "🔔 *Unmuted array alerts*\n\n"
-                "Disk and parity alerts are now enabled.",
+                f"Disk and parity alerts are now enabled.{save_note_of(mute_manager)}",
             )
         else:
             await message.answer("Array alerts are not currently muted.")

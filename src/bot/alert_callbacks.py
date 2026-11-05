@@ -32,6 +32,7 @@ from src.utils.formatting import validate_container_name, escape_markdown, trunc
 from src.utils.sanitize import sanitize_logs_for_display
 from src.utils.telegram_format import markdown_to_telegram_html
 from src.services.docker_client import DockerClientLike
+from src.alerts.base_mute_manager import save_note_of
 
 if TYPE_CHECKING:
     from src.alerts.server_mute_manager import ServerMuteManager
@@ -374,7 +375,11 @@ def mute_callback(
         await callback.answer(f"Muted {actual_name} for {duration_str}")
 
         if callback.message:
-            await callback.message.answer(f"🔕 Muted *{escape_markdown(actual_name)}* for {duration_str}", parse_mode="Markdown")
+            await callback.message.answer(
+                f"🔕 Muted *{escape_markdown(actual_name)}* for {duration_str}"
+                f"{save_note_of(mute_manager)}",
+                parse_mode="Markdown",
+            )
 
     return handler
 
@@ -811,6 +816,7 @@ def category_mute_callback(
             return
 
         mute(timedelta(minutes=minutes))
+        note = save_note_of(getattr(mute, "__self__", None))
         duration_str = format_duration_minutes(minutes)
         await callback.answer(f"Muted {label} alerts for {duration_str}")
 
@@ -818,13 +824,13 @@ def category_mute_callback(
             try:
                 await callback.message.answer(
                     f"🔇 *Muted {label} alerts* for {duration_str}\n"
-                    f"Use `{unmute_command}` to unmute early.",
+                    f"Use `{unmute_command}` to unmute early.{note}",
                     parse_mode="Markdown",
                 )
             except TelegramBadRequest:
                 await callback.message.answer(
                     f"🔇 Muted {label} alerts for {duration_str}\n"
-                    f"Use {unmute_command} to unmute early."
+                    f"Use {unmute_command} to unmute early.{note}"
                 )
 
     return handler

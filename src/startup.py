@@ -410,8 +410,10 @@ async def _send_startup_notification(
         ups_monitor=uc.ups_monitor,
     )
     ai_lines, ai_problems = ai_summary(registry)
+    from src.utils.json_store import quarantined_files
     parts = build_startup_lines(
         items, version=BOT_VERSION, ai_lines=ai_lines, ai_problems=ai_problems,
+        set_aside=quarantined_files(),
     )
     if show_whats_new:
         parts.append("")

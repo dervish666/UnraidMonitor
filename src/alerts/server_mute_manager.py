@@ -39,6 +39,7 @@ class ServerMuteManager(BaseMuteManager):
             expiry = datetime.now() + duration
             for cat in self.CATEGORIES:
                 self._mutes[cat] = expiry
+            self._dirty = True
             self._save()
         logger.info(f"Muted all server alerts until {expiry}")
         return expiry
@@ -122,6 +123,7 @@ class ServerMuteManager(BaseMuteManager):
                     del self._mutes[cat]
                     removed = True
             if removed:
+                self._dirty = True
                 self._save()
         if removed:
             logger.info("Unmuted all server alerts")

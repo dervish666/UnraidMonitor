@@ -1,14 +1,21 @@
 """Base class for mute managers with shared persistence logic."""
 
-import json
 import logging
-import os
-import tempfile
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
+
+from src.utils.json_store import atomic_write_json, load_json, log_rejected
 
 logger = logging.getLogger(__name__)
+
+
+def save_note_of(manager: Any) -> str:
+    """``manager.save_note()`` for anything that may or may not be a mute manager."""
+    note = getattr(manager, "save_note", None)
+    text = note() if callable(note) else ""
+    return text if isinstance(text, str) else ""
 
 
 class BaseMuteManager:
@@ -26,9 +33,12 @@ class BaseMuteManager:
         self._json_path = Path(json_path)
         self._mutes: dict[str, datetime] = {}
         self._lock = threading.RLock()
-        self._load()
         self._dirty = False
+        # Why the last save failed, until one succeeds. A mute that is not on
+        # disk silently ends at the next restart, so callers tell the user.
+        self.save_error: str | None = None
         self._recently_expired: list[str] = []
+        self._load()
 
     def _is_muted(self, key: str) -> bool:
         """Check if a key is currently muted.
@@ -63,6 +73,7 @@ class BaseMuteManager:
         with self._lock:
             expiry = datetime.now() + duration
             self._mutes[key] = expiry
+            self._dirty = True
             self._save()
             return expiry
 
@@ -77,6 +88,7 @@ class BaseMuteManager:
                 return False
 
             del self._mutes[key]
+            self._dirty = True
             self._save()
             return True
 
@@ -111,62 +123,52 @@ class BaseMuteManager:
             return expired
 
     def flush(self) -> None:
-        """Persist deferred changes to disk if dirty."""
+        """Persist deferred changes to disk if dirty; stays dirty if that fails."""
         with self._lock:
             if self._dirty:
                 self._save()
-                self._dirty = False
+
+    def save_note(self) -> str:
+        """A line for the user when mutes are not on disk, else ''."""
+        if self.save_error is None:
+            return ""
+        return (
+            "\n⚠️ Could not save mutes to disk, so this change lasts only until "
+            "the bot restarts. Check the data volume."
+        )
 
     def _load(self) -> None:
-        """Load mutes from JSON file."""
+        """Load mutes, keeping every well-formed entry.
+
+        A file that is not a JSON object is set aside (``.corrupt-<ts>``)
+        rather than overwritten by the next save.
+        """
         with self._lock:
-            if not self._json_path.exists():
-                self._mutes = {}
+            self._mutes = {}
+            data = load_json(self._json_path, dict, "mutes")
+            if data is None:
                 return
-
-            try:
-                with open(self._json_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                    self._mutes = {}
-                    for key, exp in data.items():
-                        dt = datetime.fromisoformat(exp)
-                        # Ensure naive-local for consistent comparison with datetime.now()
-                        if dt.tzinfo is not None:
-                            dt = dt.replace(tzinfo=None)
-                        self._mutes[key] = dt
-            except (json.JSONDecodeError, IOError, ValueError) as e:
-                logger.warning(f"Failed to load mutes from {self._json_path}: {e}")
-                self._mutes = {}
-
-    def _save(self) -> None:
-        """Save mutes to JSON file using atomic write pattern."""
-        with self._lock:
-            self._json_path.parent.mkdir(parents=True, exist_ok=True)
-
-            try:
-                data = {
-                    key: exp.isoformat()
-                    for key, exp in self._mutes.items()
-                }
-
-                # Atomic write: write to temp file, then rename
-                fd, temp_path = tempfile.mkstemp(
-                    dir=self._json_path.parent,
-                    prefix=".tmp_mutes_",
-                    suffix=".json",
-                )
+            rejected: list[str] = []
+            for key, exp in data.items():
                 try:
-                    os.fchmod(fd, 0o644)
-                    with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
-                    os.replace(temp_path, self._json_path)  # Atomic on POSIX
-                    self._dirty = False
-                except Exception:
-                    # Clean up temp file on error
-                    try:
-                        os.unlink(temp_path)
-                    except OSError:
-                        pass
-                    raise
-            except IOError as e:
+                    dt = datetime.fromisoformat(exp)
+                except (TypeError, ValueError):
+                    rejected.append(str(key))
+                    continue
+                # Naive-local, for comparison with datetime.now()
+                self._mutes[str(key)] = dt.replace(tzinfo=None) if dt.tzinfo else dt
+            log_rejected(str(self._json_path), rejected)
+
+    def _save(self) -> bool:
+        """Write mutes atomically. Clears the dirty flag only on success."""
+        with self._lock:
+            data = {key: exp.isoformat() for key, exp in self._mutes.items()}
+            try:
+                atomic_write_json(self._json_path, data, indent=2)
+            except (OSError, TypeError) as e:
+                self.save_error = str(e)
                 logger.error(f"Failed to save mutes to {self._json_path}: {e}")
+                return False
+            self._dirty = False
+            self.save_error = None
+            return True

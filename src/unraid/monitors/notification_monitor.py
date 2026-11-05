@@ -11,11 +11,8 @@ be noise in a chat window.
 """
 
 import asyncio
-import json
 import logging
 import os
-import tempfile
-from pathlib import Path
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from src.constants import (
@@ -23,6 +20,7 @@ from src.constants import (
     NOTIFICATION_IMPORTANCE_LEVELS,
     NOTIFICATION_MAX_PER_POLL,
 )
+from src.utils.json_store import atomic_write_json, load_json, log_rejected
 
 if TYPE_CHECKING:
     from src.alerts.server_mute_manager import ServerMuteManager
@@ -48,35 +46,24 @@ def _importance_rank(importance: str) -> int:
 
 
 def _load_seen(path: str) -> list[str]:
-    """Load previously-relayed notification ids; missing/corrupt files yield []."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return [str(x) for x in data]
-    except FileNotFoundError:
-        pass
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"Could not read relayed notifications from {path}: {e}")
-    return []
+    """Load previously-relayed notification ids; a missing file yields [].
 
+    A file that is not a JSON list is set aside, not overwritten.
+    """
+    data = load_json(path, list, "relayed notifications")
+    if data is None:
+        return []
+    rejected = [repr(x)[:20] for x in data if not isinstance(x, (str, int)) or isinstance(x, bool)]
+    log_rejected(path, rejected)
+    return [str(x) for x in data if isinstance(x, (str, int)) and not isinstance(x, bool)]
 
 def _save_seen(path: str, seen: list[str]) -> None:
     """Persist relayed ids atomically; failures are logged, never raised."""
     try:
-        parent = Path(path).parent
-        parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(parent), prefix=".tmp_notifs_", suffix=".json")
-        try:
-            os.fchmod(fd, 0o644)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(seen, f)
-            os.replace(tmp, path)
-        except Exception:
-            os.unlink(tmp)
-            raise
-    except Exception as e:
+        atomic_write_json(path, seen)
+    except (OSError, TypeError) as e:
         logger.error(f"Could not persist relayed notifications to {path}: {e}")
+
 
 
 class UnraidNotificationMonitor:

@@ -1,8 +1,4 @@
-import json
 import logging
-import os
-import tempfile
-from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from aiogram import Bot
@@ -13,6 +9,7 @@ from src.constants import IMAGE_UPDATE_MAX_SHOWN
 from src.utils.formatting import format_bytes, format_uptime, strip_log_timestamps, escape_markdown, truncate_callback_data
 from src.utils.telegram_retry import send_with_retry
 from src.utils.sanitize import redact_secrets
+from src.utils.json_store import atomic_write_json, load_json, log_rejected
 
 logger = logging.getLogger(__name__)
 
@@ -87,49 +84,41 @@ class ChatIdStore:
     # -- persistence helpers ------------------------------------------------
 
     def _load(self) -> None:
-        """Load chat IDs from JSON file if it exists."""
+        """Load chat IDs, keeping every integer entry; a non-list file is set aside."""
         if not self._json_path:
             return
-        try:
-            with open(self._json_path) as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                loaded = {int(cid) for cid in data}
-                if self._allowed is not None:
-                    dropped = loaded - self._allowed
-                    if dropped:
-                        logger.warning(
-                            f"Dropping {len(dropped)} stored alert chat(s) that are not in "
-                            "TELEGRAM_ALLOWED_USERS"
-                        )
-                    loaded &= self._allowed
-                self._chat_ids = loaded
-                logger.info(f"Loaded {len(self._chat_ids)} chat IDs from {self._json_path}")
-                if self._chat_ids != {int(cid) for cid in data}:
-                    self._save()
-        except FileNotFoundError:
-            pass
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Failed to load chat IDs from {self._json_path}: {e}")
+        data = load_json(self._json_path, list, "chat IDs")
+        if data is None:
+            return
+        loaded: set[int] = set()
+        rejected: list[str] = []
+        for cid in data:
+            if isinstance(cid, int) and not isinstance(cid, bool):
+                loaded.add(cid)
+            elif isinstance(cid, str) and cid.lstrip("-").isdigit():
+                loaded.add(int(cid))
+            else:
+                rejected.append(repr(cid)[:20])
+        log_rejected(self._json_path, rejected)
+        if self._allowed is not None:
+            dropped = loaded - self._allowed
+            if dropped:
+                logger.warning(
+                    f"Dropping {len(dropped)} stored alert chat(s) that are not in "
+                    "TELEGRAM_ALLOWED_USERS"
+                )
+            loaded &= self._allowed
+        self._chat_ids = loaded
+        logger.info(f"Loaded {len(self._chat_ids)} chat IDs from {self._json_path}")
+        if rejected or len(loaded) != len(data):
+            self._save()
 
     def _save(self) -> None:
-        """Persist current chat IDs to JSON file (atomic write)."""
+        """Persist current chat IDs (atomic write)."""
         if not self._json_path:
             return
         try:
-            parent = Path(self._json_path).parent
-            parent.mkdir(parents=True, exist_ok=True)
-            fd, temp_path = tempfile.mkstemp(
-                dir=str(parent), prefix=".tmp_chatids_", suffix=".json"
-            )
-            try:
-                os.fchmod(fd, 0o644)
-                with os.fdopen(fd, "w") as f:
-                    json.dump(sorted(self._chat_ids), f)
-                os.replace(temp_path, self._json_path)
-            except Exception:
-                os.unlink(temp_path)
-                raise
+            atomic_write_json(self._json_path, sorted(self._chat_ids))
         except OSError as e:
             logger.error(f"Failed to save chat IDs to {self._json_path}: {e}")
 

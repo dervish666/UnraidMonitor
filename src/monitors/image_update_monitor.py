@@ -1,10 +1,7 @@
 import asyncio
-import json
 import logging
-import os
-import tempfile
-from pathlib import Path
 from typing import TYPE_CHECKING
+from src.utils.json_store import atomic_write_json, load_json, log_rejected
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -27,35 +24,24 @@ def extract_local_digests(container: "Container") -> list[str]:
 
 
 def _load_notified(path: str) -> dict[str, str]:
-    """Load the announced-updates dedup map; missing or corrupted files yield {}."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            return {str(k): str(v) for k, v in data.items()}
-    except FileNotFoundError:
-        pass
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"Could not read announced updates from {path}: {e}")
-    return {}
+    """Load the announced-updates dedup map; a missing file yields {}.
 
+    A file that is not a JSON object is set aside, not overwritten.
+    """
+    data = load_json(path, dict, "announced updates")
+    if data is None:
+        return {}
+    kept = {str(k): v for k, v in data.items() if isinstance(v, str)}
+    log_rejected(path, [str(k) for k in data if str(k) not in kept])
+    return kept
 
 def _save_notified(path: str, notified: dict[str, str]) -> None:
     """Persist the dedup map atomically; failures are logged, never raised."""
     try:
-        parent = Path(path).parent
-        parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(parent), prefix=".tmp_updates_", suffix=".json")
-        try:
-            os.fchmod(fd, 0o644)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(notified, f)
-            os.replace(tmp, path)
-        except Exception:
-            os.unlink(tmp)
-            raise
-    except Exception as e:
+        atomic_write_json(path, notified)
+    except (OSError, TypeError) as e:
         logger.error(f"Could not persist announced updates to {path}: {e}")
+
 
 
 class ImageUpdateMonitor:
