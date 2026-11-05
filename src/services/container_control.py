@@ -134,17 +134,20 @@ _DAEMON_HOST_FIELDS: frozenset[str] = frozenset({
 # The daemon fills these from Privileged and SecurityOpt (both carried), but
 # the API also lets a user set them and docker-py cannot. Their default list
 # changes between Docker releases, so instead of guessing it the replacement's
-# values are compared with the original's after create, on the same daemon.
+# values are checked after create, on the same daemon. Only a path the
+# original had and the replacement lacks counts: Unraid keeps containers
+# across Docker upgrades, and a newer default list that masks more must not
+# make every /pull of an older container stop it and roll back.
 _VERIFIED_AFTER_CREATE: tuple[str, ...] = ("MaskedPaths", "ReadonlyPaths")
 
 
 def _lost_after_create(original: dict[str, Any], replacement: dict[str, Any]) -> list[str]:
-    """Daemon-filled HostConfig fields the replacement did not get the same."""
+    """Daemon-filled HostConfig fields where the replacement lost a path the original had."""
     old = original.get("HostConfig") or {}
     new = replacement.get("HostConfig") or {}
     return [
         key for key in _VERIFIED_AFTER_CREATE
-        if list(old.get(key) or []) != list(new.get(key) or [])
+        if set(old.get(key) or []) - set(new.get(key) or [])
     ]
 
 

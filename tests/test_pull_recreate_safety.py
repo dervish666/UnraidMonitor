@@ -381,3 +381,18 @@ async def test_daemon_default_masked_paths_do_not_block_an_update():
 
     assert result.startswith("✅ app updated")
     assert fake.created[0]["host_config"]["CgroupnsMode"] == "host"
+
+
+async def test_container_from_an_older_docker_release_still_updates():
+    """Unraid keeps containers across Docker upgrades; a newer default list masks more.
+
+    Requiring an exact match stopped and rolled back every /pull of such a
+    container. Masking more than the original did is not a lost setting.
+    """
+    fake = FakeDocker()
+    fake.default_masked_paths = ["/proc/kcore", "/proc/sys/firmware"]
+    fake.add("app", _attrs(MaskedPaths=["/proc/kcore"]))
+
+    result = await ContainerController(fake, []).pull_and_recreate("app")  # type: ignore[arg-type]
+
+    assert result.startswith("✅ app updated")

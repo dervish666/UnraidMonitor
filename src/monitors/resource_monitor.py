@@ -403,10 +403,13 @@ class ResourceMonitor:
     async def _flush_recoveries(self) -> None:
         """Deliver owed recovery messages; keep each until Telegram takes it."""
         for (name, metric), violation in list(self._pending_recoveries.items()):
-            if metric in self._violations.get(name, {}):
-                # Back over the line before the recovery got out: the new
-                # episode supersedes it.
-                del self._pending_recoveries[(name, metric)]
+            current = self._violations.get(name, {}).get(metric)
+            if current is not None:
+                # Back over the line before the recovery got out. An announced
+                # new episode supersedes it; a blip that never alerted does
+                # not, so the recovery waits for the next normal reading.
+                if current.alerted_at is not None:
+                    del self._pending_recoveries[(name, metric)]
                 continue
             if self._mute_manager and self._mute_manager.is_muted(name):
                 continue

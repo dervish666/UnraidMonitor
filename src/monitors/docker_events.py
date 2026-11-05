@@ -416,7 +416,6 @@ class DockerEventMonitor:
             try:
                 # Wait for an event with timeout to allow checking _running flag
                 if time.monotonic() - self._last_reconcile >= self.RECONCILE_SECONDS:
-                    self._last_reconcile = time.monotonic()
                     await self._reconcile_unhealthy()
                     await self._retry_pending_crashes()
                     for hook in self.reconcile_hooks:
@@ -424,6 +423,9 @@ class DockerEventMonitor:
                             await hook()
                         except Exception as e:
                             logger.error(f"Alert retry pass failed: {e}", exc_info=True)
+                    # Stamped after the pass: a pass slowed by an outage must
+                    # not leave the next one due after a single event.
+                    self._last_reconcile = time.monotonic()
                 try:
                     event = await asyncio.wait_for(
                         self._pending_alerts.get(), timeout=1.0
@@ -637,7 +639,7 @@ class DockerEventMonitor:
 
     async def _deliver_crash(
         self, container_name: str, kwargs: dict[str, Any], escalation: bool,
-    ) -> None:
+    ) -> bool:
         """Send a crash alert; commit cooldown/escalation state only once delivered.
 
         Events are handled one at a time on the alert task, so there is no
@@ -651,7 +653,7 @@ class DockerEventMonitor:
                 self._crash_tracker.record_escalation(container_name)
             elif self.rate_limiter:
                 self.rate_limiter.record_alert(f"{container_name}:crash")
-            return
+            return True
         logger.warning(f"Crash alert for {container_name} not delivered; will retry")
         self._crash_pending.pop(container_name, None)
         self._crash_pending[container_name] = (kwargs, escalation)
@@ -659,13 +661,21 @@ class DockerEventMonitor:
             dropped = next(iter(self._crash_pending))
             del self._crash_pending[dropped]
             logger.error(f"Dropped undelivered crash alert for {dropped}: too many pending")
+        return False
 
     async def _retry_pending_crashes(self) -> None:
+        """Retry held crash alerts, stopping at the first that still fails.
+
+        Each failed send costs the full Telegram retry ladder, and this runs on
+        the event task, so one failure per pass keeps an outage from delaying
+        auto-heal and health handling by minutes.
+        """
         for name, (kwargs, escalation) in list(self._crash_pending.items()):
             if self.mute_manager and self.mute_manager.is_muted(name):
                 del self._crash_pending[name]  # muted since: the user asked for quiet
                 continue
-            await self._deliver_crash(name, kwargs, escalation)
+            if not await self._deliver_crash(name, kwargs, escalation):
+                return
 
     async def _handle_recovery_event(self, event: dict[str, Any]) -> None:
         """Handle a container start event and send recovery alert if it previously crashed."""

@@ -46,19 +46,26 @@ class LogErrorAlerts:
         if self._mute_manager.is_muted(container_name):
             logger.debug(f"Suppressed log error alert for muted container: {container_name}")
             return
+        if container_name in self._pending:
+            # Already waiting on Telegram: the retry pass sends the newest
+            # line, so an outage costs one failed send per pass, not one per
+            # error line.
+            self._pending[container_name] = (error_line, self._pending[container_name][1])
+            self._rate_limiter.record_suppressed(container_name)
+            return
         if not self._rate_limiter.should_alert(container_name):
             self._rate_limiter.record_suppressed(container_name)
             return
         await self._send(container_name, error_line)
 
-    async def _send(self, container_name: str, error_line: str) -> None:
+    async def _send(self, container_name: str, error_line: str) -> bool:
         suppressed = self._rate_limiter.get_suppressed_count(container_name)
         self._rate_limiter.record_alert(container_name)
         if await self._alert_manager.send_log_error_alert(
             container_name=container_name, error_line=error_line, suppressed_count=suppressed,
         ):
             self._pending.pop(container_name, None)
-            return
+            return True
         self._rate_limiter.cancel_alert(container_name, suppressed)
         self._pending.pop(container_name, None)
         self._pending[container_name] = (error_line, suppressed)
@@ -66,14 +73,22 @@ class LogErrorAlerts:
             dropped = next(iter(self._pending))
             del self._pending[dropped]
             logger.error(f"Dropped undelivered log error alert for {dropped}: too many pending")
+        return False
 
     async def retry_pending(self) -> None:
+        """Retry held alerts, stopping at the first that still fails.
+
+        This runs on the Docker event task; a failed send costs the whole
+        Telegram retry ladder, so one per pass keeps an outage from stalling
+        auto-heal and health handling behind it.
+        """
         for name, (error_line, _) in list(self._pending.items()):
             if self._mute_manager.is_muted(name) or not self._rate_limiter.should_alert(name):
                 # Muted since, or a newer alert for it already went out.
                 self._pending.pop(name, None)
                 continue
-            await self._send(name, error_line)
+            if not await self._send(name, error_line):
+                return
 
 
 def make_log_error_handler(

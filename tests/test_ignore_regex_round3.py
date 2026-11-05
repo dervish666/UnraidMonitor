@@ -67,6 +67,12 @@ def test_pre_branch_ignores_load_match_and_survive_a_save(tmp_path):
     r"(\w+\s?)+$",
     r"(?:x+y?)*z",
     r"(a{1,3}){16}",
+    # Polynomial: a run of overlapping repeats, not nested ones (round 3 review).
+    r"z*z*z*z*z*$",
+    r"\w*\w*\w*\w*Q",
+    r"(z*)(z*)x",
+    r"\d+\s*\d+x",
+    r"\w+\w+Q",
 ])
 def test_backtracking_shapes_are_refused(pattern):
     ok, why = validate_regex_pattern(pattern)
@@ -80,6 +86,21 @@ def test_backtracking_shapes_are_refused(pattern):
     r"timeout after \d+ms",
     r"(ab)+c",
     r"^\[\w+\] .*error",
+    r".*foo.*bar",
+    r"error:\s*\d+",
+    r"\d+\s+\d+",
 ])
 def test_ordinary_patterns_are_allowed(pattern):
     assert validate_regex_pattern(pattern) == (True, "")
+
+
+def test_overlapping_repeat_run_hand_edited_into_file_is_never_used(tmp_path):
+    """z*z*z*z*z*$ passed the nesting check, loaded, and stalled on 150 z's + '!'."""
+    path = tmp_path / "ignored_errors.json"
+    entry = {"pattern": "z*z*z*z*z*$", "match_type": "regex", "explanation": None, "added": None}
+    path.write_text(json.dumps({"sonarr": [entry]}))
+    manager = IgnoreManager({}, str(path))
+
+    assert not manager.is_ignored("sonarr", "z" * 150 + "!")  # returns at once
+    manager.add_ignore_pattern("radarr", "disk quota", "substring")
+    assert json.loads(path.read_text())["sonarr"] == [entry]

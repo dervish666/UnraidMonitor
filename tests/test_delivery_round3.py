@@ -240,3 +240,34 @@ async def test_legacy_mute_file_survives_a_failed_import_save(tmp_path):
     assert mgr.import_legacy_array_mutes(str(legacy)) is True
     assert not legacy.exists()
     assert ServerMuteManager(str(tmp_path / "server_mutes.json")).is_array_muted()
+
+
+async def test_short_spike_does_not_discard_owed_resource_recovery():
+    """Round 3 review: alert, failed recovery, one high reading, then normal.
+
+    The blip never became an announced episode, so it must not cancel the
+    recovery the user is still owed for the first one.
+    """
+    alerts = MagicMock()
+    alerts.send_resource_alert = AsyncMock(return_value=True)
+    alerts.send_resource_recovery = AsyncMock(side_effect=[False, True])
+    config = ResourceConfig(sustained_threshold_seconds=300, default_cpu_percent=80)
+    monitor = ResourceMonitor(MagicMock(), config, alerts, RateLimiter())
+
+    def poll_at(cpu: float):
+        monitor._collect_stats = AsyncMock(return_value=([  # type: ignore[method-assign]
+            ContainerStats(name="plex", cpu_percent=cpu, memory_percent=10,
+                           memory_bytes=1, memory_limit=10),
+        ], 0))
+        return monitor._poll_cycle()
+
+    await poll_at(95)
+    monitor._violations["plex"]["cpu"].started_at = datetime.now() - timedelta(seconds=600)
+    await poll_at(95)
+    alerts.send_resource_alert.assert_awaited_once()
+    await poll_at(10)  # recovered; the recovery send fails
+    await poll_at(95)  # a blip, far short of the 300s sustain window
+    await poll_at(10)  # retried and delivered
+    assert alerts.send_resource_recovery.await_count == 2
+    alerts.send_resource_alert.assert_awaited_once()
+    assert monitor._pending_recoveries == {}

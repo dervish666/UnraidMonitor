@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
+import re._compiler as _sre_compile
 import re._constants as _sre  # stdlib regex parser, as used by re.compile
 import re._parser as _sre_parse
 
@@ -88,10 +89,59 @@ def _backtracking_risk(items: Any) -> str:
     return ""
 
 
+def _char_set(state: Any, body: Any) -> frozenset[int] | None:
+    """Latin-1 code points a one-character repeat body matches; None if not one character."""
+    if body.getwidth() != (1, 1):
+        return None
+    compiled = _sre_compile.compile(_sre_parse.SubPattern(state, list(body)), re.IGNORECASE)
+    return frozenset(c for c in range(256) if compiled.fullmatch(chr(c)))
+
+
+def _overlap(state: Any, a: Any, b: Any) -> bool:
+    """Whether two repeat bodies can match the same character (unknown counts as yes)."""
+    set_a, set_b = _char_set(state, a), _char_set(state, b)
+    return set_a is None or set_b is None or bool(set_a & set_b)
+
+
+def _inline(items: Any) -> Iterator[tuple[Any, Any]]:
+    """Items in sequence, with plain groups opened so (z*)(z*) reads as z*z*."""
+    for op, av in items:
+        if op is _sre.SUBPATTERN:
+            yield from _inline(av[3])
+        else:
+            yield op, av
+
+
+def _adjacent_repeat_risk(state: Any, items: Any) -> str:
+    """Why two unbounded repeats in a row can split the same text many ways, or ''.
+
+    z*z*z*$ or \\d+\\s*\\d+x is polynomial, not exponential, so the nesting check
+    above passes it, yet each repeat in the run multiplies the work by the line
+    length and a log line of a few thousand characters stalls the event loop.
+    Two unbounded repeats are refused when only empty-matchable items sit
+    between them and their characters overlap. A required item resets the run,
+    so .*foo.* still loads.
+    """
+    run: list[Any] = []
+    for op, av in _inline(items):
+        if op in _REPEATS and av[1] == _sre.MAXREPEAT:
+            if any(_overlap(state, prev, av[2]) for prev in run):
+                return "two repeats in a row can match the same text"
+            run = [av[2]] if av[0] > 0 else [*run, av[2]]
+        elif _sre_parse.SubPattern(state, [(op, av)]).getwidth()[0] > 0:
+            run = []
+        for sub in _children(op, av):
+            why = _adjacent_repeat_risk(state, sub)
+            if why:
+                return why
+    return ""
+
+
 # Inputs that make common backtracking shapes blow up, tried against every
 # regex before it is used. The limit of this check: Python's re has no
-# timeout, so a pattern that hangs a probe leaves a daemon thread spinning
-# until restart. The parsed check above is the guarantee; this is the net.
+# timeout and holds the GIL while it searches, so the thread's join timeout
+# does not fire until the search ends and a probe that hangs blocks the
+# caller with it. The parsed checks above are the guarantee; this is the net.
 _ADVERSARIAL_PROBES = [
     "a" * 3000 + "!",
     "0" * 3000 + "x",
@@ -116,15 +166,16 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
 
     try:
         compiled = re.compile(pattern)
-        why = _backtracking_risk(_sre_parse.parse(pattern))
+        parsed = _sre_parse.parse(pattern, re.IGNORECASE)
+        why = _backtracking_risk(parsed) or _adjacent_repeat_risk(parsed.state, parsed)
     except re.error as e:
         return False, str(e)
     if why:
         return False, f"Pattern may cause performance issues ({why})"
 
-    # Probe with pathological strings in a daemon thread with a timeout
-    # (signal.SIGALRM is process-global, main-thread only, and would block the
-    # event loop).
+    # Probe with pathological strings in a daemon thread (signal.SIGALRM is
+    # main-thread only). The join timeout catches a slow probe only between
+    # searches; see the note on _ADVERSARIAL_PROBES.
     result: list[bool] = []
 
     def _test_regex() -> None:
