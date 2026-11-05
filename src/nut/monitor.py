@@ -20,10 +20,12 @@ from src.constants import (
     NUT_ALERT_FLAGS,
     NUT_UNAVAILABLE_AFTER_FAILURES,
 )
+from src.utils.poll_health import describe_poll
 from src.nut.client import (
     STATUS_MEANINGS,
     NutAuthError,
     NutClient,
+    NutConfigError,
     NutError,
 )
 
@@ -122,6 +124,10 @@ class UpsMonitor:
         self._available: bool | None = None
         self._consecutive_failures = 0
         self._last_error: str | None = None
+        self._last_success: float | None = None  # time.time()
+        # Set while upsd answers but rejects our UPS name: a setup mistake,
+        # not the dormant "no NUT server here" state.
+        self._misconfigured: str | None = None
         # Reality (_available) and what the user has been told are separate:
         # flipping _available during a mute used to swallow the outage alert
         # for good, since only the true->false edge alerted.
@@ -176,7 +182,18 @@ class UpsMonitor:
     @property
     def never_reached(self) -> bool:
         """Polled, failed, and never once succeeded: most likely no NUT server."""
-        return self._available is None and self._consecutive_failures > 0
+        return (
+            self._available is None and self._consecutive_failures > 0
+            and self._misconfigured is None
+        )
+
+    @property
+    def misconfigured(self) -> str | None:
+        """Why upsd rejected our UPS name, while it does; None otherwise."""
+        return self._misconfigured
+
+    def describe_poll(self) -> str:
+        return describe_poll(self._last_success, self._consecutive_failures, self._last_error)
 
     async def start(self) -> None:
         """Run the poll loop. Wrap in asyncio.create_task() from startup."""
@@ -214,6 +231,8 @@ class UpsMonitor:
 
         self._consecutive_failures = 0
         self._last_error = None
+        self._last_success = time.time()
+        self._misconfigured = None
         self._ups_name = name
         self._variables = variables
         self._fetched_at = time.monotonic()
@@ -260,6 +279,20 @@ class UpsMonitor:
                 # while Telegram was down left a dead monitor nobody heard of.
                 self._running = False
             return
+
+        if isinstance(error, NutConfigError):
+            if self._misconfigured is None:
+                wanted = self._config.ups_name or "(auto)"
+                logger.warning(
+                    f"NUT server {self._client.target} answered but rejects UPS "
+                    f"name {wanted!r}: {error}. Set nut.ups_name to one it serves."
+                )
+            self._misconfigured = str(error)
+            if self._available is None:
+                return
+            # Worked before (UPS renamed?): also run the outage ladder below.
+        else:
+            self._misconfigured = None
 
         if self._available is None:
             # Never connected. Most installs have no NUT server, so this is a

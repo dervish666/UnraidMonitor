@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -84,6 +85,11 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
         return False, "Pattern causes excessive backtracking"
 
     return True, ""
+
+
+def ignore_key(pattern: str) -> str:
+    """Short stable id for an ignore pattern (8 hex chars), used in buttons."""
+    return hashlib.sha1(pattern.encode("utf-8")).hexdigest()[:8]
 
 
 @dataclass
@@ -285,6 +291,18 @@ class IgnoreManager:
                 for container, patterns in self._runtime_ignores.items()
                 if patterns
             ]
+
+    def remove_runtime_ignore_by_key(self, container: str, key: str) -> bool:
+        """Remove the runtime ignore whose ``ignore_key`` is *key*.
+
+        Buttons carry this key, not a list index: an index shifts when another
+        ignore is removed first, so a stale button deleted the wrong pattern.
+        """
+        with self._lock:
+            for i, ignore_pattern in enumerate(self._runtime_ignores.get(container, [])):
+                if ignore_key(ignore_pattern.pattern) == key:
+                    return self.remove_runtime_ignore(container, i)
+            return False
 
     def remove_runtime_ignore(self, container: str, index: int) -> bool:
         """Remove a runtime ignore by index.

@@ -16,7 +16,7 @@ from src.alerts.mute_manager import MuteManager
 from src.alerts.rate_limiter import RateLimiter
 from src.alert_proxy import AlertManagerProxy
 from src.monitors.resource_monitor import ResourceMonitor
-from src.utils.formatting import format_bytes
+from src.utils.formatting import fit_callback, format_bytes
 from src.utils.telegram_retry import send_with_retry
 
 
@@ -101,7 +101,7 @@ def make_server_alert_handler(
                             label = f"⏹ Stop {s.name} ({s.memory_display})"
                             buttons.append(
                                 [InlineKeyboardButton(
-                                    text=label, callback_data=f"mem_kill:{s.name}"
+                                    text=label, callback_data=fit_callback("mem_kill:", s.name)
                                 )]
                             )
                     if buttons:
@@ -202,7 +202,7 @@ def make_memory_alert_handler(
         restart_rows = [
             [InlineKeyboardButton(
                 text="🔄 Restart " + name + (f" ({format_bytes(mem)})" if mem else ""),
-                callback_data=f"mem_restart:{name}",
+                callback_data=fit_callback("mem_restart:", name),
             )]
             for name, mem in restartable
         ]
@@ -213,7 +213,7 @@ def make_memory_alert_handler(
             for name, mem in killable:
                 label = f"⏹ Stop {name}" + (f" ({format_bytes(mem)})" if mem else "")
                 buttons.append(
-                    [InlineKeyboardButton(text=label, callback_data=f"mem_kill:{name}")]
+                    [InlineKeyboardButton(text=label, callback_data=fit_callback("mem_kill:", name))]
                 )
             keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -222,7 +222,7 @@ def make_memory_alert_handler(
             if killable:
                 target, mem = killable[0]
                 kill_label = f"⏹ Kill {target} Now" + (f" ({format_bytes(mem)})" if mem else "")
-                buttons.append([InlineKeyboardButton(text=kill_label, callback_data=f"mem_kill:{target}")])
+                buttons.append([InlineKeyboardButton(text=kill_label, callback_data=fit_callback("mem_kill:", target))])
                 buttons.append([InlineKeyboardButton(text="❌ Cancel Auto-Kill", callback_data="mem_cancel_kill")])
             buttons.extend(restart_rows)
             keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -258,8 +258,8 @@ def make_ask_restart_handler(
             text = f"\U0001f4be Memory now at safe levels. Restart *{safe_name}*?"
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="✅ Yes", callback_data=f"mem_restart_yes:{container}"),
-                    InlineKeyboardButton(text="❌ No", callback_data=f"mem_restart_no:{container}"),
+                    InlineKeyboardButton(text="✅ Yes", callback_data=fit_callback("mem_restart_yes:", container)),
+                    InlineKeyboardButton(text="❌ No", callback_data=fit_callback("mem_restart_no:", container)),
                 ]
             ])
             try:

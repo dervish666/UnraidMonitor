@@ -7,9 +7,10 @@ from typing import Any, TYPE_CHECKING
 import docker
 
 from src.state import ContainerStateManager
-from src.unraid.monitors.array_monitor import disk_status_verdict, parity_operation_active
+from src.unraid.monitors.array_monitor import disk_status_verdict, parity_writing
 from src.models import ContainerInfo
 from src.utils.sanitize import sanitize_for_prompt, sanitize_logs
+from src.services.docker_client import DockerClientLike
 
 if TYPE_CHECKING:
     from src.services.container_control import ContainerController
@@ -230,7 +231,7 @@ class NLToolExecutor:
     def __init__(
         self,
         state: ContainerStateManager,
-        docker_client: docker.DockerClient,
+        docker_client: DockerClientLike,
         protected_containers: list[str] | None = None,
         controller: "ContainerController | None" = None,
         resource_monitor: "ResourceMonitor | None" = None,
@@ -466,7 +467,7 @@ class NLToolExecutor:
 
         # A sync writes to its target, which reads DISK_INVALID until done;
         # the same verdict the array monitor alerts on.
-        rebuilding = parity_operation_active(status)
+        rebuilding = parity_writing(status)
         if rebuilding:
             pc = status.get("parityCheckStatus") or {}
             progress = pc.get("progress")

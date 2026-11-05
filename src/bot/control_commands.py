@@ -7,7 +7,9 @@ from aiogram.enums import ChatAction
 from src.models import ContainerInfo
 from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
-from src.utils.formatting import safe_reply, safe_edit, validate_container_name, escape_markdown
+from src.utils.formatting import (
+    escape_markdown, fit_callback, resolve_cut_name, safe_edit, safe_reply, validate_container_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ Current status: {status}"""
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Confirm", callback_data=f"ctrl_confirm:{action}:{container_name}"),
+            InlineKeyboardButton(text="✅ Confirm", callback_data=fit_callback(f"ctrl_confirm:{action}:", container_name)),
             InlineKeyboardButton(text="❌ Cancel", callback_data="ctrl_cancel"),
         ]
     ])
@@ -155,6 +157,14 @@ def create_ctrl_confirm_callback(
         if action not in VALID_ACTIONS:
             await callback.answer(f"Unknown action: {action}")
             return
+
+        if container_name.endswith("…"):
+            # A long name cut to fit the 64-byte button; resolve it by prefix.
+            resolved = resolve_cut_name(container_name, state.get_all_names())
+            if resolved is None:
+                await callback.answer(f"Could not match that container; use /{action} with its name")
+                return
+            container_name = resolved
 
         if not validate_container_name(container_name):
             await callback.answer("Invalid container name")

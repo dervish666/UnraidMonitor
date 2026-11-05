@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from aiogram.types import Message, CallbackQuery
 
 from src.bot.setup_wizard import (
+    UnraidProbe,
     SetupWizard,
     WizardState,
     WizardSession,
@@ -22,6 +23,15 @@ from src.bot.setup_wizard import (
     create_adjust_done_callback,
 )
 from src.services.container_classifier import ContainerClassification
+
+
+def _msg() -> MagicMock:
+    """A Message the handlers can isinstance-check, with async send methods."""
+    m = MagicMock(spec=Message)
+    m.answer = AsyncMock()
+    m.edit_text = AsyncMock()
+    m.edit_reply_markup = AsyncMock()
+    return m
 
 
 @pytest.fixture
@@ -263,7 +273,7 @@ class TestWizardHandlers:
         with patch.object(
             wizard_with_unraid, "test_unraid_connection", new_callable=AsyncMock
         ) as mock_test:
-            mock_test.return_value = (True, 80, False)
+            mock_test.return_value = UnraidProbe(True, 80, False, True, "")
             with patch.object(
                 wizard_with_unraid, "classify_containers", new_callable=AsyncMock
             ) as mock_classify:
@@ -285,7 +295,7 @@ class TestWizardHandlers:
         with patch.object(
             wizard_with_unraid, "test_unraid_connection", new_callable=AsyncMock
         ) as mock_test:
-            mock_test.return_value = (False, 0, False)
+            mock_test.return_value = UnraidProbe(False, 0, False, True, "connection refused")
             await handler(message)
 
         assert wizard_with_unraid.get_state(123) == WizardState.AWAITING_HOST
@@ -303,7 +313,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:confirm"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         with patch.object(wizard, "save_config") as mock_save:
             await handler(callback)
@@ -333,7 +343,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:confirm"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         with patch.object(w, "save_config") as mock_save:
             await handler(callback)
@@ -352,7 +362,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:confirm"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         with patch.object(wizard, "save_config"):
             await handler(callback)
@@ -372,7 +382,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:toggle:killable:plex"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         await handler(callback)
 
@@ -392,7 +402,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:toggle:killable:plex"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         await handler(callback)
 
@@ -412,7 +422,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:toggle:ignored:plex"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         await handler(callback)
 
@@ -433,7 +443,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:toggle:watched:plex"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         await handler(callback)
 
@@ -451,7 +461,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:toggle:watched:nonexistent"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         await handler(callback)
 
@@ -470,7 +480,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:adjust:watched"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         await handler(callback)
 
@@ -493,7 +503,7 @@ class TestWizardHandlers:
         callback.from_user = MagicMock()
         callback.from_user.id = 123
         callback.data = "setup:adjust_done"
-        callback.message = AsyncMock()
+        callback.message = _msg()
 
         await handler(callback)
 
@@ -768,37 +778,15 @@ class TestSetupMiddleware:
 
 class TestConnectionTest:
     @pytest.mark.asyncio
-    async def test_test_unraid_connection_success(self, wizard):
-        """Test successful connection via mocking test_unraid_connection directly."""
-        with patch.object(wizard, "test_unraid_connection", new_callable=AsyncMock) as mock_test:
-            mock_test.return_value = (True, 443, True)
-            success, port, use_ssl = await wizard.test_unraid_connection(
-                "192.168.0.190", "test-key"
-            )
-
-        assert success is True
-        assert port == 443
-        assert use_ssl is True
-
-    @pytest.mark.asyncio
-    async def test_test_unraid_connection_failure(self, wizard):
-        """Test failed connection via mocking test_unraid_connection directly."""
-        with patch.object(wizard, "test_unraid_connection", new_callable=AsyncMock) as mock_test:
-            mock_test.return_value = (False, 0, False)
-            success, port, use_ssl = await wizard.test_unraid_connection(
-                "bad-host", "test-key"
-            )
-
-        assert success is False
-        assert port == 0
-
-    @pytest.mark.asyncio
     async def test_test_unraid_connection_tries_https_then_http(self, wizard):
         """Test that test_unraid_connection tries HTTPS:443 then HTTP:80."""
         call_urls: list[str] = []
 
         class FakeResponse:
             status = 200
+
+            async def json(self, content_type=None):
+                return {"data": {"info": {"os": {"hostname": "tower"}}}}
 
             async def __aenter__(self):
                 return self
@@ -828,13 +816,12 @@ class TestConnectionTest:
                 return FakeResponse()
 
         with patch("src.bot.setup_wizard.aiohttp.ClientSession", return_value=FakeSession()):
-            success, port, use_ssl = await wizard.test_unraid_connection(
-                "192.168.0.190", "test-key"
-            )
+            probe = await wizard.test_unraid_connection("192.168.0.190", "test-key")
 
-        assert success is True
-        assert port == 80
-        assert use_ssl is False
+        assert probe.success is True
+        assert probe.port == 80
+        assert probe.use_ssl is False
+        assert "unencrypted" in probe.detail  # plain HTTP is never silent
         assert len(call_urls) == 2
         assert "https" in call_urls[0] and "443" in call_urls[0]
         assert "http" in call_urls[1] and "80" in call_urls[1]

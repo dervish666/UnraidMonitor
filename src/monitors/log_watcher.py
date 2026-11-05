@@ -174,11 +174,21 @@ class LogWatcher:
         logger.info("LogWatcher connected to Docker socket")
 
     async def start(self) -> None:
-        """Start watching logs for all configured containers."""
-        if not self._client:
-            raise RuntimeError("Not connected to Docker")
+        """Start watching logs for all configured containers.
 
+        Waits (with backoff) for Docker if it was unreachable at startup.
+        """
         self._running = True
+        delay = 5.0
+        while self._running and not self._client:
+            try:
+                await asyncio.to_thread(self.connect)
+            except Exception as e:
+                logger.warning(f"LogWatcher: Docker unreachable ({e}); retrying in {delay:.0f}s")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 300.0)
+        if not self._running:
+            return
 
         # Start a log watcher task for each container
         for container_name in self.containers:

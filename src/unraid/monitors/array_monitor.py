@@ -32,6 +32,17 @@ def parity_operation_active(array_status: dict[str, Any]) -> bool:
     return str(parity_check.get("status") or "").upper() in _PARITY_ACTIVE_STATUSES
 
 
+def parity_writing(array_status: dict[str, Any]) -> bool:
+    """True while a parity operation that writes is active: a sync, a rebuild or a
+    correcting check. Only these excuse a disk reading DISK_INVALID.
+
+    ``correcting: false`` is the one value that proves a read-only check; true or
+    null may be a sync or rebuild, which the API does not flag separately.
+    """
+    parity_check = array_status.get("parityCheckStatus") or {}
+    return parity_operation_active(array_status) and parity_check.get("correcting") is not False
+
+
 def disk_status_verdict(status: str, rebuilding: bool) -> str:
     """Classify one disk status: "ok", "rebuilding" (expected mid-sync) or "fault".
 
@@ -73,10 +84,15 @@ class ArrayMonitor:
         self._task: asyncio.Task[None] | None = None
         self._alerted_disks: set[str] = set()  # Track disks that have been alerted
         self._parity_active = False  # Whether a parity op was running last poll
+        self._parity_read_only = False  # The running op is a non-correcting check
 
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def availability(self) -> "UnraidAvailability | None":
+        return self._availability
 
     async def start(self) -> None:
         """Start the monitoring loop."""
@@ -151,18 +167,29 @@ class ArrayMonitor:
             parity_check: The ``parityCheckStatus`` dict (may be empty).
 
         Returns:
-            True while a parity operation is running or paused.
+            True while a parity operation that writes (sync, rebuild or a
+            correcting check) is running or paused. A read-only check returns
+            False: it writes nothing, so it excuses no disk status.
         """
         state = str(parity_check.get("status") or "").upper()
         active = parity_operation_active({"parityCheckStatus": parity_check})
+        read_only = active and not parity_writing({"parityCheckStatus": parity_check})
 
         if active and not self._parity_active:
             progress = parity_check.get("progress")
             speed = parity_check.get("speed")
-            lines = [
-                "A parity sync or disk rebuild is under way.",
-                "The array is **not** fully protected until it completes.",
-            ]
+            if read_only:
+                title = "🔍 Parity Check Running"
+                lines = [
+                    "A read-only parity check is under way.",
+                    "Nothing is being written; the array stays protected.",
+                ]
+            else:
+                title = "🔄 Parity Operation Running"
+                lines = [
+                    "A parity sync, disk rebuild or correcting check is under way.",
+                    "The array is **not** fully protected until it completes.",
+                ]
             if progress is not None:
                 lines.insert(0, f"Progress: {progress}%")
             if speed:
@@ -170,12 +197,13 @@ class ArrayMonitor:
             if state == "PAUSED":
                 lines.insert(0, "Currently PAUSED.")
             if not await self._on_alert(
-                title="🔄 Parity Operation Running",
+                title=title,
                 message="\n".join(lines),
                 alert_type="array",
             ):
                 # Not delivered: stay "inactive" so the next poll retries it.
-                return active
+                return active and not read_only
+            self._parity_read_only = read_only
 
         elif self._parity_active and not active:
             errors = parity_check.get("errors")
@@ -184,23 +212,24 @@ class ArrayMonitor:
             error_line = (
                 f"Errors: {errors}" if errors is not None else "Error count: not reported"
             )
+            noun = "Parity Check" if self._parity_read_only else "Parity Operation"
             outcome = {
-                "COMPLETED": "✅ Parity Operation Complete",
-                "CANCELLED": "⚠️ Parity Operation Cancelled",
-                "FAILED": "🔴 Parity Operation Failed",
-            }.get(state, "✅ Parity Operation Finished")
+                "COMPLETED": f"✅ {noun} Complete",
+                "CANCELLED": f"⚠️ {noun} Cancelled",
+                "FAILED": f"🔴 {noun} Failed",
+            }.get(state, f"✅ {noun} Finished")
             if not await self._on_alert(
                 title=outcome,
                 message=f"Final status: {state or 'unknown'}\n{error_line}",
                 alert_type="array",
             ):
-                return active
+                return False
             # Let a genuine fault on the rebuilt disk alert now it is no longer
             # excused by the sync.
             self._alerted_disks = {k for k in self._alerted_disks if not k.endswith(":status")}
 
         self._parity_active = active
-        return active
+        return active and not read_only
 
     async def _check_capacity(self, status: dict[str, Any]) -> None:
         """Check array capacity and alert if threshold exceeded.

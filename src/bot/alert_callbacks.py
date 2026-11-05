@@ -28,9 +28,10 @@ from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
 from src.bot.control_commands import build_confirmation
 from src.services.diagnostic import DiagnosticService
-from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes, format_bytes, safe_reply
+from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes, format_bytes, safe_reply, resolve_cut_name
 from src.utils.sanitize import sanitize_logs_for_display
 from src.utils.telegram_format import markdown_to_telegram_html
+from src.services.docker_client import DockerClientLike
 
 if TYPE_CHECKING:
     from src.alerts.server_mute_manager import ServerMuteManager
@@ -49,6 +50,13 @@ async def _validate_and_resolve(
     Answers the callback with the error itself; returns the resolved container
     name (or the validated raw name when *state* is None), else None.
     """
+    if container_name.endswith("…"):
+        # Cut to fit the 64-byte button (fit_callback); resolve by prefix.
+        resolved = resolve_cut_name(container_name, state.get_all_names()) if state else None
+        if resolved is None:
+            await callback.answer("Name too long for this button; use the command with the full name")
+            return None
+        container_name = resolved
     if not validate_container_name(container_name):
         logger.warning(f"Invalid container name in callback: {container_name[:50]}")
         await callback.answer("Invalid container name")
@@ -200,7 +208,7 @@ def restart_callback(
 
 def logs_callback(
     state: ContainerStateManager,
-    docker_client: docker.DockerClient,
+    docker_client: DockerClientLike,
     max_lines: int = 100,
     max_chars: int = 4000,
 ) -> Callable[[CallbackQuery], Awaitable[None]]:

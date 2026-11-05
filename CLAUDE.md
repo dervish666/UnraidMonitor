@@ -93,7 +93,8 @@ src/unraid/monitors/notification_monitor.py - UnraidNotificationMonitor relaying
 # Utils
 src/utils/api_errors.py - LLM API error handling (Anthropic + OpenAI) with user-friendly messages
 src/utils/formatting.py - Bytes/uptime formatting, safe_reply/safe_edit, format_mute_expiry
-src/utils/heartbeat.py - heartbeat_loop() touching the liveness file the Docker HEALTHCHECK reads
+src/utils/heartbeat.py - heartbeat_loop() touching the liveness file the Docker HEALTHCHECK reads; stops while no monitor task is alive
+src/utils/poll_health.py - PollHealth/describe_poll: last success, failure streak and last error per monitor, rendered by /health
 src/utils/rate_limiter.py - PerUserRateLimiter for per-user API rate limiting
 src/utils/sanitize.py - Prompt injection prevention, sensitive data redaction
 src/utils/telegram_format.py - markdown_to_telegram_html: escape-first rendering of LLM output for HTML parse mode
@@ -161,6 +162,8 @@ Startup is split across three files:
 Key behaviours:
 - **First-run path:** If no `config.yaml` exists, calls `register_setup_wizard()` instead of `register_commands()`. `SetupModeMiddleware` blocks all non-wizard commands during setup. The wizard writes config via `ConfigWriter`, then restarts via `os.execv`.
 - **Normal path:** Loads config and calls `start_monitoring()` which initializes all monitors.
+- **Docker is optional at boot.** If the socket does not answer, `start_monitoring()` logs it and carries on: Unraid and UPS monitoring start anyway, `DockerEventMonitor.start()` and `LogWatcher.start()` retry with backoff, and consumers hold the event monitor's one `SharedDockerClient` for its whole life (built disconnected, filled in by `replace()` on connect). A Docker call before then raises `DockerException`, handled like any daemon outage. Consumers are typed `DockerClientLike` (Protocol in `src/services/docker_client.py`), so no `type: ignore` hides a missing proxy.
+- **Background tasks report their death.** `_BackgroundTasks.add_task()` attaches a done-callback that logs a task dying with an exception by name; `any_monitor_alive()` turns False once every monitor task has ended and one crashed, and the heartbeat stops so the HEALTHCHECK restarts the container. Pass `monitor=False` for tasks that are not monitors (startup, heartbeat, mute maintenance). Shutdown isolates each stop so mutes are always flushed.
 - `AlertManagerProxy` (`src/alert_proxy.py`) wraps `AlertManager` to lazily resolve chat IDs. Queues alerts until a user sends `/start`.
 - `_BackgroundTasks` (`src/background.py`) tracks all running monitors for graceful shutdown.
 - `ProviderRegistry` manages LLM providers (Anthropic, OpenAI, Ollama) with per-feature model overrides and JSON persistence.
@@ -194,7 +197,7 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `ctrl_confirm:action:container_name`, `ctrl_cancel`
 - `diag_details:container_name`
 - `ign_toggle:index`, `ign_all`, `ign_done`, `ign_cancel`
-- `mdi:container:index` (manage delete ignore), `mdm:type:key` (manage delete mute; type is `container`, `server` (system only), `array` or `ups`)
+- `mdi:container:key` (manage delete ignore; key is `ignore_key(pattern)`, 8 hex chars, so a stale list never deletes the wrong pattern), `mdm:type:key` (manage delete mute; type is `container`, `server` (system only), `array` or `ups`)
 - `help:section_key`, `help:back`
 - `res_limit:container_name:metric:threshold` (show threshold options; the CPU ladder runs to `cores * 100`, from `cpu_threshold_steps()` in `src/constants.py`)
 - `res_set:container_name:metric:value` (apply threshold, 0 = reset to default)
@@ -217,6 +220,8 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `setup:confirm`, `setup:toggle:category:container_name` (e.g., `setup:toggle:watched:plex`), `setup:adjust:category`, `setup:adjust_done`
 - `pull:container_name` (image-update digest -> shows pull confirmation)
 
+Callback data is capped at 64 bytes by Telegram, and an over-long one makes the whole message fail to send. Any callback carrying a container or model name is built with `fit_callback(prefix, name, suffix)` (`src/utils/formatting.py`), which cuts the name and marks it with `…`; its handler maps it back with `resolve_cut_name(value, candidates)`, which accepts a cut name only when exactly one candidate starts with it.
+
 Callback handlers are registered with `F.data.startswith("prefix:")` filters in `register_commands()` and its `_register_*` helpers (same file).
 
 ### Handler Registration Order
@@ -225,11 +230,12 @@ In `register_commands()` (`src/bot/telegram_bot.py`), order matters:
 1. Command handlers (`Command("status")`, etc.)
 2. Callback query handlers (`F.data.startswith(...)`)
 3. **NL handler must be last** — it catches all non-command text via `NLFilter`
-4. **`unhandled_callback` must be the last callback registration** — it has no filter, so anything registered after it is unreachable. It answers callbacks nothing else claimed, because an unanswered callback leaves the button spinning in the client forever.
+4. **`unknown_command` must be the last message registration.** It matches any text starting with "/" and replies with a pointer to /help. `/health` is registered in `start_monitoring()` after `register_commands()`, so `register_unknown_command(dp)` runs there, right after it.
+5. **`unhandled_callback` must be the last callback registration** — it has no filter, so anything registered after it is unreachable. It answers callbacks nothing else claimed, because an unanswered callback leaves the button spinning in the client forever.
 
 After registration, `publish_command_menu(bot, dp)` (called from `start_monitoring`) reads the dispatcher's `Command` filters and pushes them to Telegram's "/" menu. A new command shows up automatically once it has an entry in `COMMAND_DESCRIPTIONS` (`src/bot/command_menu.py`); hyphenated names like `/mute-server` work when typed but cannot appear in the menu.
 
-**A disk status is not a verdict without its context.** `DISK_INVALID` means "being written to" during a parity sync and "broken" outside one; the array API has no per-disk rebuild flag, so `parityCheckStatus` is the only way to tell. Alerting on `status != DISK_OK` alone paged the user for a routine rebuild (confirmed live, v0.20.0). Related: the same payload returns `running`/`paused`/`errors` as **null** while `status` correctly reads RUNNING — verify which fields a live server actually populates before keying logic on them.
+**A disk status is not a verdict without its context.** `DISK_INVALID` means "being written to" during a parity sync and "broken" outside one; the array API has no per-disk rebuild flag, so `parityCheckStatus` is the only way to tell. Alerting on `status != DISK_OK` alone paged the user for a routine rebuild (confirmed live, v0.20.0). Related: the same payload returns `running`/`paused`/`errors` as **null** while `status` correctly reads RUNNING — verify which fields a live server actually populates before keying logic on them. `parityCheckStatus.correcting: false` is the one value that proves a read-only check, which writes nothing and so excuses no disk status; `parity_writing()` in `array_monitor.py` is the test every caller uses.
 
 **A rendered button needs a registered handler in the same conditions.** Alerts are built in `src/monitor_callbacks.py` from one set of flags and handlers are registered in `register_commands()` from another; when those disagree the button silently does nothing. `mem_kill:` is the cautionary tale — it was rendered whenever Unraid monitoring was on but registered only when `memory_management.enabled`. `MemoryMonitor` is now constructed unconditionally (inert until `start()`) with `bg.memory_monitor` as the sole signal for "the pressure loop is running".
 
@@ -321,7 +327,7 @@ Environment variables can also be set via `config/.env` (loaded by pydantic-sett
 
 ## Configuration
 
-`config/config.yaml` - Created by the setup wizard on first run (or via `/setup`). Key sections:
+`config/config.yaml` - Created by the setup wizard on first run (or via `/setup`). Every section is read through `_Section` in `src/config.py`: an empty section (`unraid:` with nothing under it) takes defaults, `"false"`/`"no"` are false, numeric strings are numbers, a wrong type raises `ConfigError` naming the path, unknown keys are logged by path, and the example host `your-unraid-ip` counts as unset. `config/.env` keys pydantic does not know are logged and ignored. Key sections:
 - `ai` - LLM model names, token limits, NL processor settings
 - `log_watching` - Watched containers, error/ignore patterns, cooldown
 - `unraid` - Host, polling intervals, alert thresholds (CPU temp, disk temp, memory, etc.)

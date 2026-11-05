@@ -58,6 +58,113 @@ from src.constants import (
 
 logger = logging.getLogger(__name__)
 
+# What the config generator writes when no Unraid host is known. Never polled.
+PLACEHOLDER_UNRAID_HOST = "your-unraid-ip"
+
+_TRUE_STRINGS = {"true", "yes", "on", "1"}
+_FALSE_STRINGS = {"false", "no", "off", "0"}
+
+
+class ConfigError(ValueError):
+    """A config.yaml value that cannot be read as the type it needs."""
+
+
+class _Section:
+    """Typed, tolerant reads from one YAML mapping.
+
+    A missing or empty section (``unraid:`` with nothing under it reads as
+    None) is an empty mapping, so every key takes its default. Values are
+    coerced where the intent is unambiguous: the string "false" is False, not
+    truthy, and "90" is 90. Anything else raises ConfigError naming the path,
+    the expected type and what was found. Keys nobody read are reported by
+    ``warn_unknown()``, which catches typos like ``treshold``.
+    """
+
+    def __init__(self, data: Any, path: str) -> None:
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise ConfigError(f"{path}: expected a mapping, got {type(data).__name__}")
+        self._data = data
+        self._path = path
+        self._seen: set[str] = set()
+        self._children: list[_Section] = []
+
+    def _raw(self, key: str) -> Any:
+        self._seen.add(key)
+        return self._data.get(key)
+
+    def _where(self, key: str) -> str:
+        return f"{self._path}.{key}" if self._path else key
+
+    def section(self, key: str) -> "_Section":
+        child = _Section(self._raw(key), self._where(key))
+        self._children.append(child)
+        return child
+
+    def get_bool(self, key: str, default: bool) -> bool:
+        value = self._raw(key)
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str) and value.strip().lower() in _TRUE_STRINGS | _FALSE_STRINGS:
+            return value.strip().lower() in _TRUE_STRINGS
+        raise ConfigError(f"{self._where(key)}: expected true or false, got {value!r}")
+
+    def get_int(self, key: str, default: int, lo: int | None = None, hi: int | None = None) -> int:
+        value = self._raw(key)
+        if value is None:
+            result = default
+        elif isinstance(value, bool):
+            raise ConfigError(f"{self._where(key)}: expected a number, got {value!r}")
+        elif isinstance(value, int):
+            result = value
+        elif isinstance(value, float) and value.is_integer():
+            result = int(value)
+        elif isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            result = int(value.strip())
+        else:
+            raise ConfigError(f"{self._where(key)}: expected a number, got {value!r}")
+        if lo is not None:
+            result = max(lo, result)
+        if hi is not None:
+            result = min(hi, result)
+        return result
+
+    def get_str(self, key: str, default: str) -> str:
+        value = self._raw(key)
+        if value is None:
+            return default
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            return str(value).strip()
+        raise ConfigError(f"{self._where(key)}: expected text, got {type(value).__name__}")
+
+    def str_list(self, key: str) -> list[str]:
+        value = self._raw(key)
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ConfigError(f"{self._where(key)}: expected a list, got {type(value).__name__}")
+        return [str(v) for v in value if v is not None]
+
+    def mapping(self, key: str) -> dict[str, Any]:
+        value = self._raw(key)
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ConfigError(f"{self._where(key)}: expected a mapping, got {type(value).__name__}")
+        return value
+
+    def warn_unknown(self) -> None:
+        unknown = sorted(str(k) for k in self._data if k not in self._seen)
+        for key in unknown:
+            logger.warning(f"Unknown config key {self._where(key)!r} is ignored (typo?)")
+        for child in self._children:
+            child.warn_unknown()
+
 
 def atomic_yaml_write(data: dict[str, Any], target: Path) -> None:
     """Write a dict as YAML atomically using tempfile + os.replace."""
@@ -156,25 +263,29 @@ class AIConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AIConfig":
         """Create AIConfig from YAML dict."""
-        models = data.get("models", {})
-        max_tokens = data.get("max_tokens", {})
-        nl = data.get("nl_processor", {})
-        providers = data.get("providers", {})
+        return cls._read(_Section(data, "ai"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "AIConfig":
+        models = sec.section("models")
+        max_tokens = sec.section("max_tokens")
+        nl = sec.section("nl_processor")
+        ollama = sec.section("providers").section("ollama")
         return cls(
-            pattern_analyzer_model=models.get("pattern_analyzer", DEFAULT_HAIKU_MODEL),
-            nl_processor_model=models.get("nl_processor", DEFAULT_SONNET_MODEL),
-            diagnostic_model=models.get("diagnostic", DEFAULT_HAIKU_MODEL),
-            pattern_analyzer_max_tokens=max_tokens.get("pattern_analyzer", PATTERN_ANALYZER_MAX_TOKENS),
-            nl_processor_max_tokens=max_tokens.get("nl_processor", NL_PROCESSOR_MAX_TOKENS),
-            diagnostic_brief_max_tokens=max_tokens.get("diagnostic_brief", DIAGNOSTIC_BRIEF_MAX_TOKENS),
-            diagnostic_detail_max_tokens=max_tokens.get("diagnostic_detail", DIAGNOSTIC_DETAIL_MAX_TOKENS),
-            nl_max_tool_iterations=nl.get("max_tool_iterations", NL_MAX_TOOL_ITERATIONS),
-            nl_max_conversation_exchanges=nl.get("max_conversation_exchanges", NL_MAX_CONVERSATION_EXCHANGES),
-            pattern_analyzer_context_lines=data.get("pattern_analyzer_context_lines", PATTERN_ANALYZER_CONTEXT_LINES),
-            diagnostic_context_expiry_seconds=data.get("diagnostic_context_expiry_seconds", DIAGNOSTIC_CONTEXT_EXPIRY_SECONDS),
-            default_model=data.get("default_model", DEFAULT_HAIKU_MODEL),
-            ollama_host=providers.get("ollama", {}).get("host", DEFAULT_OLLAMA_HOST),
-            ollama_default_model=providers.get("ollama", {}).get("default_model", DEFAULT_OLLAMA_MODEL),
+            pattern_analyzer_model=models.get_str("pattern_analyzer", DEFAULT_HAIKU_MODEL),
+            nl_processor_model=models.get_str("nl_processor", DEFAULT_SONNET_MODEL),
+            diagnostic_model=models.get_str("diagnostic", DEFAULT_HAIKU_MODEL),
+            pattern_analyzer_max_tokens=max_tokens.get_int("pattern_analyzer", PATTERN_ANALYZER_MAX_TOKENS, lo=1),
+            nl_processor_max_tokens=max_tokens.get_int("nl_processor", NL_PROCESSOR_MAX_TOKENS, lo=1),
+            diagnostic_brief_max_tokens=max_tokens.get_int("diagnostic_brief", DIAGNOSTIC_BRIEF_MAX_TOKENS, lo=1),
+            diagnostic_detail_max_tokens=max_tokens.get_int("diagnostic_detail", DIAGNOSTIC_DETAIL_MAX_TOKENS, lo=1),
+            nl_max_tool_iterations=nl.get_int("max_tool_iterations", NL_MAX_TOOL_ITERATIONS, lo=1),
+            nl_max_conversation_exchanges=nl.get_int("max_conversation_exchanges", NL_MAX_CONVERSATION_EXCHANGES, lo=1),
+            pattern_analyzer_context_lines=sec.get_int("pattern_analyzer_context_lines", PATTERN_ANALYZER_CONTEXT_LINES, lo=1),
+            diagnostic_context_expiry_seconds=sec.get_int("diagnostic_context_expiry_seconds", DIAGNOSTIC_CONTEXT_EXPIRY_SECONDS, lo=1),
+            default_model=sec.get_str("default_model", DEFAULT_HAIKU_MODEL),
+            ollama_host=ollama.get_str("host", DEFAULT_OLLAMA_HOST),
+            ollama_default_model=ollama.get_str("default_model", DEFAULT_OLLAMA_MODEL),
         )
 
 
@@ -191,13 +302,17 @@ class BotConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BotConfig":
         """Create BotConfig from YAML dict."""
-        log_display = data.get("log_display", {})
+        return cls._read(_Section(data, "bot"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "BotConfig":
+        log_display = sec.section("log_display")
         return cls(
-            log_max_lines=log_display.get("max_lines", LOG_MAX_LINES),
-            log_max_chars=log_display.get("max_chars", LOG_MAX_CHARS),
-            nl_log_max_chars=log_display.get("nl_max_chars", NL_LOG_MAX_CHARS),
-            diagnose_max_lines=log_display.get("diagnose_max_lines", DIAGNOSE_MAX_LINES),
-            error_display_max_chars=data.get("error_display_max_chars", ERROR_DISPLAY_MAX_CHARS),
+            log_max_lines=log_display.get_int("max_lines", LOG_MAX_LINES, lo=1),
+            log_max_chars=log_display.get_int("max_chars", LOG_MAX_CHARS, lo=100),
+            nl_log_max_chars=log_display.get_int("nl_max_chars", NL_LOG_MAX_CHARS, lo=100),
+            diagnose_max_lines=log_display.get_int("diagnose_max_lines", DIAGNOSE_MAX_LINES, lo=1),
+            error_display_max_chars=sec.get_int("error_display_max_chars", ERROR_DISPLAY_MAX_CHARS, lo=20),
         )
 
 
@@ -210,9 +325,11 @@ class DockerConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DockerConfig":
         """Create DockerConfig from YAML dict."""
-        return cls(
-            socket_path=data.get("socket_path", "unix:///var/run/docker.sock"),
-        )
+        return cls._read(_Section(data, "docker"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "DockerConfig":
+        return cls(socket_path=sec.get_str("socket_path", "unix:///var/run/docker.sock"))
 
 
 @dataclass
@@ -229,14 +346,27 @@ class ResourceConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ResourceConfig":
         """Create ResourceConfig from YAML dict."""
-        defaults = data.get("defaults", {})
+        return cls._read(_Section(data, "resource_monitoring"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "ResourceConfig":
+        defaults = sec.section("defaults")
+        overrides: dict[str, dict[str, int]] = {}
+        for name, values in sec.mapping("containers").items():
+            entry = _Section(values, f"resource_monitoring.containers.{name}")
+            item = {}
+            for metric in ("cpu_percent", "memory_percent"):
+                if entry._data.get(metric) is not None:
+                    item[metric] = entry.get_int(metric, 0, lo=1, hi=100 if metric == "memory_percent" else None)
+            entry.warn_unknown()
+            overrides[str(name)] = item
         return cls(
-            enabled=data.get("enabled", True),
-            poll_interval_seconds=max(data.get("poll_interval_seconds", RESOURCE_POLL_INTERVAL_SECONDS), 10),
-            sustained_threshold_seconds=max(data.get("sustained_threshold_seconds", RESOURCE_SUSTAINED_THRESHOLD_SECONDS), 10),
-            default_cpu_percent=max(defaults.get("cpu_percent", DEFAULT_CPU_PERCENT), 1),
-            default_memory_percent=max(min(defaults.get("memory_percent", DEFAULT_MEMORY_PERCENT), 100), 1),
-            container_overrides=data.get("containers", {}),
+            enabled=sec.get_bool("enabled", True),
+            poll_interval_seconds=sec.get_int("poll_interval_seconds", RESOURCE_POLL_INTERVAL_SECONDS, lo=10),
+            sustained_threshold_seconds=sec.get_int("sustained_threshold_seconds", RESOURCE_SUSTAINED_THRESHOLD_SECONDS, lo=10),
+            default_cpu_percent=defaults.get_int("cpu_percent", DEFAULT_CPU_PERCENT, lo=1),
+            default_memory_percent=defaults.get_int("memory_percent", DEFAULT_MEMORY_PERCENT, lo=1, hi=100),
+            container_overrides=overrides,
         )
 
     config_path: str | None = None
@@ -307,16 +437,20 @@ class MemoryConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MemoryConfig":
+        return cls._read(_Section(data, "memory_management"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "MemoryConfig":
         config = cls(
-            enabled=data.get("enabled", False),
-            warning_threshold=max(min(data.get("warning_threshold", MEMORY_WARNING_THRESHOLD), 99), 50),
-            critical_threshold=max(min(data.get("critical_threshold", MEMORY_CRITICAL_THRESHOLD), 100), 60),
-            safe_threshold=max(min(data.get("safe_threshold", MEMORY_SAFE_THRESHOLD), 95), 30),
-            kill_delay_seconds=max(data.get("kill_delay_seconds", MEMORY_KILL_DELAY_SECONDS), 10),
-            stabilization_wait=max(data.get("stabilization_wait", MEMORY_STABILIZATION_WAIT), 10),
-            priority_containers=data.get("priority_containers", []),
-            killable_containers=data.get("killable_containers", []),
-            restart_containers=data.get("restart_containers", []) or [],
+            enabled=sec.get_bool("enabled", False),
+            warning_threshold=sec.get_int("warning_threshold", MEMORY_WARNING_THRESHOLD, lo=50, hi=99),
+            critical_threshold=sec.get_int("critical_threshold", MEMORY_CRITICAL_THRESHOLD, lo=60, hi=100),
+            safe_threshold=sec.get_int("safe_threshold", MEMORY_SAFE_THRESHOLD, lo=30, hi=95),
+            kill_delay_seconds=sec.get_int("kill_delay_seconds", MEMORY_KILL_DELAY_SECONDS, lo=10),
+            stabilization_wait=sec.get_int("stabilization_wait", MEMORY_STABILIZATION_WAIT, lo=10),
+            priority_containers=sec.str_list("priority_containers"),
+            killable_containers=sec.str_list("killable_containers"),
+            restart_containers=sec.str_list("restart_containers"),
         )
         overlap = [c for c in config.killable_containers if c in set(config.priority_containers)]
         if overlap:
@@ -381,9 +515,13 @@ class ImageUpdatesConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ImageUpdatesConfig":
+        return cls._read(_Section(data, "image_updates"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "ImageUpdatesConfig":
         return cls(
-            enabled=data.get("enabled", False),
-            poll_interval_hours=max(data.get("poll_interval_hours", IMAGE_UPDATE_POLL_INTERVAL_HOURS), 1),
+            enabled=sec.get_bool("enabled", False),
+            poll_interval_hours=sec.get_int("poll_interval_hours", IMAGE_UPDATE_POLL_INTERVAL_HOURS, lo=1),
         )
 
     def set_enabled(self, enabled: bool) -> None:
@@ -417,11 +555,15 @@ class AutoHealConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AutoHealConfig":
+        return cls._read(_Section(data, "auto_heal"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "AutoHealConfig":
         return cls(
-            enabled=data.get("enabled", True),
-            containers=data.get("containers", []) or [],
-            max_restarts=max(data.get("max_restarts", AUTOHEAL_MAX_RESTARTS), 1),
-            window_minutes=max(data.get("window_minutes", AUTOHEAL_WINDOW_MINUTES), 1),
+            enabled=sec.get_bool("enabled", True),
+            containers=sec.str_list("containers"),
+            max_restarts=sec.get_int("max_restarts", AUTOHEAL_MAX_RESTARTS, lo=1),
+            window_minutes=sec.get_int("window_minutes", AUTOHEAL_WINDOW_MINUTES, lo=1),
         )
 
     def set_containers(self, containers: list[str]) -> None:
@@ -485,11 +627,15 @@ class UnraidConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "UnraidConfig":
         """Create UnraidConfig from YAML dict."""
-        polling = data.get("polling", {})
-        thresholds = data.get("thresholds", {})
-        notifications = data.get("notifications", {})
-        importance = str(
-            notifications.get("min_importance", UNRAID_NOTIFICATION_MIN_IMPORTANCE)
+        return cls._read(_Section(data, "unraid"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "UnraidConfig":
+        polling = sec.section("polling")
+        thresholds = sec.section("thresholds")
+        notifications = sec.section("notifications")
+        importance = notifications.get_str(
+            "min_importance", UNRAID_NOTIFICATION_MIN_IMPORTANCE
         ).upper()
         if importance not in NOTIFICATION_IMPORTANCE_LEVELS:
             logger.warning(
@@ -497,24 +643,33 @@ class UnraidConfig:
                 f"falling back to {UNRAID_NOTIFICATION_MIN_IMPORTANCE}"
             )
             importance = UNRAID_NOTIFICATION_MIN_IMPORTANCE
+        host = sec.get_str("host", "")
+        enabled = sec.get_bool("enabled", False)
+        if host == PLACEHOLDER_UNRAID_HOST:
+            # The generated config's hint, not an address: never poll it (and
+            # NUT, which falls back to this host, must not try it either).
+            if enabled:
+                logger.warning(
+                    f"unraid.host is still the placeholder {PLACEHOLDER_UNRAID_HOST!r}; "
+                    "Unraid monitoring stays off until a real host is set"
+                )
+            host, enabled = "", False
         return cls(
-            notifications_enabled=notifications.get("enabled", False),
+            notifications_enabled=notifications.get_bool("enabled", False),
             notifications_min_importance=importance,
-            poll_notifications_seconds=max(
-                polling.get("notifications", UNRAID_POLL_NOTIFICATIONS_SECONDS), 30
-            ),
-            enabled=data.get("enabled", False),
-            host=data.get("host", ""),
-            port=data.get("port", 80),
-            use_ssl=data.get("use_ssl", False),
-            verify_ssl=data.get("verify_ssl", True),
-            poll_system_seconds=max(polling.get("system", UNRAID_POLL_SYSTEM_SECONDS), 10),
-            poll_array_seconds=max(polling.get("array", UNRAID_POLL_ARRAY_SECONDS), 30),
-            cpu_temp_threshold=max(20, min(thresholds.get("cpu_temp", UNRAID_CPU_TEMP_THRESHOLD), 120)),
-            cpu_usage_threshold=max(1, min(thresholds.get("cpu_usage", UNRAID_CPU_USAGE_THRESHOLD), 100)),
-            memory_usage_threshold=max(1, min(thresholds.get("memory_usage", UNRAID_MEMORY_USAGE_THRESHOLD), 100)),
-            disk_temp_threshold=max(20, min(thresholds.get("disk_temp", UNRAID_DISK_TEMP_THRESHOLD), 100)),
-            array_usage_threshold=max(1, min(thresholds.get("array_usage", UNRAID_ARRAY_USAGE_THRESHOLD), 100)),
+            poll_notifications_seconds=polling.get_int("notifications", UNRAID_POLL_NOTIFICATIONS_SECONDS, lo=30),
+            enabled=enabled,
+            host=host,
+            port=sec.get_int("port", 80, lo=1, hi=65535),
+            use_ssl=sec.get_bool("use_ssl", False),
+            verify_ssl=sec.get_bool("verify_ssl", True),
+            poll_system_seconds=polling.get_int("system", UNRAID_POLL_SYSTEM_SECONDS, lo=10),
+            poll_array_seconds=polling.get_int("array", UNRAID_POLL_ARRAY_SECONDS, lo=30),
+            cpu_temp_threshold=thresholds.get_int("cpu_temp", UNRAID_CPU_TEMP_THRESHOLD, lo=20, hi=120),
+            cpu_usage_threshold=thresholds.get_int("cpu_usage", UNRAID_CPU_USAGE_THRESHOLD, lo=1, hi=100),
+            memory_usage_threshold=thresholds.get_int("memory_usage", UNRAID_MEMORY_USAGE_THRESHOLD, lo=1, hi=100),
+            disk_temp_threshold=thresholds.get_int("disk_temp", UNRAID_DISK_TEMP_THRESHOLD, lo=20, hi=100),
+            array_usage_threshold=thresholds.get_int("array_usage", UNRAID_ARRAY_USAGE_THRESHOLD, lo=1, hi=100),
         )
 
     def set_threshold(self, metric: str, value: int) -> None:
@@ -600,6 +755,33 @@ def update_yaml_config(
     atomic_yaml_write(data, path)
 
 
+def unknown_env_file_keys(env_file: str = "config/.env") -> list[str]:
+    """Keys in the .env file that Settings does not read (typos, old names)."""
+    from dotenv import dotenv_values
+
+    if not os.path.exists(env_file):
+        return []
+    known = {name.upper() for name in Settings.model_fields}
+    return sorted(k for k in dotenv_values(env_file) if k and k.upper() not in known)
+
+
+def describe_settings_error(error: Exception) -> str:
+    """A settings failure as "FIELD: problem" lines, without the values.
+
+    pydantic's default message echoes the input, which for this model can be
+    the bot token or an API key, straight into the container log.
+    """
+    from pydantic import ValidationError
+
+    if not isinstance(error, ValidationError):
+        return type(error).__name__
+    lines = []
+    for item in error.errors(include_input=False, include_url=False):
+        field_name = ".".join(str(p) for p in item.get("loc", ())) or "settings"
+        lines.append(f"{field_name.upper()}: {item.get('msg', 'invalid')}")
+    return "; ".join(lines)
+
+
 def load_yaml_config(path: str) -> dict[str, Any]:
     """Load YAML configuration file.
 
@@ -622,8 +804,15 @@ def load_yaml_config(path: str) -> dict[str, Any]:
             raise ValueError(f"Invalid YAML in {path}: {e}") from e
 
 
+_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file="config/.env", env_file_encoding="utf-8")
+    # extra="ignore": a stray or misspelt key in config/.env used to stop the
+    # bot at boot. unknown_env_file_keys() names them in the log instead.
+    model_config = SettingsConfigDict(
+        env_file="config/.env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     telegram_bot_token: str
     telegram_allowed_users: list[int] | str  # Accept string, convert to list
@@ -640,6 +829,18 @@ class Settings(BaseSettings):
     # Build-time variable (ignored at runtime, but allowed in .env for convenience)
     docker_gid: str | None = None
 
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def normalise_log_level(cls, v: Any) -> str:
+        """LOG_LEVEL=debug works; an unknown level falls back to INFO, loudly."""
+        level = str(v or "INFO").strip().upper()
+        if level == "WARN":
+            level = "WARNING"
+        if level not in _LOG_LEVELS:
+            logger.warning(f"LOG_LEVEL {v!r} is not one of {', '.join(_LOG_LEVELS)}; using INFO")
+            return "INFO"
+        return level
+
     @field_validator("telegram_allowed_users", mode="before")
     @classmethod
     def parse_allowed_users(cls, v: Any) -> list[int]:
@@ -655,9 +856,8 @@ class Settings(BaseSettings):
             try:
                 return [int(x.strip()) for x in v.split(",") if x.strip()]
             except ValueError:
-                raise ValueError(
-                    f"TELEGRAM_ALLOWED_USERS must be comma-separated integers, got: {v}"
-                )
+                # No echo of the value: a pasted token here would land in the log.
+                raise ValueError("TELEGRAM_ALLOWED_USERS must be comma-separated numeric user IDs")
         raise ValueError(f"TELEGRAM_ALLOWED_USERS must be a string or list, got: {type(v)}")
 
 
@@ -681,19 +881,20 @@ class NutConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "NutConfig":
-        thresholds = data.get("thresholds", {}) or {}
+        return cls._read(_Section(data, "nut"))
+
+    @classmethod
+    def _read(cls, sec: "_Section") -> "NutConfig":
+        thresholds = sec.section("thresholds")
+        host = sec.get_str("host", "")
         return cls(
-            enabled=data.get("enabled", True),
-            host=str(data.get("host", "") or "").strip(),
-            port=max(1, min(int(data.get("port", NUT_DEFAULT_PORT)), 65535)),
-            ups_name=str(data.get("ups_name", "") or "").strip(),
-            poll_seconds=max(int(data.get("poll_seconds", NUT_POLL_SECONDS)), 10),
-            battery_charge_threshold=max(
-                1, min(int(thresholds.get("battery_charge", NUT_BATTERY_CHARGE_THRESHOLD)), 100)
-            ),
-            load_threshold=max(
-                1, min(int(thresholds.get("load", NUT_LOAD_THRESHOLD)), 200)
-            ),
+            enabled=sec.get_bool("enabled", True),
+            host="" if host == PLACEHOLDER_UNRAID_HOST else host,
+            port=sec.get_int("port", NUT_DEFAULT_PORT, lo=1, hi=65535),
+            ups_name=sec.get_str("ups_name", ""),
+            poll_seconds=sec.get_int("poll_seconds", NUT_POLL_SECONDS, lo=10),
+            battery_charge_threshold=thresholds.get_int("battery_charge", NUT_BATTERY_CHARGE_THRESHOLD, lo=1, hi=100),
+            load_threshold=thresholds.get_int("load", NUT_LOAD_THRESHOLD, lo=1, hi=200),
         )
 
     def resolve_host(self, unraid_host: str = "") -> str:
@@ -731,6 +932,30 @@ class NutConfig:
         update_yaml_config(self.config_path, _update)
 
 
+def _read_log_watching(sec: _Section) -> dict[str, Any]:
+    """log_watching merged over DEFAULT_LOG_WATCHING, key by key."""
+    present = set(sec._data)
+    config: dict[str, Any] = {
+        "containers": sec.str_list("containers") if "containers" in present
+        else list(DEFAULT_WATCHED_CONTAINERS),
+        "error_patterns": sec.str_list("error_patterns") if "error_patterns" in present
+        else list(DEFAULT_ERROR_PATTERNS),
+        "ignore_patterns": sec.str_list("ignore_patterns") if "ignore_patterns" in present
+        else list(DEFAULT_IGNORE_PATTERNS),
+        "cooldown_seconds": sec.get_int("cooldown_seconds", DEFAULT_COOLDOWN_SECONDS, lo=1),
+        "container_ignores": {},
+    }
+    for name, patterns in sec.mapping("container_ignores").items():
+        if patterns is None:
+            continue
+        if not isinstance(patterns, list):
+            raise ConfigError(
+                f"log_watching.container_ignores.{name}: expected a list, got {type(patterns).__name__}"
+            )
+        config["container_ignores"][str(name)] = [str(p) for p in patterns]
+    return config
+
+
 class AppConfig:
     """Application configuration combining Settings (env) and YAML config."""
 
@@ -742,9 +967,15 @@ class AppConfig:
         """
         self._settings = settings
         self._yaml_config = load_yaml_config(settings.config_path)
+        if not isinstance(self._yaml_config, dict):
+            raise ConfigError(
+                f"{settings.config_path}: expected a mapping at the top level, "
+                f"got {type(self._yaml_config).__name__}"
+            )
+        root = _Section(self._yaml_config, "")
 
         # Cache config objects once (config is read-only after startup)
-        self._ai = AIConfig.from_dict(self._yaml_config.get("ai", {}))
+        self._ai = AIConfig._read(root.section("ai"))
 
         # Environment variable DEFAULT_MODEL overrides any YAML/code default
         if settings.default_model:
@@ -754,48 +985,44 @@ class AppConfig:
         if settings.ollama_host:
             self._ai.ollama_host = settings.ollama_host
 
-        self._bot_config = BotConfig.from_dict(self._yaml_config.get("bot", {}))
-        self._docker = DockerConfig.from_dict(self._yaml_config.get("docker", {}))
-        self._resource_monitoring = ResourceConfig.from_dict(
-            self._yaml_config.get("resource_monitoring", {})
-        )
+        self._bot_config = BotConfig._read(root.section("bot"))
+        self._docker = DockerConfig._read(root.section("docker"))
+        self._resource_monitoring = ResourceConfig._read(root.section("resource_monitoring"))
         self._resource_monitoring.config_path = settings.config_path
-        self._unraid = UnraidConfig.from_dict(self._yaml_config.get("unraid", {}))
+        self._unraid = UnraidConfig._read(root.section("unraid"))
         self._unraid.config_path = settings.config_path
-        self._memory_management = MemoryConfig.from_dict(
-            self._yaml_config.get("memory_management", {})
-        )
+        self._memory_management = MemoryConfig._read(root.section("memory_management"))
         self._memory_management.config_path = settings.config_path
-        self._image_updates = ImageUpdatesConfig.from_dict(self._yaml_config.get("image_updates", {}))
+        self._image_updates = ImageUpdatesConfig._read(root.section("image_updates"))
         self._image_updates.config_path = settings.config_path
-        self._auto_heal = AutoHealConfig.from_dict(self._yaml_config.get("auto_heal", {}))
+        self._auto_heal = AutoHealConfig._read(root.section("auto_heal"))
         self._auto_heal.config_path = settings.config_path
-        self._nut = NutConfig.from_dict(self._yaml_config.get("nut", {}))
+        self._nut = NutConfig._read(root.section("nut"))
         self._nut.config_path = settings.config_path
+
+        self._ignored = root.str_list("ignored_containers")
+        self._protected = root.str_list("protected_containers")
+        self._log_watching = _read_log_watching(root.section("log_watching"))
+        root.warn_unknown()
 
     @property
     def ignored_containers(self) -> list[str]:
         """Get list of container names to ignore."""
-        return self._yaml_config.get("ignored_containers") or []
+        return self._ignored
 
     @property
     def protected_containers(self) -> list[str]:
         """Get list of containers that cannot be controlled via Telegram."""
-        return self._yaml_config.get("protected_containers") or []
+        return self._protected
 
     @property
     def log_watching(self) -> dict[str, Any]:
         """Get log watching configuration.
 
-        Returns YAML config if present, otherwise returns defaults.
+        Each key present in YAML overrides its default; missing keys (or a
+        bare ``log_watching:``) keep the defaults.
         """
-        config = self._yaml_config.get("log_watching")
-        if config is None:
-            config = dict(DEFAULT_LOG_WATCHING)
-        # Ensure container_ignores exists
-        if "container_ignores" not in config:
-            config["container_ignores"] = {}
-        return config
+        return self._log_watching
 
     @property
     def telegram_bot_token(self) -> str:
@@ -894,6 +1121,7 @@ class ConfigWriter:
         unraid_port: int,
         unraid_use_ssl: bool,
         watched_containers: list[str],
+        unraid_verify_ssl: bool = True,
         protected_containers: list[str],
         ignored_containers: list[str],
         priority_containers: list[str],
@@ -904,6 +1132,7 @@ class ConfigWriter:
             unraid_host=unraid_host,
             unraid_port=unraid_port,
             unraid_use_ssl=unraid_use_ssl,
+            unraid_verify_ssl=unraid_verify_ssl,
             watched_containers=watched_containers,
             protected_containers=protected_containers,
             ignored_containers=ignored_containers,
@@ -919,6 +1148,7 @@ class ConfigWriter:
         unraid_port: int,
         unraid_use_ssl: bool,
         watched_containers: list[str],
+        unraid_verify_ssl: bool = True,
         protected_containers: list[str],
         ignored_containers: list[str],
         priority_containers: list[str],
@@ -937,6 +1167,7 @@ class ConfigWriter:
                 unraid_host=unraid_host,
                 unraid_port=unraid_port,
                 unraid_use_ssl=unraid_use_ssl,
+                unraid_verify_ssl=unraid_verify_ssl,
                 watched_containers=watched_containers,
                 protected_containers=protected_containers,
                 ignored_containers=ignored_containers,
@@ -961,6 +1192,7 @@ class ConfigWriter:
                 unraid_section["host"] = unraid_host
             unraid_section["port"] = unraid_port
             unraid_section["use_ssl"] = unraid_use_ssl
+            unraid_section["verify_ssl"] = unraid_verify_ssl
 
         self._write_yaml(existing)
 
@@ -975,6 +1207,7 @@ class ConfigWriter:
         unraid_port: int,
         unraid_use_ssl: bool,
         watched_containers: list[str],
+        unraid_verify_ssl: bool = True,
         protected_containers: list[str],
         ignored_containers: list[str],
         priority_containers: list[str],
@@ -1047,7 +1280,7 @@ class ConfigWriter:
                 "host": unraid_host or "your-unraid-ip",
                 "port": unraid_port,
                 "use_ssl": unraid_use_ssl,
-                "verify_ssl": True,
+                "verify_ssl": unraid_verify_ssl,
                 "polling": {
                     "system": UNRAID_POLL_SYSTEM_SECONDS,
                     "array": UNRAID_POLL_ARRAY_SECONDS,

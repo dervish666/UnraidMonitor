@@ -4,7 +4,6 @@ from typing import Any, Awaitable, Callable, TYPE_CHECKING
 from aiogram import Bot, Dispatcher, BaseMiddleware, F
 from aiogram.filters import Command, Filter
 from aiogram.types import ErrorEvent, Message, CallbackQuery, TelegramObject
-import docker
 
 from src.constants import (
     DIAGNOSE_MAX_LINES,
@@ -15,6 +14,7 @@ from src.constants import (
     LOG_MAX_LINES,
 )
 from src.state import ContainerStateManager
+from src.utils.formatting import escape_markdown, safe_reply
 from src.bot.commands import help_command, help_section_callback, help_back_callback, status_command, logs_command
 from src.bot.control_commands import (
     restart_command,
@@ -98,6 +98,7 @@ from src.bot.ups_command import (
 from src.monitors.resource_monitor import host_cpu_cores
 from src.services.container_control import ContainerController
 from src.services.diagnostic import DiagnosticService
+from src.services.docker_client import DockerClientLike
 
 if TYPE_CHECKING:
     from src.alerts.ignore_manager import IgnoreManager
@@ -180,6 +181,25 @@ async def unhandled_callback(callback: CallbackQuery) -> None:
     """
     logger.warning(f"Unhandled callback data: {callback.data!r}")
     await callback.answer("That button is no longer available.", show_alert=True)
+
+
+async def unknown_command(message: Message) -> None:
+    """Reply to a slash command nothing registered claimed.
+
+    Silence read as the bot being down: a typo like /stauts got no answer at
+    all, because the NL handler skips anything starting with "/".
+    """
+    word = (message.text or "").split(maxsplit=1)[0][:40]
+    await safe_reply(message, f"I don't know {escape_markdown(word)}. /help lists the commands.")
+
+
+def register_unknown_command(dp: Dispatcher) -> None:
+    """Register the unknown-command reply. Call after every command handler.
+
+    It matches any text starting with "/", so a command registered after it
+    is unreachable (/health is registered in start_monitoring, hence there).
+    """
+    dp.message.register(unknown_command, F.text.startswith("/"))
 
 
 async def on_handler_error(event: ErrorEvent) -> bool:
@@ -423,7 +443,7 @@ def _register_manage_commands(
 def register_commands(
     dp: Dispatcher,
     state: ContainerStateManager,
-    docker_client: docker.DockerClient | None = None,
+    docker_client: DockerClientLike | None = None,
     protected_containers: list[str] | None = None,
     registry: "ProviderRegistry | None" = None,
     resource_monitor: "ResourceMonitor | None" = None,

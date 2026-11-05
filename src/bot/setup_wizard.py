@@ -25,6 +25,7 @@ from aiogram.types import (
 )
 
 from src.config import ConfigWriter
+from src.utils.formatting import escape_markdown, fit_callback, resolve_cut_name, safe_reply
 from src.services.container_classifier import (
     ContainerClassification,
     ContainerClassifier,
@@ -101,11 +102,23 @@ class WizardState(Enum):
 # ---------------------------------------------------------------------------
 
 @dataclass
+class UnraidProbe:
+    """How (and whether) the wizard reached the Unraid API."""
+
+    success: bool
+    port: int
+    use_ssl: bool
+    verify_ssl: bool
+    detail: str
+
+
+@dataclass
 class WizardSession:
     state: WizardState = WizardState.IDLE
     unraid_host: str | None = None
     unraid_port: int = 80
     unraid_use_ssl: bool = False
+    unraid_verify_ssl: bool = True
     classifications: list[ContainerClassification] = field(default_factory=list)
     adjusting_category: str | None = None
 
@@ -205,12 +218,13 @@ class SetupWizard:
         session.state = WizardState.CONNECTING
 
     def connection_result(
-        self, user_id: int, success: bool, port: int, use_ssl: bool
+        self, user_id: int, success: bool, port: int, use_ssl: bool, verify_ssl: bool = True,
     ) -> None:
         session = self._get_or_create_session(user_id)
         if success:
             session.unraid_port = port
             session.unraid_use_ssl = use_ssl
+            session.unraid_verify_ssl = verify_ssl
             session.state = WizardState.REVIEW_CONTAINERS
         else:
             session.state = WizardState.AWAITING_HOST
@@ -249,54 +263,93 @@ class SetupWizard:
 
     # -- connection test --------------------------------------------------
 
-    async def test_unraid_connection(
-        self, host: str, api_key: str
-    ) -> tuple[bool, int, bool]:
-        """Try connecting to Unraid API via HTTPS:443 then HTTP:80.
+    async def test_unraid_connection(self, host: str, api_key: str) -> "UnraidProbe":
+        """Find how this server answers, safest way first.
 
-        Returns (success, port, use_ssl).
+        1. HTTPS with the certificate verified.
+        2. HTTPS without verification, only when step 1 failed on the
+           certificate (Unraid's default self-signed one). Saved as
+           verify_ssl: false and said so.
+        3. Plain HTTP on 80, only when HTTPS is not served at all. The API
+           key then crosses the LAN unencrypted, and the wizard says that too.
+
+        A reply only counts when GraphQL returns data: an invalid key comes
+        back as HTTP 200 with an ``errors`` list. A rejected key over HTTPS
+        stops the probe rather than resending the key over plain HTTP.
         """
-        attempts = [
-            (443, True),
-            (80, False),
-        ]
-        for port, use_ssl in attempts:
+        import ssl as ssl_module
+
+        unverified = ssl_module.create_default_context()
+        unverified.check_hostname = False
+        unverified.verify_mode = ssl_module.CERT_NONE
+
+        async def attempt(port: int, use_ssl: bool, ssl_arg: Any) -> tuple[str, str]:
+            """("ok"|"rejected"|"cert"|"unreachable", detail)."""
             scheme = "https" if use_ssl else "http"
             url = f"{scheme}://{host}:{port}/graphql"
             try:
                 async with aiohttp.ClientSession() as session:
-                    headers = {
-                        "x-api-key": api_key,
-                        "Content-Type": "application/json",
-                        "apollo-require-preflight": "true",
-                    }
-                    # For HTTPS, first try with verification disabled since Unraid
-                    # often uses self-signed certs. The actual client respects
-                    # the verify_ssl config setting for ongoing connections.
-                    import ssl as ssl_module
-                    ssl_ctx = None
-                    if use_ssl:
-                        ssl_ctx = ssl_module.create_default_context()
-                        ssl_ctx.check_hostname = False
-                        ssl_ctx.verify_mode = ssl_module.CERT_NONE
                     async with session.post(
                         url,
-                        headers=headers,
+                        headers={
+                            "x-api-key": api_key,
+                            "Content-Type": "application/json",
+                            "apollo-require-preflight": "true",
+                        },
                         json={"query": "{ info { os { hostname } } }"},
                         timeout=aiohttp.ClientTimeout(total=10),
-                        ssl=ssl_ctx if ssl_ctx is not None else False,
+                        ssl=ssl_arg,
                     ) as resp:
-                        logger.info(
-                            f"Unraid connection test {scheme}://{host}:{port} "
-                            f"-> status {resp.status}"
-                        )
-                        if resp.status < 400:
-                            return (True, port, use_ssl)
+                        logger.info(f"Unraid connection test {url} -> status {resp.status}")
+                        if resp.status in (401, 403):
+                            return "rejected", "the API key was rejected"
+                        if resp.status >= 400:
+                            return "unreachable", f"HTTP {resp.status}"
+                        try:
+                            body = await resp.json(content_type=None)
+                        except Exception:
+                            return "unreachable", "the reply was not GraphQL"
+                        if not isinstance(body, dict):
+                            return "unreachable", "the reply was not GraphQL"
+                        errors = body.get("errors")
+                        if errors:
+                            first = errors[0] if isinstance(errors, list) and errors else errors
+                            message = first.get("message") if isinstance(first, dict) else str(first)
+                            return "rejected", f"Unraid said: {str(message)[:200]}"
+                        if not isinstance(body.get("data"), dict) or not body["data"].get("info"):
+                            return "unreachable", "the reply had no server info"
+                        return "ok", ""
+            except (aiohttp.ClientConnectorCertificateError, ssl_module.SSLCertVerificationError) as e:
+                logger.info(f"Unraid connection test {url}: certificate not trusted ({e})")
+                return "cert", "certificate not trusted"
             except Exception as e:
-                logger.info(f"Unraid connection test {scheme}://{host}:{port} failed: {e}")
-                continue
+                logger.info(f"Unraid connection test {url} failed: {e}")
+                return "unreachable", str(e)[:200] or type(e).__name__
 
-        return (False, 0, False)
+        outcome, detail = await attempt(443, True, None)
+        if outcome == "ok":
+            return UnraidProbe(True, 443, True, True, "")
+        if outcome == "rejected":
+            return UnraidProbe(False, 443, True, True, detail)
+        if outcome == "cert":
+            outcome, detail = await attempt(443, True, unverified)
+            if outcome == "ok":
+                return UnraidProbe(
+                    True, 443, True, False,
+                    "HTTPS with a self-signed certificate, so it is not verified "
+                    "(saved as verify_ssl: false).",
+                )
+            if outcome == "rejected":
+                return UnraidProbe(False, 443, True, False, detail)
+
+        outcome, http_detail = await attempt(80, False, False)
+        if outcome == "ok":
+            return UnraidProbe(
+                True, 80, False, True,
+                "⚠️ Plain HTTP: HTTPS is not available, so the API key travels "
+                "unencrypted on your network. Enable SSL in Unraid to fix this.",
+            )
+        return UnraidProbe(False, 0, False, True, http_detail if outcome == "rejected" else detail)
 
     # -- docker containers ------------------------------------------------
 
@@ -420,6 +473,7 @@ class SetupWizard:
                 unraid_host=session.unraid_host,
                 unraid_port=session.unraid_port,
                 unraid_use_ssl=session.unraid_use_ssl,
+                unraid_verify_ssl=session.unraid_verify_ssl,
                 watched_containers=watched,
                 protected_containers=protected,
                 ignored_containers=ignored,
@@ -432,6 +486,7 @@ class SetupWizard:
                 unraid_host=session.unraid_host,
                 unraid_port=session.unraid_port,
                 unraid_use_ssl=session.unraid_use_ssl,
+                unraid_verify_ssl=session.unraid_verify_ssl,
                 watched_containers=watched,
                 protected_containers=protected,
                 ignored_containers=ignored,
@@ -477,14 +532,14 @@ def format_classification_summary(
         lines.append(f"{emoji} *{label}*")
         for name in sorted(names):
             suffix = " \\*" if name in ai_names else ""
-            lines.append(f"  - {name}{suffix}")
+            lines.append(f"  - {escape_markdown(name)}{suffix}")
         lines.append("")
 
     if uncategorised:
         lines.append("*Uncategorised*")
         for name in sorted(uncategorised):
             suffix = " \\*" if name in ai_names else ""
-            lines.append(f"  - {name}{suffix}")
+            lines.append(f"  - {escape_markdown(name)}{suffix}")
         lines.append("")
 
     if has_ai:
@@ -533,7 +588,7 @@ def build_adjust_keyboard(
         buttons.append([
             InlineKeyboardButton(
                 text=f"{mark} {c.name}",
-                callback_data=f"setup:toggle:{category}:{c.name}",
+                callback_data=fit_callback(f"setup:toggle:{category}:", c.name),
             )
         ])
 
@@ -580,14 +635,12 @@ def create_start_handler(
                 host, port, use_ssl = existing
                 welcome += " and Unraid server.\n\n"
                 welcome += f"Testing existing connection to `{host}`..."
-                await message.answer(welcome, parse_mode="Markdown")
+                await safe_reply(message, welcome)
 
                 api_key = wizard._unraid_api_key or ""
-                success, found_port, found_ssl = await wizard.test_unraid_connection(
-                    host, api_key
-                )
+                probe = await wizard.test_unraid_connection(host, api_key)
 
-                if success:
+                if probe.success:
                     # Don't update session with new port/ssl -- keep existing config as-is
                     wizard.connection_result(user_id, True, port, use_ssl)
                     await message.answer(
@@ -597,14 +650,13 @@ def create_start_handler(
                     classifications = await wizard.classify_containers(user_id)
                     summary = format_classification_summary(classifications)
                     keyboard = build_summary_keyboard()
-                    await message.answer(
-                        summary, reply_markup=keyboard, parse_mode="Markdown"
-                    )
+                    await safe_reply(message, summary, reply_markup=keyboard)
                     return
 
                 # Connection failed - fall through to ask for IP
-                await message.answer(
-                    f"Could not connect to `{host}`.\n\n"
+                await safe_reply(
+                    message,
+                    f"Could not connect to `{host}` ({escape_markdown(probe.detail)}).\n\n"
                     "Please enter your Unraid server IP or hostname "
                     "(e.g. `192.168.0.190`):",
                     parse_mode="Markdown",
@@ -616,7 +668,7 @@ def create_start_handler(
                     "Please enter your Unraid server IP or hostname "
                     "(e.g. `192.168.0.190`):"
                 )
-                await message.answer(welcome, parse_mode="Markdown")
+                await safe_reply(message, welcome)
         else:
             welcome += ".\n\n"
             welcome += "Scanning Docker containers..."
@@ -625,7 +677,7 @@ def create_start_handler(
             classifications = await wizard.classify_containers(user_id)
             summary = format_classification_summary(classifications)
             keyboard = build_summary_keyboard()
-            await message.answer(summary, reply_markup=keyboard, parse_mode="Markdown")
+            await safe_reply(message, summary, reply_markup=keyboard)
 
     return handler
 
@@ -665,34 +717,37 @@ def create_host_handler(
 
         error = _validate_host(host)
         if error:
-            await message.answer(
-                f"{error}\n\nPlease enter a valid Unraid server IP or hostname:",
-                parse_mode="Markdown",
+            await safe_reply(
+                message, f"{error}\n\nPlease enter a valid Unraid server IP or hostname:"
             )
             return
 
         wizard.set_host(user_id, host)
 
-        await message.answer(f"Testing connection to `{host}`...", parse_mode="Markdown")
+        await safe_reply(message, f"Testing connection to `{host}`...")
 
         api_key = wizard._unraid_api_key or ""
-        success, port, use_ssl = await wizard.test_unraid_connection(host, api_key)
+        probe = await wizard.test_unraid_connection(host, api_key)
 
-        wizard.connection_result(user_id, success, port, use_ssl)
+        wizard.connection_result(
+            user_id, probe.success, probe.port, probe.use_ssl, probe.verify_ssl,
+        )
 
-        if success:
-            scheme = "HTTPS" if use_ssl else "HTTP"
+        if probe.success:
+            scheme = "HTTPS" if probe.use_ssl else "HTTP"
+            note = f"\n{probe.detail}" if probe.detail else ""
             await message.answer(
-                f"Connected to Unraid via {scheme} on port {port}.\n\n"
+                f"Connected to Unraid via {scheme} on port {probe.port}.{note}\n\n"
                 "Now scanning Docker containers..."
             )
             classifications = await wizard.classify_containers(user_id)
             summary = format_classification_summary(classifications)
             keyboard = build_summary_keyboard()
-            await message.answer(summary, reply_markup=keyboard, parse_mode="Markdown")
+            await safe_reply(message, summary, reply_markup=keyboard)
         else:
-            await message.answer(
-                f"Could not connect to `{host}` on port 443 or 80.\n\n"
+            await safe_reply(
+                message,
+                f"Could not connect to `{host}`: {escape_markdown(probe.detail)}\n\n"
                 "Please check the IP/hostname and try again:",
                 parse_mode="Markdown",
             )
@@ -751,6 +806,9 @@ def create_toggle_callback(
         container_name = parts[3]
 
         session = wizard.get_session_data(user_id)
+        container_name = resolve_cut_name(
+            container_name, [c.name for c in session.classifications]
+        ) or container_name
         target = None
         for c in session.classifications:
             if c.name == container_name:
@@ -827,13 +885,12 @@ def create_adjust_callback(
         keyboard = build_adjust_keyboard(session.classifications, category)
 
         await callback.answer()
-        if callback.message:
-            await callback.message.answer(
-                f"{emoji} *{label}*\n"
-                f"_{desc}_\n\n"
+        if isinstance(callback.message, Message):
+            await safe_reply(
+                callback.message,
+                f"{emoji} *{label}*\n_{desc}_\n\n"
                 "Tap a container to toggle it in/out of this category:",
                 reply_markup=keyboard,
-                parse_mode="Markdown",
             )
 
     return handler
@@ -857,12 +914,8 @@ def create_adjust_done_callback(
         keyboard = build_summary_keyboard()
 
         await callback.answer()
-        if callback.message:
-            await callback.message.answer(
-                summary,
-                reply_markup=keyboard,
-                parse_mode="Markdown",
-            )
+        if isinstance(callback.message, Message):
+            await safe_reply(callback.message, summary, reply_markup=keyboard)
 
     return handler
 

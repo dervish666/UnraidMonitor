@@ -9,6 +9,8 @@ from aiogram.types import Message
 
 from src import __version__ as _FALLBACK_VERSION
 from src.utils.formatting import escape_markdown, safe_reply
+from src.unraid.monitors.availability import UnraidAvailability
+from src.utils.poll_health import PollHealth
 
 if TYPE_CHECKING:
     from src.monitors.docker_events import DockerEventMonitor
@@ -78,6 +80,14 @@ def _state_line(label: str, running: bool) -> str:
     return f"  {label}: {'✅ Running' if running else '🔴 Stopped'}"
 
 
+def _poll_detail(mon: Any) -> str:
+    """' (last poll 2m ago)' from a monitor's PollHealth, or '' if it keeps none."""
+    health = getattr(mon, "poll_health", None)
+    if not isinstance(health, PollHealth):
+        return ""
+    return f" ({escape_markdown(health.describe())})"
+
+
 def _join(words: list[str]) -> str:
     """'a', 'a and b', 'a, b and c'."""
     if len(words) <= 1:
@@ -107,7 +117,7 @@ def collect_status(
 
     if monitor:
         n = len(monitor.state_manager.get_all())
-        line = f"{_state_line('Docker Events', monitor.is_running)} ({n} containers)"
+        line = f"{_state_line('Docker Events', monitor.is_running)} ({n} containers){_poll_detail(monitor)}"
         if monitor.is_running:
             items.append(StatusItem("Docker events", RUNNING, [line], count=n))
         else:
@@ -143,7 +153,7 @@ def collect_status(
          "stopped.", _FEATURES_FIX),
     ):
         if mon:
-            line = _state_line(label, mon.is_running)
+            line = _state_line(label, mon.is_running) + _poll_detail(mon)
             if mon.is_running:
                 items.append(StatusItem(name, RUNNING, [line]))
             else:
@@ -181,12 +191,26 @@ def _ups_status(ups_monitor: Any) -> StatusItem:
                 "Check NUT\\_USERNAME and NUT\\_PASSWORD."
             )
         return StatusItem("UPS", BROKEN, ["  UPS: 🔴 Stopped"], detail=detail)
+    describe = getattr(ups_monitor, "describe_poll", None)
+    text = describe() if callable(describe) else ""
+    poll = f" ({escape_markdown(text)})" if isinstance(text, str) and text else ""
     if ups_monitor.is_available:
-        return StatusItem("UPS", RUNNING, [f"  UPS: ✅ {ups_monitor.ups_name or 'connected'}"])
+        return StatusItem("UPS", RUNNING, [f"  UPS: ✅ {ups_monitor.ups_name or 'connected'}{poll}"])
+    misconfigured = getattr(ups_monitor, "misconfigured", None)
+    if isinstance(misconfigured, str):
+        return StatusItem(
+            "UPS", BROKEN, [f"  UPS: 🔴 Misconfigured ({escape_markdown(misconfigured)})"],
+            detail=(
+                f"the NUT server at {target} answered but does not serve the configured UPS. "
+                "Set nut.ups\\_name to one it lists."
+            ),
+        )
 
     # Never "OK": a monitor that cannot reach upsd knows nothing.
     reason = ups_monitor.last_error or "no reading yet"
-    health = [f"  UPS: ⚠️ Unavailable ({reason})"]
+    if isinstance(text, str) and text:
+        reason = text
+    health = [f"  UPS: ⚠️ Unavailable ({escape_markdown(reason)})"]
     if not ups_monitor.has_polled:
         # The poll loop is a task started just before the startup message; its
         # first answer may not be in yet. Not asked is not the same as down.
@@ -209,7 +233,14 @@ def _unraid_status(client: Any, system: Any, array: Any, notifications: Any) -> 
             "Unraid", OFF, ["  Unraid: ⚪ Not configured"],
             fix="Set UNRAID\\_API\\_KEY to turn {it} on.",
         )
-    health = [f"  Unraid: {'✅ Connected' if client.is_connected else '🔴 Disconnected'}"]
+    detail = ""
+    ladder = getattr(system or array, "availability", None)
+    if isinstance(ladder, UnraidAvailability):
+        detail = ladder.describe()
+    elif not client.is_connected and isinstance(getattr(client, "last_error", None), str):
+        detail = client.last_error
+    suffix = f" ({escape_markdown(detail)})" if detail else ""
+    health = [f"  Unraid: {'✅ Connected' if client.is_connected else '🔴 Disconnected'}{suffix}"]
     subs = [(label, mon) for label, mon in (
         ("System", system), ("Array", array), ("Notifications", notifications),
     ) if mon]

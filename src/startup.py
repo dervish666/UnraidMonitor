@@ -359,7 +359,7 @@ def _init_nl_processor(
     config: AppConfig,
 ) -> Any:
     has_nl_provider = registry.get_provider("nl_processor") is not None
-    if not has_nl_provider or not monitor.shared_client:
+    if not has_nl_provider:
         return None
 
     from src.services.nl_processor import NLProcessor
@@ -367,7 +367,7 @@ def _init_nl_processor(
 
     nl_executor = NLToolExecutor(
         state=state,
-        docker_client=monitor.shared_client,  # type: ignore[arg-type]
+        docker_client=monitor.shared_client,
         protected_containers=config.protected_containers,
         controller=None,
         resource_monitor=resource_monitor,
@@ -462,20 +462,20 @@ async def _start_background_monitors(
     chat_id_store: ChatIdStore,
     bot: Bot,
 ) -> None:
-    bg.add_task(asyncio.create_task(bg.monitor.start()))  # type: ignore[union-attr]
-    bg.add_task(asyncio.create_task(bg.log_watcher.start()))  # type: ignore[union-attr]
+    bg.add_task(asyncio.create_task(bg.monitor.start(), name="docker-events"))  # type: ignore[union-attr]
+    bg.add_task(asyncio.create_task(bg.log_watcher.start(), name="log-watcher"))  # type: ignore[union-attr]
 
     if resource_monitor is not None:
-        bg.add_task(asyncio.create_task(resource_monitor.start()))
+        bg.add_task(asyncio.create_task(resource_monitor.start(), name="resource-monitor"))
 
     if bg.memory_monitor is not None:
-        bg.add_task(asyncio.create_task(bg.memory_monitor.start()))
+        bg.add_task(asyncio.create_task(bg.memory_monitor.start(), name="memory-monitor"))
 
     if bg.image_update_monitor is not None:
-        bg.add_task(asyncio.create_task(bg.image_update_monitor.start()))
+        bg.add_task(asyncio.create_task(bg.image_update_monitor.start(), name="image-updates"))
 
     if uc.ups_monitor is not None:
-        bg.add_task(asyncio.create_task(uc.ups_monitor.start()))
+        bg.add_task(asyncio.create_task(uc.ups_monitor.start(), name="ups-monitor"))
 
     if uc.client:
         try:
@@ -495,13 +495,13 @@ async def _start_background_monitors(
                     except Exception as send_err:
                         logger.error(f"Failed to send Unraid warning to {cid}: {send_err}")
             if uc.system_monitor:
-                bg.add_task(asyncio.create_task(uc.system_monitor.start()))
+                bg.add_task(asyncio.create_task(uc.system_monitor.start(), name="unraid-system"))
                 logger.info("Unraid system monitoring started")
             if uc.array_monitor:
-                bg.add_task(asyncio.create_task(uc.array_monitor.start()))
+                bg.add_task(asyncio.create_task(uc.array_monitor.start(), name="unraid-array"))
                 logger.info("Unraid array monitoring started")
             if uc.notification_monitor:
-                bg.add_task(asyncio.create_task(uc.notification_monitor.start()))
+                bg.add_task(asyncio.create_task(uc.notification_monitor.start(), name="unraid-notifications"))
                 logger.info("Unraid notification relay started")
         except Exception as e:
             logger.error(f"Failed to connect to Unraid: {e}")
@@ -571,12 +571,17 @@ async def start_monitoring(
         docker_socket_path=docker_config.socket_path,
     )
 
+    # Docker being down must not take Unraid and UPS monitoring with it. The
+    # shared client starts disconnected and the monitors connect when Docker
+    # answers; Docker commands report the outage meanwhile.
     try:
         monitor.connect()
         await asyncio.to_thread(monitor.load_initial_state)
     except Exception as e:
-        logger.error(f"Failed to connect to Docker: {e}")
-        raise
+        logger.error(
+            f"Docker is not reachable ({e}). Unraid and UPS monitoring continue; "
+            "container monitoring starts when Docker answers."
+        )
 
     bg.monitor = monitor
 
@@ -594,8 +599,7 @@ async def start_monitoring(
     try:
         log_watcher.connect()
     except Exception as e:
-        logger.error(f"Failed to initialize log watcher: {e}")
-        raise
+        logger.warning(f"Log watcher will connect when Docker answers: {e}")
 
     bg.log_watcher = log_watcher
 
@@ -603,7 +607,7 @@ async def start_monitoring(
     resource_config = config.resource_monitoring
     if resource_config.enabled:
         resource_monitor = ResourceMonitor(
-            docker_client=monitor.shared_client,  # type: ignore[arg-type]
+            docker_client=monitor.shared_client,
             config=resource_config,
             alert_manager=alert_manager,
             rate_limiter=rate_limiter,
@@ -632,7 +636,7 @@ async def start_monitoring(
     if config.image_updates.enabled:
         from src.monitors.image_update_monitor import ImageUpdateMonitor
         image_update_monitor = ImageUpdateMonitor(
-            docker_client=monitor.shared_client,  # type: ignore[arg-type]
+            docker_client=monitor.shared_client,
             config=config.image_updates,
             alert_manager=alert_manager,
             ignored_containers=config.ignored_containers,
@@ -652,7 +656,7 @@ async def start_monitoring(
     controller, diagnostic_service = register_commands(
         dp,
         state,
-        docker_client=monitor.shared_client,  # type: ignore[arg-type]
+        docker_client=monitor.shared_client,
         protected_containers=config.protected_containers,
         registry=registry,
         resource_monitor=resource_monitor,
@@ -724,6 +728,9 @@ async def start_monitoring(
         ),
         AiogramCommand("health"),
     )
+    # Last message handler: anything after it that starts with "/" is unreachable.
+    from src.bot.telegram_bot import register_unknown_command
+    register_unknown_command(dp)
 
     # Publish last: the menu is a snapshot of what is registered right now, and
     # /health is registered here rather than in register_commands().
@@ -734,7 +741,7 @@ async def start_monitoring(
     _mute_maintenance_loop = make_mute_maintenance_loop(
         bg.mute_managers, alert_manager, chat_id_store, bot, escape_markdown,
     )
-    bg.add_task(asyncio.create_task(_mute_maintenance_loop()))
+    bg.add_task(asyncio.create_task(_mute_maintenance_loop(), name="mute-maintenance"), monitor=False)
 
     logger.info("All monitors started")
 

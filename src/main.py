@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import signal
 import sys
 from pathlib import Path
@@ -10,7 +9,7 @@ import anthropic
 import docker
 from aiogram import Dispatcher
 
-from src.config import Settings, AppConfig
+from src.config import AppConfig, Settings, describe_settings_error, unknown_env_file_keys
 from src.constants import DEFAULT_HAIKU_MODEL
 from src.alerts.manager import ChatIdStore
 from src.bot.telegram_bot import create_bot, create_dispatcher, register_setup_wizard
@@ -43,14 +42,17 @@ async def _graceful_shutdown(dp: Dispatcher) -> None:
 
 
 async def main() -> None:
-    config_path = os.environ.get("CONFIG_PATH", "config/config.yaml")
-    first_run = not Path(config_path).exists()
-
     try:
         settings = Settings()  # type: ignore[call-arg]
     except Exception as e:
-        logger.error(f"Failed to load settings from environment: {e}")
+        logger.error(f"Failed to load settings from environment: {describe_settings_error(e)}")
         sys.exit(1)
+    for key in unknown_env_file_keys():
+        logger.warning(f"Unknown key {key} in config/.env is ignored (typo?)")
+
+    # The same path AppConfig reads, so CONFIG_PATH set in config/.env counts.
+    config_path = settings.config_path
+    first_run = not Path(config_path).exists()
 
     bot = create_bot(settings.telegram_bot_token)
     allowed_users = cast(list[int], settings.telegram_allowed_users)
@@ -60,7 +62,10 @@ async def main() -> None:
     bg = _BackgroundTasks()
     # Liveness heartbeat for the Docker HEALTHCHECK — runs in wizard mode too,
     # so a container mid-setup doesn't report unhealthy.
-    bg.add_task(asyncio.create_task(heartbeat_loop()))
+    bg.add_task(
+        asyncio.create_task(heartbeat_loop(alive=bg.any_monitor_alive), name="heartbeat"),
+        monitor=False,
+    )
 
     wizard_provider = None
     if settings.anthropic_api_key:
@@ -147,7 +152,7 @@ async def main() -> None:
                     except Exception as notify_error:
                         logger.warning(f"Could not tell chat {cid} that monitor startup failed: {notify_error}")
 
-        bg.add_task(asyncio.create_task(_start_monitors_safe()))
+        bg.add_task(asyncio.create_task(_start_monitors_safe(), name="startup"), monitor=False)
 
         logger.info("Starting Telegram bot...")
         loop = asyncio.get_running_loop()

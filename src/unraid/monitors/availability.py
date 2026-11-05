@@ -10,6 +10,7 @@ import time
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from src.constants import UNRAID_UNAVAILABLE_AFTER_FAILURES
+from src.utils.poll_health import describe_poll
 
 if TYPE_CHECKING:
     from src.alerts.server_mute_manager import ServerMuteManager
@@ -39,6 +40,9 @@ class UnraidAvailability:
     @property
     def available(self) -> bool:
         return self.consecutive_failures < self._threshold
+
+    def describe(self) -> str:
+        return describe_poll(self.last_success, self.consecutive_failures, self.last_error)
 
     async def record_success(self) -> None:
         self.consecutive_failures = 0

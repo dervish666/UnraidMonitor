@@ -68,6 +68,10 @@ class UnraidSystemMonitor:
     def is_running(self) -> bool:
         return self._running
 
+    @property
+    def availability(self) -> "UnraidAvailability | None":
+        return self._availability
+
     async def start(self) -> None:
         """Start the monitoring loop.
 

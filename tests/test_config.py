@@ -73,7 +73,7 @@ def test_config_raises_on_invalid_allowed_users():
         from src.config import Settings
         with pytest.raises(ValidationError) as exc_info:
             Settings(_env_file=None)
-        assert "TELEGRAM_ALLOWED_USERS must be comma-separated integers" in str(exc_info.value)
+        assert "TELEGRAM_ALLOWED_USERS must be comma-separated numeric user IDs" in str(exc_info.value)
 
 
 def test_log_watching_container_ignores(tmp_path):

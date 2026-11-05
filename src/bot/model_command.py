@@ -14,6 +14,8 @@ from typing import Callable, Awaitable, TYPE_CHECKING
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 
+from src.utils.formatting import fit_callback, resolve_cut_name
+
 if TYPE_CHECKING:
     from src.services.llm.registry import ProviderRegistry
 
@@ -190,7 +192,7 @@ def model_provider_callback(registry: "ProviderRegistry") -> Callable[[CallbackQ
                 label = f"✓ {label}"
             if not m.supports_tools:
                 label = f"{label} (no tools)"
-            buttons.append([InlineKeyboardButton(text=label, callback_data=f"model_select:{provider_name}:{m.id}")])
+            buttons.append([InlineKeyboardButton(text=label, callback_data=fit_callback(f"model_select:{provider_name}:", m.id))])
 
         buttons.append([InlineKeyboardButton(text="← Back", callback_data="model:back")])
 
@@ -218,6 +220,11 @@ def model_select_callback(registry: "ProviderRegistry") -> Callable[[CallbackQue
         # else is a spoofed callback — reject rather than persist it.
         providers = registry.get_available_providers()
         provider = next((p for p in providers if p.name == provider_name), None)
+        if provider is not None:
+            # Long Ollama tags (hf.co/...:Q4_K_M) are cut to fit the button.
+            model_name = resolve_cut_name(
+                model_name, [m.id for m in provider.available_models]
+            ) or model_name
         if provider is None or model_name not in {m.id for m in provider.available_models}:
             await callback.answer("Invalid selection")
             return

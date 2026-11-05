@@ -104,6 +104,11 @@ class UnraidClientWrapper:
         self._use_ssl = use_ssl
         self._session: aiohttp.ClientSession | None = None
         self._connected = False
+        # The session can be open while every query fails (GraphQL errors, a
+        # key that lost its permissions). Health follows the last query, not
+        # the socket, or /health shows "Connected" over a dead API.
+        self._last_query_ok = True
+        self.last_error: str | None = None
 
         # Build URL based on protocol
         protocol = "https" if use_ssl else "http"
@@ -113,8 +118,8 @@ class UnraidClientWrapper:
 
     @property
     def is_connected(self) -> bool:
-        """Check if client is connected."""
-        return self._connected
+        """Connected, and the last query got a usable answer."""
+        return self._connected and self._last_query_ok
 
     async def connect(self) -> None:
         """Establish connection to Unraid server."""
@@ -162,13 +167,22 @@ class UnraidClientWrapper:
         try:
             payload = {"query": "{ info { os { hostname } } }"}
             async with self._session.post(self._base_url, json=payload) as response:
+                problem = None
                 if response.status != 200:
-                    text = self._safe_body(await response.text())
-                    logger.error(f"Unraid connectivity test failed: {response.status} - {text}")
+                    problem = f"{response.status} - {self._safe_body(await response.text())}"
+                else:
+                    body = await response.json(content_type=None)
+                    if not isinstance(body, dict) or body.get("errors") or not body.get("data"):
+                        errors = body.get("errors") if isinstance(body, dict) else body
+                        problem = f"GraphQL errors: {self._safe_body(str(errors))}"
+                if problem:
+                    self.last_error = problem
+                    logger.error(f"Unraid connectivity test failed: {problem}")
                     await self._session.close()
                     self._session = None
                     return
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"Unraid connectivity test failed: {e}")
             if self._session:
                 await self._session.close()
@@ -176,6 +190,8 @@ class UnraidClientWrapper:
             return
 
         self._connected = True
+        self._last_query_ok = True
+        self.last_error = None
         logger.info(f"Connected to Unraid server at {self._host}")
 
     async def disconnect(self) -> None:
@@ -237,9 +253,21 @@ class UnraidClientWrapper:
             payload["variables"] = variables
 
         try:
+            return await self._post(payload)
+        except UnraidConnectionError as e:
+            self._last_query_ok = False
+            self.last_error = str(e)
+            raise
+
+    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        assert self._session is not None
+        try:
             async with self._session.post(self._base_url, json=payload) as response:
                 if response.status != 200:
                     text = self._safe_body(await response.text())
+                    # A 401/403/5xx is the server refusing us, not one bad
+                    # query: reconnect (and re-test) on the next call.
+                    self._connected = False
                     raise UnraidConnectionError(
                         f"GraphQL request failed: {response.status} - {text}"
                     )
@@ -258,6 +286,8 @@ class UnraidClientWrapper:
                     raise UnraidConnectionError(f"GraphQL errors: {errors}")
 
                 data: dict[str, Any] = result.get("data", {})
+                self._last_query_ok = True
+                self.last_error = None
                 return data
 
         except aiohttp.ClientError as e:

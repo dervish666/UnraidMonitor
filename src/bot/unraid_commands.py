@@ -10,7 +10,7 @@ from aiogram.enums import ChatAction
 
 from src.alerts.mute_manager import parse_duration
 from src.utils.formatting import truncate_message, safe_reply, format_mute_expiry, format_uptime
-from src.unraid.monitors.array_monitor import disk_status_verdict, parity_operation_active
+from src.unraid.monitors.array_monitor import disk_status_verdict, parity_writing
 
 if TYPE_CHECKING:
     from src.unraid.monitors.system_monitor import UnraidSystemMonitor
@@ -384,7 +384,7 @@ def array_command(
 
         # Check for issues, with the array monitor's parity-aware verdict: a
         # disk being rebuilt reads DISK_INVALID and is not a fault.
-        rebuilding = parity_operation_active(array)
+        rebuilding = parity_writing(array)
         issues = []
         for device in [*disks, *parities, *caches]:
             d_status = str(device.get("status") or "UNKNOWN")

@@ -75,17 +75,29 @@ def test_log_watcher_connect():
 
 
 @pytest.mark.asyncio
-async def test_log_watcher_start_requires_connection():
+async def test_log_watcher_start_waits_for_docker():
+    """Docker down at startup: the watcher retries instead of raising."""
+    import asyncio
+    from unittest.mock import patch
+
+    import docker
+
     from src.monitors.log_watcher import LogWatcher
 
-    watcher = LogWatcher(
-        containers=["test"],
-        error_patterns=["error"],
-        ignore_patterns=[],
-    )
+    watcher = LogWatcher(containers=[], error_patterns=["error"], ignore_patterns=[])
+    attempts = iter([docker.errors.DockerException("no socket"), MagicMock()])
 
-    with pytest.raises(RuntimeError, match="Not connected to Docker"):
-        await watcher.start()
+    def fake_client(**kwargs):
+        result = next(attempts)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    with patch("src.monitors.log_watcher.docker.DockerClient", side_effect=fake_client), \
+         patch("src.monitors.log_watcher.asyncio.sleep", new=AsyncMock()):
+        await asyncio.wait_for(watcher.start(), timeout=5)
+
+    assert watcher._client is not None
 
 
 @pytest.mark.asyncio

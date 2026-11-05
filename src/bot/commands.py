@@ -11,6 +11,7 @@ from src.utils.formatting import format_bytes, format_uptime, escape_markdown, s
 from src.utils.sanitize import sanitize_logs_for_display
 from src.bot.control_commands import resolve_container
 from src.bot.resources_command import format_progress_bar
+from src.services.docker_client import DockerClientLike
 
 if TYPE_CHECKING:
     from src.monitors.resource_monitor import ResourceMonitor
@@ -40,6 +41,7 @@ _HELP_SECTIONS: dict[str, tuple[str, str, str]] = {
         "/server detailed — Full server stats\n"
         "/array — Array status and disk health\n"
         "/disks — Individual disk usage details\n"
+        "/ups — UPS status (battery, load, runtime)\n"
         "/cancel-kill — Cancel pending memory kill",
     ),
     "alerts": (
@@ -47,8 +49,8 @@ _HELP_SECTIONS: dict[str, tuple[str, str, str]] = {
         "Alerts & Ignores",
         "/mute <name> <dur> — Mute container alerts\n"
         "/unmute <name> — Unmute container\n"
-        "/mute-server <dur> — Mute server alerts\n"
-        "/unmute-server — Unmute server\n"
+        "/mute-server <dur> — Mute system, array and UPS alerts\n"
+        "/unmute-server — Unmute all three\n"
         "/mute-array <dur> — Mute array alerts\n"
         "/unmute-array — Unmute array\n"
         "/mutes — List active mutes\n"
@@ -260,7 +262,7 @@ def status_command(
 
 def logs_command(
     state: ContainerStateManager,
-    docker_client: docker.DockerClient,
+    docker_client: DockerClientLike,
     max_lines: int = 100,
     max_chars: int = 4000,
 ) -> Callable[[Message], Awaitable[None]]:

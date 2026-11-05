@@ -12,6 +12,7 @@ from typing import Any
 from src.utils.api_errors import handle_llm_error
 from src.utils.formatting import format_uptime
 from src.utils.sanitize import sanitize_container_name, sanitize_for_prompt, sanitize_logs
+from src.services.docker_client import DockerClientLike
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class DiagnosticService:
 
     def __init__(
         self,
-        docker_client: docker.DockerClient,
+        docker_client: DockerClientLike,
         provider: Any = None,
         registry: Any = None,
         feature: str = "diagnostic",

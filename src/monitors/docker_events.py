@@ -10,6 +10,7 @@ from docker.models.containers import Container
 from src.models import ContainerInfo
 from src.state import ContainerStateManager
 from src.services.docker_client import SharedDockerClient
+from src.utils.poll_health import PollHealth
 
 if TYPE_CHECKING:
     from src.alerts.manager import AlertSender
@@ -211,7 +212,9 @@ class DockerEventMonitor:
         self.mute_manager = mute_manager
         self._docker_socket_path = docker_socket_path
         self._client: docker.DockerClient | None = None
-        self._shared_client: SharedDockerClient | None = None
+        # One wrapper for the monitor's lifetime: consumers wired at startup
+        # keep it, and every (re)connect swaps the client inside it.
+        self._shared_client = SharedDockerClient(None)
         self._running = False
         # Use bounded queue to prevent memory issues under load
         self._pending_alerts: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(
@@ -220,6 +223,9 @@ class DockerEventMonitor:
         self._alert_task: asyncio.Task[None] | None = None
         self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
         self._crash_tracker = CrashTracker()
+        # "last event" counts a (re)connected stream as well as each event,
+        # so a quiet but healthy daemon does not read as stale.
+        self.poll_health = PollHealth(noun="event")
         self._unhealthy_alerted: set[str] = set()  # Track containers already alerted as unhealthy
         # Seen unhealthy but not yet announced (muted, or the send failed).
         # Docker only emits a health event on a status change, so without
@@ -241,7 +247,7 @@ class DockerEventMonitor:
         return self._crash_tracker
 
     @property
-    def shared_client(self) -> SharedDockerClient | None:
+    def shared_client(self) -> SharedDockerClient:
         """Get the shared Docker client wrapper for passing to other components."""
         return self._shared_client
 
@@ -250,10 +256,23 @@ class DockerEventMonitor:
         self._auto_healer = auto_healer
 
     def connect(self) -> None:
-        """Connect to Docker socket."""
-        self._client = docker.DockerClient(base_url=self._docker_socket_path)
-        self._shared_client = SharedDockerClient(self._client)
+        """Connect to Docker socket.
+
+        On failure the shared wrapper stays disconnected, so consumers can be
+        wired now; ``start()`` keeps retrying and fills it in.
+        """
+        try:
+            self._client = docker.DockerClient(base_url=self._docker_socket_path)
+        except Exception:
+            self._client = None
+            raise
+        self._shared_client.replace(self._client)
+        self.poll_health.ok()
         logger.info("Connected to Docker socket")
+
+    @property
+    def connected(self) -> bool:
+        return self._client is not None
 
     def load_initial_state(self, containers: list[Any] | None = None) -> None:
         """Load all containers into state manager.
@@ -279,12 +298,28 @@ class DockerEventMonitor:
         logger.info(f"Loaded {len(containers)} containers into state")
 
     async def start(self) -> None:
-        """Start monitoring Docker events with automatic reconnection."""
-        if not self._client:
-            raise RuntimeError("Not connected to Docker")
+        """Start monitoring Docker events with automatic reconnection.
 
+        If Docker was unreachable at startup, keep trying with backoff; the
+        rest of the bot runs meanwhile.
+        """
         self._running = True
         self._loop = asyncio.get_event_loop()
+        while self._running and not self._client:
+            try:
+                await asyncio.to_thread(self._reconnect)
+                self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
+                logger.info("Connected to Docker after startup")
+            except Exception as e:
+                self.poll_health.failed(e)
+                logger.warning(
+                    f"Docker still unreachable ({e}); retrying in {self._backoff_seconds}s"
+                )
+                self._client = None
+                await asyncio.sleep(self._backoff_seconds)
+                self._backoff_seconds = min(self._backoff_seconds * 2, self.MAX_BACKOFF_SECONDS)
+        if not self._running:
+            return
         logger.info("Starting Docker event monitor")
 
         # Start the alert processor task
@@ -305,6 +340,7 @@ class DockerEventMonitor:
                 if not self._running:
                     break
 
+                self.poll_health.failed(e)
                 logger.error(f"Docker event monitor error: {e}")
                 logger.info(f"Reconnecting in {self._backoff_seconds} seconds...")
 
@@ -323,6 +359,7 @@ class DockerEventMonitor:
                     self._backoff_seconds = self.INITIAL_BACKOFF_SECONDS
                     logger.info("Reconnected to Docker")
                 except Exception as reconnect_error:
+                    self.poll_health.failed(reconnect_error)
                     logger.error(f"Reconnection failed: {reconnect_error}")
 
     def _queue_alert(self, item: dict[str, Any], kind: str) -> None:
@@ -353,8 +390,7 @@ class DockerEventMonitor:
 
         self._client = docker.DockerClient(base_url=self._docker_socket_path)
         # Update the shared wrapper so all consumers see the new client
-        if self._shared_client is not None:
-            self._shared_client.replace(self._client)
+        self._shared_client.replace(self._client)
 
         # Fetch container list once and reuse
         containers = self._client.containers.list(all=True)
@@ -365,6 +401,7 @@ class DockerEventMonitor:
 
         self.load_initial_state(containers=containers)
         self._unhealthy_alerted.clear()
+        self.poll_health.ok()
         logger.info("Docker reconnection successful")
 
     async def _process_alerts(self) -> None:
@@ -438,6 +475,7 @@ class DockerEventMonitor:
             for event in self._client.events(decode=True, filters={"type": "container"}):
                 if not self._running:
                     break
+                self.poll_health.ok()
 
                 action, detail = split_event_action(event.get("Action", ""))
                 container_name = event.get("Actor", {}).get("Attributes", {}).get("name", "")

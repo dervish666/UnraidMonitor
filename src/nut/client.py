@@ -40,6 +40,13 @@ class NutProtocolError(NutError):
     """upsd said something the protocol does not allow."""
 
 
+class NutConfigError(NutProtocolError):
+    """upsd answered, but our settings do not match it (wrong or ambiguous UPS name).
+
+    Not "no NUT server": somebody runs one and expects alerts from it.
+    """
+
+
 # ups.status is an opaque string of space-separated tokens. Meanings are from
 # docs/new-drivers.txt in the NUT source. ALARM is not raised by drivers
 # directly any more but still appears, prepended, when an alarm is committed.
@@ -113,6 +120,8 @@ def _raise_for_error(line: str) -> None:
         raise NutAuthError("upsd refused the credentials (ACCESS-DENIED)")
     if code in ("DRIVER-NOT-CONNECTED", "DATA-STALE"):
         raise NutUnavailable(f"upsd cannot read the UPS ({code})")
+    if code == "UNKNOWN-UPS":
+        raise NutConfigError("upsd has no UPS by that name (UNKNOWN-UPS)")
     raise NutProtocolError(f"upsd returned ERR {code}")
 
 
@@ -174,7 +183,7 @@ class NutClient:
                 if not names:
                     raise NutUnavailable(f"{self.target} serves no UPS")
                 if len(names) > 1:
-                    raise NutProtocolError(
+                    raise NutConfigError(
                         f"{self.target} serves {len(names)} UPS devices "
                         f"({', '.join(names)}); set nut.ups_name to pick one"
                     )

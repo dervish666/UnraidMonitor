@@ -9,10 +9,12 @@ from src.constants import (
     NOTIFICATION_IMPORTANCE_LEVELS,
     UNRAID_NOTIFICATION_MIN_IMPORTANCE,
 )
-from src.utils.formatting import format_mute_expiry, safe_edit, escape_markdown
+from src.utils.formatting import escape_markdown, fit_callback, format_mute_expiry, resolve_cut_name, safe_edit
 from src.bot.commands import format_status_summary
 from src.bot.resources_command import format_resources_summary
 from src.bot.unraid_commands import format_server_brief, format_server_detailed, format_disks
+
+from src.alerts.ignore_manager import ignore_key
 
 if TYPE_CHECKING:
     from src.alerts.ignore_manager import IgnoreManager
@@ -240,7 +242,7 @@ def manage_ignores_callback(
             buttons.append([
                 InlineKeyboardButton(
                     text=f"{container} ({count})",
-                    callback_data=f"manage:ignores:{container}",
+                    callback_data=fit_callback("manage:ignores:", container),
                 )
             ])
 
@@ -276,7 +278,7 @@ def _build_ignore_detail_keyboard(
         buttons.append([
             InlineKeyboardButton(
                 text=f"❌ {i}. {display[:30]}",
-                callback_data=f"mdi:{container}:{actual_index}",
+                callback_data=fit_callback("mdi:", container, f":{ignore_key(pattern)}"),
             )
         ])
 
@@ -297,7 +299,10 @@ def manage_ignores_container_callback(
             await callback.answer("Invalid callback data")
             return
 
-        container = parts[2]
+        container = resolve_cut_name(parts[2], ignore_manager.get_containers_with_runtime_ignores())
+        if container is None:
+            await callback.answer("No ignores found")
+            return
 
         ignores = ignore_manager.get_runtime_ignores(container)
 
@@ -319,30 +324,22 @@ def manage_ignores_container_callback(
 def manage_delete_ignore_callback(
     ignore_manager: "IgnoreManager",
 ) -> Callable[[CallbackQuery], Awaitable[None]]:
-    """Factory for delete ignore button callback (mdi:{container}:{index})."""
+    """Factory for delete ignore button callback (mdi:{container}:{key}).
+
+    The key is ``ignore_key(pattern)``, so a button on a stale list deletes the
+    pattern it shows or nothing, never whatever slid into its old position.
+    """
 
     async def handler(callback: CallbackQuery) -> None:
         data = callback.data or ""
-        # Use rsplit to handle container names with colons: mdi:{container}:{index}
-        parts = data.rsplit(":", 1)
-        if len(parts) < 2:
+        # rsplit: container names may contain colons
+        prefix, _, key = data.rpartition(":")
+        if not prefix.startswith("mdi:") or not key:
             await callback.answer("Invalid callback data")
             return
+        container = resolve_cut_name(prefix[4:], ignore_manager.get_containers_with_runtime_ignores())
 
-        try:
-            actual_index = int(parts[1])
-        except ValueError:
-            await callback.answer("Invalid callback data")
-            return
-
-        # Extract container from prefix: "mdi:{container}"
-        prefix = parts[0]
-        if not prefix.startswith("mdi:"):
-            await callback.answer("Invalid callback data")
-            return
-        container = prefix[4:]  # Strip "mdi:"
-
-        if ignore_manager.remove_runtime_ignore(container, actual_index):
+        if container is not None and ignore_manager.remove_runtime_ignore_by_key(container, key):
             await callback.answer("Ignore removed")
 
             # Re-render the ignore list for this container
@@ -360,7 +357,7 @@ def manage_delete_ignore_callback(
                     text, keyboard = _build_ignore_detail_keyboard(container, ignores)
                     await safe_edit(callback.message, text, reply_markup=keyboard)
         else:
-            await callback.answer("Failed to remove ignore")
+            await callback.answer("That ignore is already gone. Reopen /manage for the current list.")
 
     return handler
 
@@ -796,7 +793,7 @@ def _build_container_picker(
     for name in candidates:
         mark = "✅" if name in selected else "❌"
         buttons.append([
-            InlineKeyboardButton(text=f"{mark} {name}", callback_data=f"{toggle_prefix}:{name}")
+            InlineKeyboardButton(text=f"{mark} {name}", callback_data=fit_callback(f"{toggle_prefix}:", name))
         ])
 
     buttons.append([
@@ -921,10 +918,10 @@ def _toggle_in_picker(
         if len(parts) < 2 or not parts[1]:
             await callback.answer("Invalid selection")
             return
-        container = parts[1]
         user_id = callback.from_user.id if callback.from_user else 0
 
         candidates = _picker_candidates(state, protected_containers)
+        container = resolve_cut_name(parts[1], candidates) or parts[1]
         if container not in candidates:
             # Spoofed or stale callback data — only real, non-protected
             # containers may be toggled into the list.

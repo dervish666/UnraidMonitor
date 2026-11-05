@@ -13,6 +13,7 @@ from src.config import MemoryConfig
 from src.constants import MEMORY_CRITICAL_EXIT_MARGIN, MEMORY_TOP_CONSUMERS
 from src.monitors.resource_monitor import parse_container_stats
 from src.utils.formatting import format_bytes
+from src.services.docker_client import DockerClientLike
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class MemoryMonitor:
 
     def __init__(
         self,
-        docker_client: docker.DockerClient,
+        docker_client: DockerClientLike,
         config: MemoryConfig,
         on_alert: Callable[[str, str, str, list[KillableEntry], list[KillableEntry]], Awaitable[None]],
         on_ask_restart: Callable[[str], Awaitable[None]],
@@ -166,7 +167,8 @@ class MemoryMonitor:
                 container = self._docker.containers.get(name)
                 if container.status != "running":
                     return None
-                return container.stats(stream=False)  # type: ignore[return-value]
+                stats: dict[str, Any] = container.stats(stream=False)
+                return stats
 
             raw_stats = await asyncio.to_thread(_get_stats)
             if raw_stats is None:

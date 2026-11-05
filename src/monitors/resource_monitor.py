@@ -8,8 +8,10 @@ from typing import Any, TYPE_CHECKING
 
 import docker
 
+from src.utils.poll_health import PollHealth
 from src.constants import ALERT_REMINDER_SECONDS, EPISODE_RECOVERY_RATIO
 from src.utils.formatting import format_bytes
+from src.services.docker_client import DockerClientLike
 
 if TYPE_CHECKING:
     from src.config import ResourceConfig
@@ -176,7 +178,7 @@ class ResourceMonitor:
 
     def __init__(
         self,
-        docker_client: docker.DockerClient,
+        docker_client: DockerClientLike,
         config: "ResourceConfig",
         alert_manager: "AlertSender",
         rate_limiter: "RateLimiter",
@@ -192,6 +194,7 @@ class ResourceMonitor:
         self._running = False
         self._stats_semaphore = asyncio.Semaphore(10)
         self._last_cleanup: float = 0.0
+        self.poll_health = PollHealth()
 
     @property
     def is_running(self) -> bool:
@@ -238,7 +241,8 @@ class ResourceMonitor:
                 container = self._docker.containers.get(name)
                 if container.status != "running":
                     return None
-                return container.stats(stream=False)  # type: ignore[return-value]
+                stats: dict[str, Any] = container.stats(stream=False)
+                return stats
 
             raw_stats = await asyncio.to_thread(_get_stats)
             if raw_stats is None:
@@ -409,7 +413,9 @@ class ResourceMonitor:
         while self._running:
             try:
                 await self._poll_cycle()
+                self.poll_health.ok()
             except Exception as e:
+                self.poll_health.failed(e)
                 logger.error(f"Error in resource monitor poll cycle: {e}")
 
             # Wait for next poll

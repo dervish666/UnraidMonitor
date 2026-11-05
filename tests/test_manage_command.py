@@ -26,7 +26,7 @@ from src.bot.manage_command import (
     ContainerSelectionState,
     _build_manage_keyboard,
 )
-from src.alerts.ignore_manager import IgnoreManager
+from src.alerts.ignore_manager import IgnoreManager, ignore_key
 from src.alerts.mute_manager import MuteManager
 from src.models import ContainerInfo
 from src.state import ContainerStateManager
@@ -190,7 +190,7 @@ async def test_manage_delete_ignore(ignore_manager):
 
     handler = manage_delete_ignore_callback(ignore_manager)
     callback = AsyncMock()
-    callback.data = "mdi:plex:0"  # Delete first ignore (index 0)
+    callback.data = f"mdi:plex:{ignore_key('test error 1')}"
     callback.message = AsyncMock()
     callback.message.edit_text = AsyncMock()
 
@@ -210,7 +210,7 @@ async def test_manage_delete_ignore_clears_all(ignore_manager):
 
     handler = manage_delete_ignore_callback(ignore_manager)
     callback = AsyncMock()
-    callback.data = "mdi:plex:0"
+    callback.data = f"mdi:plex:{ignore_key('test error')}"
     callback.message = AsyncMock()
     callback.message.edit_text = AsyncMock()
 
@@ -227,7 +227,7 @@ async def test_manage_delete_ignore_container_with_colon(ignore_manager):
 
     handler = manage_delete_ignore_callback(ignore_manager)
     callback = AsyncMock()
-    callback.data = "mdi:my:container:name:0"
+    callback.data = f"mdi:my:container:name:{ignore_key('some error')}"
     callback.message = AsyncMock()
     callback.message.edit_text = AsyncMock()
 

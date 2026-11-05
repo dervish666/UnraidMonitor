@@ -10,7 +10,7 @@ from aiogram.enums import ChatAction
 from src.bot.control_commands import resolve_container
 from src.state import ContainerStateManager
 from src.services.diagnostic import DiagnosticService
-from src.utils.formatting import extract_alert_container, safe_reply
+from src.utils.formatting import extract_alert_container, fit_callback, safe_reply
 from src.utils.telegram_format import markdown_to_telegram_html
 
 logger = logging.getLogger(__name__)
@@ -102,11 +102,11 @@ def diagnose_command(
         # Build action buttons
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="📋 More Details", callback_data=f"diag_details:{actual_name}"),
-                InlineKeyboardButton(text="🔄 Restart", callback_data=f"restart:{actual_name}"),
+                InlineKeyboardButton(text="📋 More Details", callback_data=fit_callback("diag_details:", actual_name)),
+                InlineKeyboardButton(text="🔄 Restart", callback_data=fit_callback("restart:", actual_name)),
             ],
             [
-                InlineKeyboardButton(text="📋 Logs", callback_data=f"logs:{actual_name}:50"),
+                InlineKeyboardButton(text="📋 Logs", callback_data=fit_callback("logs:", actual_name, ":50")),
             ],
         ])
 

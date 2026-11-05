@@ -3,7 +3,7 @@
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Iterable
 
 from aiogram.types import Message, MaybeInaccessibleMessage
 from aiogram.exceptions import TelegramBadRequest
@@ -261,6 +261,40 @@ def escape_markdown(text: str) -> str:
     for ch in ("\\", "`", "*", "_", "["):
         text = text.replace(ch, f"\\{ch}")
     return text
+
+
+_CUT_MARK = "…"
+
+
+def fit_callback(prefix: str, name: str, suffix: str = "") -> str:
+    """``prefix + name + suffix`` within Telegram's 64-byte limit.
+
+    Fixed fields (prefix, suffix) are kept whole; only the name is cut, and a
+    cut name ends with "…" so the handler knows to resolve it by prefix with
+    ``resolve_cut_name()``. Telegram rejects the whole message when any
+    button's data is over 64 bytes, so one long container or model name used
+    to make an alert or picker fail to send at all.
+    """
+    full = f"{prefix}{name}{suffix}"
+    if len(full.encode("utf-8")) <= 64:
+        return full
+    room = 64 - len(prefix.encode()) - len(suffix.encode()) - len(_CUT_MARK.encode())
+    cut = name.encode("utf-8")[:max(room, 0)].decode("utf-8", errors="ignore")
+    return f"{prefix}{cut}{_CUT_MARK}{suffix}"
+
+
+def resolve_cut_name(value: str, candidates: Iterable[str]) -> str | None:
+    """The candidate a (possibly cut) callback name refers to, or None.
+
+    An exact name must be a candidate. A cut name ("abc…") resolves only when
+    exactly one candidate starts with it.
+    """
+    names = list(candidates)
+    if not value.endswith(_CUT_MARK):
+        return value if value in names else None
+    stem = value[: -len(_CUT_MARK)]
+    matches = [n for n in names if n.startswith(stem)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def truncate_callback_data(prefix: str, data: str) -> str:

@@ -9,6 +9,7 @@ the file is older than HEARTBEAT_MAX_AGE_SECONDS (or missing).
 import asyncio
 import logging
 import os
+from typing import Callable
 
 from src.constants import HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_PATH
 
@@ -18,9 +19,23 @@ logger = logging.getLogger(__name__)
 async def heartbeat_loop(
     path: str = HEARTBEAT_PATH,
     interval: float = HEARTBEAT_INTERVAL_SECONDS,
+    alive: Callable[[], bool] | None = None,
 ) -> None:
-    """Touch the heartbeat file every ``interval`` seconds, forever."""
+    """Touch the heartbeat file every ``interval`` seconds.
+
+    With *alive*, the beat stops while it returns False (every monitor has
+    died), so the HEALTHCHECK fails and Docker restarts the container: a live
+    event loop with nothing watching is not healthy.
+    """
+    warned = False
     while True:
+        if alive is not None and not alive():
+            if not warned:
+                logger.error("No monitor is running; stopping the heartbeat so Docker restarts the bot")
+                warned = True
+            await asyncio.sleep(interval)
+            continue
+        warned = False
         try:
             with open(path, "w") as f:
                 f.write(str(os.getpid()))

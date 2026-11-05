@@ -5,6 +5,7 @@ from typing import Any
 
 import docker
 import docker.api.network
+from src.services.docker_client import DockerClientLike
 from docker.types import DeviceRequest
 
 logger = logging.getLogger(__name__)
@@ -248,7 +249,7 @@ class ContainerController:
 
     def __init__(
         self,
-        docker_client: docker.DockerClient,
+        docker_client: DockerClientLike,
         protected_containers: list[str],
     ) -> None:
         self.docker_client = docker_client

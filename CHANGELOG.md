@@ -35,10 +35,22 @@ Draft for 0.22.6. Not released; the version is still 0.22.5.
 - **Ignore pattern generation kept the model it started with.** It now follows `/model`, including a provider configured after startup.
 - **Chat and /array called a disk being rebuilt broken.** The NL array tool and /array now use the array monitor's parity-aware reading: during a parity sync, a disk marked invalid is shown as being rebuilt, not as a fault.
 - **High memory was reported twice with different severity.** With memory management on, the Unraid system monitor's "Memory Critical" fired at the same 90% as the memory monitor's Warning. The memory monitor is now the only voice on memory pressure when it is enabled.
+- **Docker down at boot took the whole bot down.** `start_monitoring` raised when the Docker socket did not answer, so Unraid and UPS monitoring, which never touch Docker, never started. They now start regardless; the Docker monitors keep retrying with backoff and come up when the daemon answers.
+- **`config.yaml` read `enabled: "false"` as on, and an empty section as a crash.** Booleans and numbers written as strings are now read for what they say, a section with nothing under it takes its defaults, a partial `log_watching` keeps the defaults it does not set, a wrong type names its path ("memory_management.warning_threshold: expected a number, got 'high'"), misspelt keys are named in the log, and the example host `your-unraid-ip` is never polled.
+- **An unknown key in `config/.env` stopped the bot.** It is now named in a warning and ignored. A bad `TELEGRAM_ALLOWED_USERS` no longer echoes the value back into the log, and `LOG_LEVEL=warn` works.
+- **The setup wizard sent the API key over plain HTTP without saying so, and saved TLS settings it never tested.** It now tries verified HTTPS first, then unverified HTTPS (saved as `verify_ssl: false`, and it tells you), and plain HTTP only when the server serves no HTTPS, with a warning that the key travels unencrypted. A rejected key or a GraphQL error is a failure, not a connection.
+- **Buttons for long container names did nothing.** Telegram rejects callback data over 64 bytes, so the whole message failed to send. Names are cut to fit and resolved back to the one container they match.
+- **A crashed monitor vanished silently.** Background tasks that die are now logged with their name, the Docker heartbeat stops once every monitor has died (so Docker restarts the container), and shutdown still flushes mutes when a monitor already died or fails to stop.
+- **A wrong `nut.ups_name` looked like "no NUT server".** `ERR UNKNOWN-UPS` now shows as a misconfiguration in /health and the startup message.
+- **A read-only parity check was announced as a sync or rebuild.** The bot reads `correcting`: a non-correcting check is named as a check, says the array stays protected, and no longer excuses a disk marked invalid.
+- **/health said "Connected" over a failing Unraid API.** Health now follows the last query, and the connection test treats a GraphQL error answer as a failure.
+- **A stale delete button in /manage → Ignores could delete the wrong pattern.** Buttons carried a list position, which shifted after another delete. They now carry a key derived from the pattern.
 
 ### Added
 - **Unraid API outage alerts.** After three failed polls in a row the bot says the API is unreachable and that array and system state are unknown, then says once when it is back. The system and array monitors share one counter, so one outage is one alert.
 - /mutes and /manage → Mutes list system, array and UPS mutes separately, each with its own unmute button.
+- /health shows when each monitor last succeeded, its failure streak and last error (Docker events, resources, Unraid, UPS).
+- An unknown slash command gets a reply pointing at /help instead of silence. /help lists /ups.
 
 ### Changed
 - Every LLM call logs its token usage at INFO (input, output and, for Anthropic, prompt-cache reads and writes), so spend shows up in the container log.
