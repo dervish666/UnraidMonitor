@@ -237,7 +237,8 @@ class DockerEventMonitor:
         # Retried every reconcile pass; bounded, oldest dropped first.
         self._crash_pending: dict[str, tuple[dict[str, Any], bool]] = {}
         # Other producers' retry passes run on the same cadence (log errors).
-        self.reconcile_hooks: list[Callable[[], Awaitable[None]]] = []
+        # Each returns False when a send failed, which ends the pass.
+        self.reconcile_hooks: list[Callable[[], Awaitable[bool]]] = []
         # monotonic time of the last kill/stop and oom event per container,
         # written from the events thread, read by the alert task.
         self._stopped_at: dict[str, float] = {}
@@ -417,11 +418,16 @@ class DockerEventMonitor:
                 # Wait for an event with timeout to allow checking _running flag
                 if time.monotonic() - self._last_reconcile >= self.RECONCILE_SECONDS:
                     try:
-                        await self._reconcile_unhealthy()
-                        await self._retry_pending_crashes()
-                        for hook in self.reconcile_hooks:
+                        # One failed send ends the whole pass: Telegram is
+                        # down, and every further try costs another ladder.
+                        delivered = (
+                            await self._reconcile_unhealthy()
+                            and await self._retry_pending_crashes()
+                        )
+                        for hook in self.reconcile_hooks if delivered else []:
                             try:
-                                await hook()
+                                if not await hook():
+                                    break
                             except Exception as e:
                                 logger.error(f"Alert retry pass failed: {e}", exc_info=True)
                     finally:
@@ -666,7 +672,7 @@ class DockerEventMonitor:
             logger.error(f"Dropped undelivered crash alert for {dropped}: too many pending")
         return False
 
-    async def _retry_pending_crashes(self) -> None:
+    async def _retry_pending_crashes(self) -> bool:
         """Retry held crash alerts, stopping at the first that still fails.
 
         Each failed send costs the full Telegram retry ladder, and this runs on
@@ -678,7 +684,8 @@ class DockerEventMonitor:
                 del self._crash_pending[name]  # muted since: the user asked for quiet
                 continue
             if not await self._deliver_crash(name, kwargs, escalation):
-                return
+                return False
+        return True
 
     async def _handle_recovery_event(self, event: dict[str, Any]) -> None:
         """Handle a container start event and send recovery alert if it previously crashed."""
@@ -743,11 +750,11 @@ class DockerEventMonitor:
             self._unhealthy_alerted.discard(container_name)
             self._unhealthy_pending.add(container_name)
 
-    async def _reconcile_unhealthy(self) -> None:
+    async def _reconcile_unhealthy(self) -> bool:
         """Announce containers still unhealthy whose alert was held back.
 
-        Stops at the first one whose alert still fails, like the other retry
-        passes on this task: an outage costs one failed send per pass.
+        Returns False at the first one whose alert still fails, which ends the
+        whole retry pass: an outage costs one failed send per pass.
         """
         for name in list(self._unhealthy_pending):
             if self.mute_manager and self.mute_manager.is_muted(name):
@@ -758,7 +765,8 @@ class DockerEventMonitor:
                 continue
             await self._handle_health_event({"Actor": {"Attributes": {"name": name}}})
             if name in self._unhealthy_pending:
-                return  # not muted, so back in the set means the send failed
+                return False  # not muted, so back in the set means the send failed
+        return True
 
     def _get_container_image(self, container_name: str) -> str:
         """Get image name for a container from state manager."""

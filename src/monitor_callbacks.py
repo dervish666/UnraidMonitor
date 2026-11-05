@@ -76,8 +76,8 @@ class LogErrorAlerts:
             logger.error(f"Dropped undelivered log error alert for {dropped}: too many pending")
         return False
 
-    async def retry_pending(self) -> None:
-        """Retry held alerts, stopping at the first that still fails.
+    async def retry_pending(self) -> bool:
+        """Retry held alerts, stopping (False) at the first that still fails.
 
         This runs on the Docker event task; a failed send costs the whole
         Telegram retry ladder, so one per pass keeps an outage from stalling
@@ -89,7 +89,8 @@ class LogErrorAlerts:
                 self._pending.pop(name, None)
                 continue
             if not await self._send(name, error_line):
-                return
+                return False
+        return True
 
 
 def make_log_error_handler(

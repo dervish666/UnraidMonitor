@@ -152,57 +152,82 @@ def _adjacent_repeat_risk(state: Any, items: Any, top: bool = True) -> str:
     fail), and so is a final .* before $, so ^.*error.*$ loads.
     """
     extra = frozenset(c for c in _literal_codes(items) if c >= 0x10000)
-    sets: dict[int, frozenset[int] | None] = {}
+    # Keyed by id() but holding the body itself, so a freed list's id cannot
+    # be reused by another body and hit a stale entry.
+    sets: dict[int, tuple[Any, frozenset[int] | None]] = {}
 
     def char_set(body: Any) -> frozenset[int] | None:
-        if id(body) not in sets:
-            sets[id(body)] = _char_set(state, body, extra)
-        return sets[id(body)]
+        hit = sets.get(id(body))
+        if hit is None or hit[0] is not body:
+            hit = (body, _char_set(state, body, extra))
+            sets[id(body)] = hit
+        return hit[1]
 
     def overlaps(a: Any, b: Any) -> bool:
         set_a, set_b = char_set(a), char_set(b)
         return set_a is None or set_b is None or bool(set_a & set_b)
 
-    run: list[Any] = []
-    flat = list(_inline(items))
+    def scan(seq: Any, run: list[Any], top: bool) -> tuple[str, list[Any]]:
+        """Walk one sequence carrying the run it was entered with; return the run it leaves."""
+        flat = list(_inline(seq))
 
-    def settled(index: int) -> bool:
-        """Nothing after this item can fail: it ends the pattern, or it is .*
-        followed only by $ (a log line has no newline for . to stop at)."""
-        if not top:
-            return False
-        rest = flat[index + 1:]
-        if not rest:
-            return True
-        op, av = flat[index]
-        return (
-            op in _REPEATS and av[1] == _sre.MAXREPEAT and list(av[2]) == [(_sre.ANY, None)]
-            and all(o is _sre.AT and a in (_sre.AT_END, _sre.AT_END_STRING) for o, a in rest)
-        )
+        def settled(index: int) -> bool:
+            """Nothing after this item can fail: it ends the pattern, or it is .*
+            followed only by $ (a log line has no newline for . to stop at)."""
+            if not top:
+                return False
+            rest = flat[index + 1:]
+            if not rest:
+                return True
+            op, av = flat[index]
+            return (
+                op in _REPEATS and av[1] == _sre.MAXREPEAT and list(av[2]) == [(_sre.ANY, None)]
+                and all(o is _sre.AT and a in (_sre.AT_END, _sre.AT_END_STRING) for o, a in rest)
+            )
 
-    for index, (op, av) in enumerate(flat):
-        # Any repeat of varying length joins a run: six z{0,16} in a row
-        # split text as freely as z*, and a backreference matches whatever
-        # its group took.
-        unbounded_repeat = op in _REPEATS and av[1] > av[0]
-        if op is _sre.GROUPREF and run and not settled(index):
-            return "a backreference follows a repeat that can match the same text"
-        if unbounded_repeat:
-            if not settled(index) and any(overlaps(prev, av[2]) for prev in run):
-                return "two repeats in one run can match the same text"
-            # Overlapping none of the run, a required repeat (+) also ends it.
-            kept = run if av[0] == 0 else []
-            run = kept if op is _sre.POSSESSIVE_REPEAT else [*kept, av[2]]
-        elif run and _sre_parse.SubPattern(state, [(op, av)]).getwidth()[0] > 0:
-            # A required item ends the run only if no repeat in it can match it.
-            body = av[2] if op in _REPEATS else [(op, av)]
-            if not any(overlaps(prev, body) for prev in run):
-                run = []
-        for sub in _children(op, av):
-            why = _adjacent_repeat_risk(state, sub, top=False)
-            if why:
-                return why
-    return ""
+        for index, (op, av) in enumerate(flat):
+            is_last = top and index == len(flat) - 1
+            if op is _sre.BRANCH or op is _sre.GROUPREF_EXISTS:
+                # Each alternative continues the run (.*(?:x|.*y)z is .*.*y),
+                # and what follows sees the runs of all of them together.
+                alternatives = av[1] if op is _sre.BRANCH else [av[1], av[2] or []]
+                merged: list[Any] = []
+                for alternative in alternatives:
+                    why, out = scan(alternative, list(run), is_last)
+                    if why:
+                        return why, []
+                    merged += [body for body in out if all(body is not m for m in merged)]
+                run = merged
+                continue
+            if op in (_sre.ASSERT, _sre.ASSERT_NOT):
+                # A lookaround re-reads text the run may still give back.
+                why, _ = scan(av[1], list(run), False)
+                if why:
+                    return why, []
+                continue
+            # Any repeat of varying length joins a run: six z{0,16} in a row
+            # split text as freely as z*, and a backreference matches whatever
+            # its group took.
+            if op is _sre.GROUPREF and run and not settled(index):
+                return "a backreference follows a repeat that can match the same text", []
+            if op in _REPEATS and av[1] > av[0]:
+                if not settled(index) and any(overlaps(prev, av[2]) for prev in run):
+                    return "two repeats in one run can match the same text", []
+                # Overlapping none of the run, a required repeat (+) also ends it.
+                kept = run if av[0] == 0 else []
+                run = kept if op is _sre.POSSESSIVE_REPEAT else [*kept, av[2]]
+            elif run and _sre_parse.SubPattern(state, [(op, av)]).getwidth()[0] > 0:
+                # A required item ends the run only if no repeat in it can match it.
+                body = av[2] if op in _REPEATS else [(op, av)]
+                if not any(overlaps(prev, body) for prev in run):
+                    run = []
+            for sub in _children(op, av):
+                why = _adjacent_repeat_risk(state, sub, top=False)
+                if why:
+                    return why, []
+        return "", run
+
+    return scan(items, [], top)[0]
 
 
 # Inputs that make common backtracking shapes blow up, tried against every

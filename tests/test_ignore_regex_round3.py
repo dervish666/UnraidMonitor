@@ -90,6 +90,12 @@ def test_pre_branch_ignores_load_match_and_survive_a_save(tmp_path):
     # astral-only class that a BMP sample saw as empty.
     r"z{0,16}z{0,16}z{0,16}z{0,16}z{0,16}z{0,16}Q",
     "[^\x00-\uffff]+\\w+[^\x00-\uffff]+\\w+Q",
+    # Round 5 review (Opus): a run carried into an alternation, a
+    # conditional or a lookahead.
+    r"(?:.*error|.*fail).*timeout",
+    r"\d+(?:\d+|x)q",
+    r"\w+(?=.*error)x",
+    r"(\d+)(?(1)\d+q|z)",
 ])
 def test_backtracking_shapes_are_refused(pattern):
     ok, why = validate_regex_pattern(pattern)
@@ -109,6 +115,9 @@ def test_backtracking_shapes_are_refused(pattern):
     r".*foo.*",
     r"\S+@\S+",
     r"^.*error.*$",
+    r"(?i)^.*(error|fail).*$",
+    r"(?:GET|POST) /api/\S+ 5\d\d",
+    r"[0-9a-f]{32}.*error",
     r"https?://\S+",
     r"\w+\s+\w+x",
     r"-?\d+ms",

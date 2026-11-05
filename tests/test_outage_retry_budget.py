@@ -159,3 +159,26 @@ async def test_retry_pass_that_raises_waits_for_the_next_interval(tmp_path):
     monitor._pending_alerts.put_nowait(None)
     await asyncio.wait_for(monitor._process_alerts(), timeout=5)
     assert passes == 1
+
+
+async def test_one_failed_send_ends_the_whole_retry_pass(tmp_path):
+    """Round 5 review: each source stopped at its own failure, so a pass could still cost three."""
+    monitor, bot = _docker_monitor(tmp_path)
+    on_error = _log_alerts(tmp_path, bot)
+    monitor.reconcile_hooks.append(on_error.retry_pending)
+    bot.down = True
+    await _pump(monitor, [_die_event("app")])
+    monitor.state_manager.get = MagicMock(  # type: ignore[method-assign]
+        return_value=MagicMock(health="unhealthy"),
+    )
+    await monitor._handle_health_event({"Actor": {"Attributes": {"name": "web"}}})
+    await on_error("sonarr", "ERROR connection refused")
+    sent = bot.send_message.await_count
+
+    monitor.ignored_containers = {"x"}
+    monitor._last_reconcile = 0.0
+    monitor._running = True
+    monitor._pending_alerts.put_nowait({"_alert_type": "recovery", "Actor": {"Attributes": {"name": "x"}}})
+    monitor._pending_alerts.put_nowait(None)
+    await asyncio.wait_for(monitor._process_alerts(), timeout=5)
+    assert bot.send_message.await_count == sent + 1
