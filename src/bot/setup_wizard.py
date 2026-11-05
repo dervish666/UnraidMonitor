@@ -632,7 +632,7 @@ def create_start_handler(
             # Check if there's an existing Unraid config we can reuse
             existing = wizard.get_existing_unraid_config()
             if existing:
-                host, port, use_ssl = existing
+                host = existing[0]
                 welcome += " and Unraid server.\n\n"
                 welcome += f"Testing existing connection to `{host}`..."
                 await safe_reply(message, welcome)
@@ -641,10 +641,17 @@ def create_start_handler(
                 probe = await wizard.test_unraid_connection(host, api_key)
 
                 if probe.success:
-                    # Don't update session with new port/ssl -- keep existing config as-is
-                    wizard.connection_result(user_id, True, port, use_ssl)
+                    # Save what the probe proved works. The old settings may
+                    # differ (verify_ssl: true where only an unverified
+                    # certificate answered), and runtime would then fail.
+                    wizard.set_host(user_id, host)
+                    wizard.connection_result(
+                        user_id, True, probe.port, probe.use_ssl, probe.verify_ssl,
+                    )
+                    scheme = "HTTPS" if probe.use_ssl else "HTTP"
+                    note = f"\n{probe.detail}" if probe.detail else ""
                     await message.answer(
-                        "Connected to Unraid successfully.\n\n"
+                        f"Connected to Unraid via {scheme} on port {probe.port}.{note}\n\n"
                         "Now scanning Docker containers..."
                     )
                     classifications = await wizard.classify_containers(user_id)

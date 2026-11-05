@@ -595,7 +595,7 @@ class ProviderRegistry:
         if not self._config_path:
             return
 
-        from src.config import load_yaml_config
+        from src.config import config_section, load_yaml_config
 
         path = Path(self._config_path)
         if not path.exists():
@@ -603,12 +603,12 @@ class ProviderRegistry:
 
         try:
             data = load_yaml_config(str(path))
-            ai = data.setdefault("ai", {})
+            ai = config_section(data, "ai")
 
             if default_model is not None:
                 ai["default_model"] = default_model
             if feature is not None and feature_model is not None:
-                models = ai.setdefault("models", {})
+                models = config_section(ai, "models")
                 models[feature] = feature_model
 
             from src.config import atomic_yaml_write

@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -122,12 +123,17 @@ class _Section:
             raise ConfigError(f"{self._where(key)}: expected a number, got {value!r}")
         elif isinstance(value, int):
             result = value
-        elif isinstance(value, float) and value.is_integer():
-            result = int(value)
-        elif isinstance(value, str) and value.strip().lstrip("-").isdigit():
-            result = int(value.strip())
         else:
-            raise ConfigError(f"{self._where(key)}: expected a number, got {value!r}")
+            # A decimal such as 92.5 or 0.5 rounds to the nearest whole number;
+            # releases before 0.23 accepted decimals, so refusing them would
+            # stop an upgraded bot at boot.
+            try:
+                number = float(value.strip()) if isinstance(value, str) else float(value)
+            except (TypeError, ValueError):
+                number = math.nan
+            if not math.isfinite(number):
+                raise ConfigError(f"{self._where(key)}: expected a number, got {value!r}")
+            result = round(number)
         if lo is not None:
             result = max(lo, result)
         if hi is not None:
@@ -411,7 +417,7 @@ class ResourceConfig:
     def _persist(self) -> None:
         """Write current container_overrides back to config.yaml."""
         def _update(data: dict[str, Any]) -> None:
-            rm = data.setdefault("resource_monitoring", {})
+            rm = config_section(data, "resource_monitoring")
             if self.container_overrides:
                 rm["containers"] = self.container_overrides
             else:
@@ -500,7 +506,7 @@ class MemoryConfig:
         whatever is currently on disk.
         """
         def _update(data: dict[str, Any]) -> None:
-            data.setdefault("memory_management", {})["restart_containers"] = self.restart_containers
+            config_section(data, "memory_management")["restart_containers"] = self.restart_containers
 
         update_yaml_config(self.config_path, _update)
 
@@ -536,7 +542,7 @@ class ImageUpdatesConfig:
     def _persist(self) -> None:
         """Write current image-update settings back to config.yaml."""
         def _update(data: dict[str, Any]) -> None:
-            section = data.setdefault("image_updates", {})
+            section = config_section(data, "image_updates")
             section["enabled"] = self.enabled
             section["poll_interval_hours"] = self.poll_interval_hours
 
@@ -589,7 +595,7 @@ class AutoHealConfig:
     def _persist(self) -> None:
         """Write current auto-heal settings back to config.yaml."""
         def _update(data: dict[str, Any]) -> None:
-            section = data.setdefault("auto_heal", {})
+            section = config_section(data, "auto_heal")
             section["enabled"] = self.enabled
             section["containers"] = self.containers
             section["max_restarts"] = self.max_restarts
@@ -702,14 +708,14 @@ class UnraidConfig:
     def _persist(self) -> None:
         """Write current thresholds back to config.yaml."""
         def _update(data: dict[str, Any]) -> None:
-            unraid = data.setdefault("unraid", {})
-            thresholds = unraid.setdefault("thresholds", {})
+            unraid = config_section(data, "unraid")
+            thresholds = config_section(unraid, "thresholds")
             thresholds["array_usage"] = self.array_usage_threshold
             thresholds["disk_temp"] = self.disk_temp_threshold
             thresholds["cpu_temp"] = self.cpu_temp_threshold
             thresholds["cpu_usage"] = self.cpu_usage_threshold
 
-            notifications = unraid.setdefault("notifications", {})
+            notifications = config_section(unraid, "notifications")
             notifications["enabled"] = self.notifications_enabled
             notifications["min_importance"] = self.notifications_min_importance
 
@@ -736,6 +742,19 @@ class UnraidConfig:
             return
         self.notifications_min_importance = importance
         self._persist()
+
+
+def config_section(data: dict[str, Any], key: str) -> dict[str, Any]:
+    """The mapping at data[key], created when missing or empty.
+
+    ``data.setdefault(key, {})`` returns None for a section written as
+    ``key:`` with nothing under it, so every writer goes through here.
+    """
+    section = data.get(key)
+    if not isinstance(section, dict):
+        section = {}
+        data[key] = section
+    return section
 
 
 def update_yaml_config(
@@ -917,7 +936,7 @@ class NutConfig:
     def _persist(self) -> None:
         """Write current NUT settings back to config.yaml."""
         def _update(data: dict[str, Any]) -> None:
-            section = data.setdefault("nut", {})
+            section = config_section(data, "nut")
             section["enabled"] = self.enabled
             if self.host:
                 section["host"] = self.host
@@ -925,7 +944,7 @@ class NutConfig:
             if self.ups_name:
                 section["ups_name"] = self.ups_name
             section["poll_seconds"] = self.poll_seconds
-            thresholds = section.setdefault("thresholds", {})
+            thresholds = config_section(section, "thresholds")
             thresholds["battery_charge"] = self.battery_charge_threshold
             thresholds["load"] = self.load_threshold
 
@@ -1177,15 +1196,15 @@ class ConfigWriter:
             return
 
         # Container roles (always overwritten by wizard)
-        existing.setdefault("log_watching", {})["containers"] = watched_containers
+        config_section(existing, "log_watching")["containers"] = watched_containers
         existing["protected_containers"] = protected_containers
         existing["ignored_containers"] = ignored_containers
-        existing.setdefault("memory_management", {})["priority_containers"] = priority_containers
-        existing.setdefault("memory_management", {})["killable_containers"] = killable_containers
+        config_section(existing, "memory_management")["priority_containers"] = priority_containers
+        config_section(existing, "memory_management")["killable_containers"] = killable_containers
 
         # Unraid connection (only update if user entered new details)
         if not skip_unraid:
-            unraid_section = existing.setdefault("unraid", {})
+            unraid_section = config_section(existing, "unraid")
             unraid_enabled = unraid_host is not None
             unraid_section["enabled"] = unraid_enabled
             if unraid_enabled:
