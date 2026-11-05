@@ -67,8 +67,9 @@ class LogErrorAlerts:
             self._pending.pop(container_name, None)
             return True
         self._rate_limiter.cancel_alert(container_name, suppressed)
-        self._pending.pop(container_name, None)
-        self._pending[container_name] = (error_line, suppressed)
+        # A newer line may have replaced the held one while this send waited.
+        held = self._pending.pop(container_name, None)
+        self._pending[container_name] = (held[0] if held else error_line, suppressed)
         while len(self._pending) > self.MAX_PENDING:
             dropped = next(iter(self._pending))
             del self._pending[dropped]

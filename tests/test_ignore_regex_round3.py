@@ -73,6 +73,13 @@ def test_pre_branch_ignores_load_match_and_survive_a_save(tmp_path):
     r"(z*)(z*)x",
     r"\d+\s*\d+x",
     r"\w+\w+Q",
+    # Round 4 review: non-Latin-1 bodies, and separators the repeats swallow.
+    r"Ж*Ж*Ж*Ж*Ж*$",
+    "\U0001F600*\U0001F600*x",
+    r"z*zz*zz*zz*zz*$",
+    r".*foo.*bar",
+    r"z*z*+Q",
+    r"(z*z*)x",  # last in its group, not in the pattern
 ])
 def test_backtracking_shapes_are_refused(pattern):
     ok, why = validate_regex_pattern(pattern)
@@ -86,8 +93,11 @@ def test_backtracking_shapes_are_refused(pattern):
     r"timeout after \d+ms",
     r"(ab)+c",
     r"^\[\w+\] .*error",
-    r".*foo.*bar",
     r"error:\s*\d+",
+    r"^z*+z*+Q$",
+    r"Connection refused to .* on port \d+",  # the trailing repeat has nothing after it to fail
+    r".*foo.*",
+    r"upstream timed out .* client: (\d{1,3}\.){3}\d{1,3}",
     r"\d+\s+\d+",
 ])
 def test_ordinary_patterns_are_allowed(pattern):

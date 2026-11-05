@@ -89,18 +89,34 @@ def _backtracking_risk(items: Any) -> str:
     return ""
 
 
-def _char_set(state: Any, body: Any) -> frozenset[int] | None:
-    """Latin-1 code points a one-character repeat body matches; None if not one character."""
-    if body.getwidth() != (1, 1):
+def _literal_codes(items: Any) -> set[int]:
+    """Every literal code point and range end written in a parsed pattern."""
+    codes: set[int] = set()
+    for op, av in items:
+        if op is _sre.LITERAL or op is _sre.NOT_LITERAL:
+            codes.add(av)
+        elif op is _sre.IN:
+            codes |= _literal_codes(av)
+        elif op is _sre.RANGE:
+            codes.update(av)
+        for sub in _children(op, av):
+            codes |= _literal_codes(sub)
+    return codes
+
+
+# The domain one-character bodies are compared over: the whole Basic
+# Multilingual Plane (a Latin-1 sample let Ж*Ж*Ж*$ through) plus any astral
+# code point the pattern itself names.
+_BMP = range(0x10000)
+
+
+def _char_set(state: Any, items: Any, extra: frozenset[int]) -> frozenset[int] | None:
+    """Code points a one-character item matches; None if it is not one character."""
+    sub = _sre_parse.SubPattern(state, list(items))
+    if sub.getwidth() != (1, 1):
         return None
-    compiled = _sre_compile.compile(_sre_parse.SubPattern(state, list(body)), re.IGNORECASE)
-    return frozenset(c for c in range(256) if compiled.fullmatch(chr(c)))
-
-
-def _overlap(state: Any, a: Any, b: Any) -> bool:
-    """Whether two repeat bodies can match the same character (unknown counts as yes)."""
-    set_a, set_b = _char_set(state, a), _char_set(state, b)
-    return set_a is None or set_b is None or bool(set_a & set_b)
+    compiled = _sre_compile.compile(sub, re.IGNORECASE)
+    return frozenset(c for c in (*_BMP, *extra) if compiled.fullmatch(chr(c)))
 
 
 def _inline(items: Any) -> Iterator[tuple[Any, Any]]:
@@ -112,26 +128,53 @@ def _inline(items: Any) -> Iterator[tuple[Any, Any]]:
             yield op, av
 
 
-def _adjacent_repeat_risk(state: Any, items: Any) -> str:
-    """Why two unbounded repeats in a row can split the same text many ways, or ''.
+def _adjacent_repeat_risk(state: Any, items: Any, top: bool = True) -> str:
+    """Why two unbounded repeats in one sequence can split the same text many ways, or ''.
 
     z*z*z*$ or \\d+\\s*\\d+x is polynomial, not exponential, so the nesting check
     above passes it, yet each repeat in the run multiplies the work by the line
     length and a log line of a few thousand characters stalls the event loop.
-    Two unbounded repeats are refused when only empty-matchable items sit
-    between them and their characters overlap. A required item resets the run,
-    so .*foo.* still loads.
+    A run of unbounded repeats is broken only by a required item none of them
+    can match, because a separator the repeats can swallow (the z in
+    z*zz*z) keeps the ambiguity; a second repeat whose characters overlap the
+    run is refused. So \\d+\\s+\\d+ and ^\\[\\w+\\] .*error load, .*foo.*x does
+    not (on a line of repeated "foo" it is cubic). Anything this cannot
+    reduce to one character counts as overlapping. A possessive repeat never
+    gives text back, so it does not start a run. The last item of the whole
+    pattern is exempt: with nothing after it left to fail, its split with the
+    run is settled by the first success, so 0.22-style
+    "Connection refused to .* on port \\d+" still loads (z*z*$ does not: $ can fail).
     """
+    extra = frozenset(c for c in _literal_codes(items) if c >= 0x10000)
+    sets: dict[int, frozenset[int] | None] = {}
+
+    def char_set(body: Any) -> frozenset[int] | None:
+        if id(body) not in sets:
+            sets[id(body)] = _char_set(state, body, extra)
+        return sets[id(body)]
+
+    def overlaps(a: Any, b: Any) -> bool:
+        set_a, set_b = char_set(a), char_set(b)
+        return set_a is None or set_b is None or bool(set_a & set_b)
+
     run: list[Any] = []
-    for op, av in _inline(items):
-        if op in _REPEATS and av[1] == _sre.MAXREPEAT:
-            if any(_overlap(state, prev, av[2]) for prev in run):
-                return "two repeats in a row can match the same text"
-            run = [av[2]] if av[0] > 0 else [*run, av[2]]
-        elif _sre_parse.SubPattern(state, [(op, av)]).getwidth()[0] > 0:
-            run = []
+    flat = list(_inline(items))
+    for index, (op, av) in enumerate(flat):
+        unbounded_repeat = op in _REPEATS and av[1] == _sre.MAXREPEAT
+        if unbounded_repeat:
+            last = top and index == len(flat) - 1
+            if not last and any(overlaps(prev, av[2]) for prev in run):
+                return "two repeats in one run can match the same text"
+            # Overlapping none of the run, a required repeat (+) also ends it.
+            kept = run if av[0] == 0 else []
+            run = kept if op is _sre.POSSESSIVE_REPEAT else [*kept, av[2]]
+        elif run and _sre_parse.SubPattern(state, [(op, av)]).getwidth()[0] > 0:
+            # A required item ends the run only if no repeat in it can match it.
+            body = av[2] if op in _REPEATS else [(op, av)]
+            if not any(overlaps(prev, body) for prev in run):
+                run = []
         for sub in _children(op, av):
-            why = _adjacent_repeat_risk(state, sub)
+            why = _adjacent_repeat_risk(state, sub, top=False)
             if why:
                 return why
     return ""

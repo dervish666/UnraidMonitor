@@ -96,3 +96,23 @@ async def test_slow_retry_pass_is_not_due_again_after_one_event(tmp_path):
     with patch.object(docker_events, "time", fake_time):
         await asyncio.wait_for(monitor._process_alerts(), timeout=5)
     assert passes == 1
+
+
+async def test_newer_line_arriving_during_a_failed_retry_is_kept(tmp_path):
+    """Round 4 review: the failed retry wrote its older in-flight line back over the newer one."""
+    bot = FakeBot()
+    on_error = _log_alerts(tmp_path, bot)
+    bot.down = True
+    await on_error("sonarr", "ERROR first")
+
+    async def send_while_new_line_arrives(**kwargs):
+        await on_error("sonarr", "ERROR newest")
+        raise RuntimeError("telegram unreachable")
+
+    bot.send_message.side_effect = send_while_new_line_arrives
+    await on_error.retry_pending()
+
+    bot.send_message.side_effect = bot._send
+    bot.down = False
+    await on_error.retry_pending()
+    assert len(bot.texts) == 1 and "newest" in bot.texts[0]
