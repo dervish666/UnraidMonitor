@@ -68,7 +68,8 @@ class ServerMuteManager(BaseMuteManager):
         """One-time import of the retired ArrayMuteManager file.
 
         Carries an unexpired array mute across, then renames the old file so
-        the import never runs twice. Returns True when a mute was imported.
+        the import never runs twice, but only once the mute is on disk in the
+        new store. Returns True when a mute was imported.
         """
         if not os.path.exists(legacy_path):
             return False
@@ -87,6 +88,11 @@ class ServerMuteManager(BaseMuteManager):
                     imported = True
         except (OSError, ValueError, json.JSONDecodeError) as e:
             logger.warning(f"Could not import legacy array mutes from {legacy_path}: {e}")
+        if imported and self._dirty:
+            # The mute is only in memory. Keep the source so the next start
+            # imports it again instead of losing it.
+            logger.warning(f"Imported array mute not saved yet; keeping {legacy_path}")
+            return imported
         try:
             os.replace(legacy_path, legacy_path + ".migrated")
         except OSError as e:

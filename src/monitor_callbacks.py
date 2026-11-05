@@ -23,30 +23,65 @@ from src.utils.telegram_retry import send_with_retry
 logger = logging.getLogger(__name__)
 
 
+class LogErrorAlerts:
+    """Log-error alerts with rate limiting; one lost to an outage is retried.
+
+    The cooldown is reserved before the send so two lines racing in cannot
+    both alert, and released again when the send fails. The failed alert is
+    kept (one per container, at most MAX_PENDING) for ``retry_pending()``,
+    which the Docker event monitor runs on its reconcile cadence.
+    """
+
+    MAX_PENDING = 20
+
+    def __init__(
+        self, mute_manager: MuteManager, rate_limiter: RateLimiter, alert_manager: AlertManagerProxy,
+    ) -> None:
+        self._mute_manager = mute_manager
+        self._rate_limiter = rate_limiter
+        self._alert_manager = alert_manager
+        self._pending: dict[str, tuple[str, int]] = {}
+
+    async def __call__(self, container_name: str, error_line: str) -> None:
+        if self._mute_manager.is_muted(container_name):
+            logger.debug(f"Suppressed log error alert for muted container: {container_name}")
+            return
+        if not self._rate_limiter.should_alert(container_name):
+            self._rate_limiter.record_suppressed(container_name)
+            return
+        await self._send(container_name, error_line)
+
+    async def _send(self, container_name: str, error_line: str) -> None:
+        suppressed = self._rate_limiter.get_suppressed_count(container_name)
+        self._rate_limiter.record_alert(container_name)
+        if await self._alert_manager.send_log_error_alert(
+            container_name=container_name, error_line=error_line, suppressed_count=suppressed,
+        ):
+            self._pending.pop(container_name, None)
+            return
+        self._rate_limiter.cancel_alert(container_name, suppressed)
+        self._pending.pop(container_name, None)
+        self._pending[container_name] = (error_line, suppressed)
+        while len(self._pending) > self.MAX_PENDING:
+            dropped = next(iter(self._pending))
+            del self._pending[dropped]
+            logger.error(f"Dropped undelivered log error alert for {dropped}: too many pending")
+
+    async def retry_pending(self) -> None:
+        for name, (error_line, _) in list(self._pending.items()):
+            if self._mute_manager.is_muted(name) or not self._rate_limiter.should_alert(name):
+                # Muted since, or a newer alert for it already went out.
+                self._pending.pop(name, None)
+                continue
+            await self._send(name, error_line)
+
+
 def make_log_error_handler(
     mute_manager: MuteManager,
     rate_limiter: RateLimiter,
     alert_manager: AlertManagerProxy,
-) -> Callable[[str, str], Awaitable[None]]:
-    async def on_log_error(container_name: str, error_line: str) -> None:
-        """Handle log errors with rate limiting."""
-        # Check if muted
-        if mute_manager.is_muted(container_name):
-            logger.debug(f"Suppressed log error alert for muted container: {container_name}")
-            return
-
-        if rate_limiter.should_alert(container_name):
-            suppressed = rate_limiter.get_suppressed_count(container_name)
-            # Record alert BEFORE the await to prevent TOCTOU duplicate alerts
-            rate_limiter.record_alert(container_name)
-            await alert_manager.send_log_error_alert(
-                container_name=container_name,
-                error_line=error_line,
-                suppressed_count=suppressed,
-            )
-        else:
-            rate_limiter.record_suppressed(container_name)
-    return on_log_error
+) -> LogErrorAlerts:
+    return LogErrorAlerts(mute_manager, rate_limiter, alert_manager)
 
 
 def make_server_alert_handler(

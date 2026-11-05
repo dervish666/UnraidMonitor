@@ -160,12 +160,19 @@ class UnraidNotificationMonitor:
         # Oldest first, so a burst reads in chronological order.
         fresh.reverse()
 
-        if self._mute_manager is not None and self._mute_manager.is_server_muted():
-            # Leave them unseen: marking them here lost a SMART alert that
-            # arrived during an unrelated 24h CPU mute. They relay once the
-            # mute ends.
-            logger.debug(f"Server alerts muted, holding {len(fresh)} notification(s)")
-            return 0
+        mutes = self._mute_manager
+        if mutes is not None and mutes.is_server_muted() and mutes.is_array_muted():
+            # Unraid's feed covers both system and disks, so hold only while
+            # both are muted: a CPU mute alone used to hold SMART warnings for
+            # its whole length. ALERT importance always goes through. Held
+            # ones stay unseen and relay once the mute ends.
+            alert_rank = _importance_rank("ALERT")
+            held = [n for n in fresh if _importance_rank(str(n.get("importance") or "")) < alert_rank]
+            if held:
+                logger.debug(f"System and array muted, holding {len(held)} notification(s)")
+            fresh = [n for n in fresh if n not in held]
+            if not fresh:
+                return 0
 
         overflow = len(fresh) - NOTIFICATION_MAX_PER_POLL
         to_send = fresh[:NOTIFICATION_MAX_PER_POLL]

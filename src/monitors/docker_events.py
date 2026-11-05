@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Any, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 import docker
 from docker.models.containers import Container
@@ -189,7 +189,8 @@ class DockerEventMonitor:
     INITIAL_BACKOFF_SECONDS = 1
     MAX_BACKOFF_SECONDS = 60
     MAX_QUEUE_SIZE = 1000  # Prevent unbounded memory growth
-    RECONCILE_SECONDS = 30  # Re-check unannounced unhealthy containers
+    RECONCILE_SECONDS = 30  # Re-check unannounced unhealthy containers and lost crash alerts
+    MAX_PENDING_CRASHES = 20
     # A die within this long of a kill/stop event for the same container is an
     # intentional stop (docker stop, /restart, /pull, auto-heal, memory kill,
     # the Unraid Stop button, appdata backup), not a crash. docker stop always
@@ -232,6 +233,11 @@ class DockerEventMonitor:
         # this a container that stays unhealthy past its mute stays silent.
         self._unhealthy_pending: set[str] = set()
         self._last_reconcile = time.monotonic()
+        # Crash alerts a send failed to deliver: name -> (send kwargs, escalation).
+        # Retried every reconcile pass; bounded, oldest dropped first.
+        self._crash_pending: dict[str, tuple[dict[str, Any], bool]] = {}
+        # Other producers' retry passes run on the same cadence (log errors).
+        self.reconcile_hooks: list[Callable[[], Awaitable[None]]] = []
         # monotonic time of the last kill/stop and oom event per container,
         # written from the events thread, read by the alert task.
         self._stopped_at: dict[str, float] = {}
@@ -412,6 +418,12 @@ class DockerEventMonitor:
                 if time.monotonic() - self._last_reconcile >= self.RECONCILE_SECONDS:
                     self._last_reconcile = time.monotonic()
                     await self._reconcile_unhealthy()
+                    await self._retry_pending_crashes()
+                    for hook in self.reconcile_hooks:
+                        try:
+                            await hook()
+                        except Exception as e:
+                            logger.error(f"Alert retry pass failed: {e}", exc_info=True)
                 try:
                     event = await asyncio.wait_for(
                         self._pending_alerts.get(), timeout=1.0
@@ -590,20 +602,18 @@ class DockerEventMonitor:
         # Check for restart loop — escalated alert uses a separate rate key
         should_escalate, crash_count = self._crash_tracker.check_restart_loop(container_name)
         if should_escalate:
-            self._crash_tracker.record_escalation(container_name)
             window_min = CrashTracker.LOOP_WINDOW_SECONDS // 60
             logger.warning(
                 f"Restart loop detected: {container_name} crashed {crash_count} times "
                 f"in {window_min} minutes"
             )
-            await self.alert_manager.send_crash_alert(
-                container_name=container_name,
-                exit_code=exit_code,
-                image=self._get_container_image(container_name),
-                uptime_seconds=self._get_container_uptime(container_name),
-                restart_loop_count=crash_count,
-                oom_killed=oom_killed,
-            )
+            await self._deliver_crash(container_name, {
+                "exit_code": exit_code,
+                "image": self._get_container_image(container_name),
+                "uptime_seconds": self._get_container_uptime(container_name),
+                "restart_loop_count": crash_count,
+                "oom_killed": oom_killed,
+            }, escalation=True)
             return
 
         # Check rate limiter if available. The limiter is shared with log-error
@@ -615,17 +625,47 @@ class DockerEventMonitor:
                 self.rate_limiter.record_suppressed(rate_key)
                 logger.debug(f"Rate-limited crash alert for {container_name}")
                 return
-            self.rate_limiter.record_alert(rate_key)
 
         logger.info(f"Container {container_name} crashed with exit code {exit_code}")
 
-        await self.alert_manager.send_crash_alert(
-            container_name=container_name,
-            exit_code=exit_code,
-            image=self._get_container_image(container_name),
-            uptime_seconds=self._get_container_uptime(container_name),
-            oom_killed=oom_killed,
-        )
+        await self._deliver_crash(container_name, {
+            "exit_code": exit_code,
+            "image": self._get_container_image(container_name),
+            "uptime_seconds": self._get_container_uptime(container_name),
+            "oom_killed": oom_killed,
+        }, escalation=False)
+
+    async def _deliver_crash(
+        self, container_name: str, kwargs: dict[str, Any], escalation: bool,
+    ) -> None:
+        """Send a crash alert; commit cooldown/escalation state only once delivered.
+
+        Events are handled one at a time on the alert task, so there is no
+        race between the check and the commit. A send that fails is held for
+        the reconcile pass instead of being recorded as sent.
+        """
+        assert self.alert_manager is not None
+        if await self.alert_manager.send_crash_alert(container_name=container_name, **kwargs):
+            self._crash_pending.pop(container_name, None)
+            if escalation:
+                self._crash_tracker.record_escalation(container_name)
+            elif self.rate_limiter:
+                self.rate_limiter.record_alert(f"{container_name}:crash")
+            return
+        logger.warning(f"Crash alert for {container_name} not delivered; will retry")
+        self._crash_pending.pop(container_name, None)
+        self._crash_pending[container_name] = (kwargs, escalation)
+        while len(self._crash_pending) > self.MAX_PENDING_CRASHES:
+            dropped = next(iter(self._crash_pending))
+            del self._crash_pending[dropped]
+            logger.error(f"Dropped undelivered crash alert for {dropped}: too many pending")
+
+    async def _retry_pending_crashes(self) -> None:
+        for name, (kwargs, escalation) in list(self._crash_pending.items()):
+            if self.mute_manager and self.mute_manager.is_muted(name):
+                del self._crash_pending[name]  # muted since: the user asked for quiet
+                continue
+            await self._deliver_crash(name, kwargs, escalation)
 
     async def _handle_recovery_event(self, event: dict[str, Any]) -> None:
         """Handle a container start event and send recovery alert if it previously crashed."""
@@ -669,7 +709,12 @@ class DockerEventMonitor:
         logger.info(f"Container {container_name} is unhealthy")
         if self._auto_healer is not None and self._auto_healer.is_enabled(container_name):
             outcome = await self._auto_healer.heal(container_name)
-            if outcome != "gave_up":
+            if outcome == "gave_up" and not self._auto_healer.give_up_announced(container_name):
+                # The give-up alert was lost: let the reconcile pass re-enter
+                # heal(), which resends it while the guard is still exhausted.
+                self._unhealthy_alerted.discard(container_name)
+                self._unhealthy_pending.add(container_name)
+            elif outcome != "gave_up":
                 # Let the post-restart unhealthy event re-enter heal(): the
                 # storm guard bounds the retry loop, not this dedup set. Once
                 # the healer gives up, keep the flag so we stay quiet until a

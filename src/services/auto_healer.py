@@ -40,6 +40,10 @@ class AutoHealer:
             return False
         return True
 
+    def give_up_announced(self, container_name: str) -> bool:
+        """Whether the give-up alert for this window reached a chat."""
+        return container_name in self._gave_up
+
     def _prune_and_count(self, container_name: str, now: float) -> int:
         """Drop attempts older than the window and return how many remain.
 
@@ -65,13 +69,15 @@ class AutoHealer:
         count = self._prune_and_count(container_name, now)
         if count >= self._config.max_restarts:
             if container_name not in self._gave_up:
-                self._gave_up.add(container_name)
                 logger.warning(
                     f"Auto-heal giving up on {container_name} after {count} restarts in {self._config.window_minutes} min"
                 )
-                await self._alert_manager.send_autoheal_alert(
+                # Recorded only once delivered, so a lost alert is resent the
+                # next time heal() is asked (see give_up_announced).
+                if await self._alert_manager.send_autoheal_alert(
                     container_name=container_name, attempt=count, max_attempts=self._config.max_restarts, gave_up=True,
-                )
+                ):
+                    self._gave_up.add(container_name)
             return "gave_up"
         self._restarts.setdefault(container_name, []).append(now)
         attempt = count + 1

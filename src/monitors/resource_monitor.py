@@ -190,6 +190,9 @@ class ResourceMonitor:
         self._rate_limiter = rate_limiter
         self._mute_manager = mute_manager
         self._violations: dict[str, dict[str, ViolationState]] = {}
+        # Ended episodes whose recovery message has not been delivered yet
+        # (muted, or the send failed), keyed (container, metric).
+        self._pending_recoveries: dict[tuple[str, str], ViolationState] = {}
         self._violation_last_seen: dict[str, float] = {}
         self._running = False
         self._stats_semaphore = asyncio.Semaphore(10)
@@ -389,15 +392,29 @@ class ResourceMonitor:
         if sent:
             violation.alerted_at = now
 
-    async def _send_recovery(self, name: str, violation: ViolationState) -> None:
-        if self._mute_manager and self._mute_manager.is_muted(name):
-            return
-        await self._alert_manager.send_resource_recovery(
-            container_name=name,
-            metric=violation.metric,
-            current_value=violation.current_value,
-            threshold=int(violation.threshold),
-        )
+    MAX_PENDING_RECOVERIES = 50
+
+    async def _flush_recoveries(self) -> None:
+        """Deliver owed recovery messages; keep each until Telegram takes it."""
+        for (name, metric), violation in list(self._pending_recoveries.items()):
+            if metric in self._violations.get(name, {}):
+                # Back over the line before the recovery got out: the new
+                # episode supersedes it.
+                del self._pending_recoveries[(name, metric)]
+                continue
+            if self._mute_manager and self._mute_manager.is_muted(name):
+                continue
+            if await self._alert_manager.send_resource_recovery(
+                container_name=name,
+                metric=violation.metric,
+                current_value=violation.current_value,
+                threshold=int(violation.threshold),
+            ):
+                del self._pending_recoveries[(name, metric)]
+        while len(self._pending_recoveries) > self.MAX_PENDING_RECOVERIES:
+            dropped = next(iter(self._pending_recoveries))
+            del self._pending_recoveries[dropped]
+            logger.error(f"Dropped undelivered resource recovery for {dropped[0]}: too many pending")
 
     async def start(self) -> None:
         """Start the monitoring loop."""
@@ -438,12 +455,14 @@ class ResourceMonitor:
 
         for stats in stats_list:
             for ended in self._check_thresholds(stats):
-                await self._send_recovery(stats.name, ended)
+                self._pending_recoveries[(stats.name, ended.metric)] = ended
 
             # Check for sustained violations and send alerts
             sustained = self._get_sustained_violations(stats.name)
             for violation in sustained:
                 await self._send_alert(stats, violation)
+
+        await self._flush_recoveries()
 
         # Mark last-seen time and evict violations for containers gone > 10 minutes
         for name in active_names:

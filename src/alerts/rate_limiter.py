@@ -37,6 +37,16 @@ class RateLimiter:
             self._last_alert[container_name] = datetime.now()
             self._suppressed_count[container_name] = 0
 
+    def cancel_alert(self, container_name: str, suppressed: int) -> None:
+        """Undo record_alert() for an alert that was never delivered.
+
+        The send was reserved before an await to stop two lines racing into
+        two alerts; when it then fails, the cooldown must not start.
+        """
+        with self._lock:
+            self._last_alert.pop(container_name, None)
+            self._suppressed_count[container_name] = suppressed
+
     def record_suppressed(self, container_name: str) -> None:
         """Record that an alert was suppressed."""
         with self._lock:

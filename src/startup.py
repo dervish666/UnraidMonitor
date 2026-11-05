@@ -588,6 +588,7 @@ async def start_monitoring(
     bg.monitor = monitor
 
     on_log_error = make_log_error_handler(mute_manager, rate_limiter, alert_manager)
+    monitor.reconcile_hooks.append(on_log_error.retry_pending)
     log_watcher = LogWatcher(
         containers=log_watching_config["containers"],
         error_patterns=log_watching_config["error_patterns"],
