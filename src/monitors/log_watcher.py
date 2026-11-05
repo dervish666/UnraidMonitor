@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import queue
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
@@ -17,6 +19,62 @@ logger = logging.getLogger(__name__)
 # stopped container ends a follow stream in a few milliseconds, so without
 # this the watcher re-queries Docker in a tight loop until it starts again.
 LOG_STREAM_RETRY_SECONDS = 10.0
+
+# Per-container buffer between the stream thread and the event loop. Lines
+# beyond it are dropped (and counted) rather than queued without bound.
+LOG_QUEUE_MAX_LINES = 10000
+# Lines handled per wake-up before yielding to the rest of the bot.
+LOG_DRAIN_BATCH = 500
+# A single log line longer than this is cut. Error matching and alerts need
+# the start of a line; a 5 MB base64 blob on one line only costs memory.
+LOG_MAX_LINE_CHARS = 4000
+
+_END = object()  # End-of-stream marker in the line buffer
+
+
+class LineAssembler:
+    """Turn a Docker log stream's chunks into whole lines.
+
+    A container started with a TTY streams raw byte chunks: one line can
+    arrive in pieces and one chunk can hold several lines. Docker also splits
+    log messages longer than 16 KB into several frames. Matching each chunk as
+    if it were a line missed errors cut across chunks and merged others.
+    """
+
+    def __init__(self, max_chars: int = LOG_MAX_LINE_CHARS) -> None:
+        self._max_bytes = max_chars * 4  # worst-case UTF-8 width
+        self._max_chars = max_chars
+        self._pending = b""
+
+    def _emit(self, raw: bytes) -> str | None:
+        text = raw.decode("utf-8", errors="replace").strip()
+        if not text:
+            return None
+        if len(text) > self._max_chars:
+            text = text[: self._max_chars] + " …[truncated]"
+        return text
+
+    def feed(self, chunk: bytes) -> list[str]:
+        """Lines completed by *chunk*; a trailing partial line is kept."""
+        data = self._pending + chunk
+        parts = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n")
+        self._pending = parts.pop()
+        if len(self._pending) > self._max_bytes:
+            # No newline in sight: emit what we have rather than grow forever.
+            parts.append(self._pending)
+            self._pending = b""
+        lines = []
+        for raw in parts:
+            line = self._emit(raw)
+            if line is not None:
+                lines.append(line)
+        return lines
+
+    def flush(self) -> list[str]:
+        """The partial line left when the stream ends."""
+        raw, self._pending = self._pending, b""
+        line = self._emit(raw)
+        return [line] if line is not None else []
 
 # Matches the bot's own Python logging output so we never alert on our own logs.
 # Format: "2026-02-12 20:39:54,770 - src.some.module - LEVEL - message"
@@ -234,37 +292,51 @@ class LogWatcher:
 
         container = await asyncio.to_thread(self._client.containers.get, container_name)
 
-        # Use queue to bridge blocking log stream to async processing
-        # Bounded to prevent unbounded memory growth during error storms
-        queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=10000)
+        # The stream thread fills a bounded, thread-safe buffer; the event loop
+        # is woken at most once per drain, not once per line. A log storm used
+        # to schedule one loop callback per line (call_soon_threadsafe), and
+        # those callbacks, not the queue, were the unbounded part.
+        buf: queue.Queue[Any] = queue.Queue(maxsize=LOG_QUEUE_MAX_LINES)
+        wake = asyncio.Event()
+        wake_pending = threading.Event()
+        drop_lock = threading.Lock()
         log_stream = None
 
         loop = asyncio.get_event_loop()
 
-        _drop_count = 0
-        _last_drop_warn = 0.0
+        drops = {"count": 0, "last_warn": 0.0}
         continuation = SelfLogContinuation()
 
-        def _safe_put(item: str | None) -> None:
-            """Put item in queue, dropping if full (log storm protection)."""
-            nonlocal _drop_count, _last_drop_warn
+        def _wake_consumer() -> None:
+            if not wake_pending.is_set():
+                wake_pending.set()
+                try:
+                    loop.call_soon_threadsafe(wake.set)
+                except RuntimeError:
+                    pass  # Event loop closed during shutdown
+
+        def _push(item: Any) -> None:
+            """Buffer one line from the stream thread, dropping when full."""
             try:
-                queue.put_nowait(item)
-            except asyncio.QueueFull:
-                _drop_count += 1
-                self._total_drops += 1
-                now = time.monotonic()
-                if now - _last_drop_warn >= 60.0:
-                    logger.warning(
-                        f"Log queue full for {container_name}: "
-                        f"dropped {_drop_count} lines (log storm protection)"
-                    )
-                    _drop_count = 0
-                    _last_drop_warn = now
+                buf.put_nowait(item)
+            except queue.Full:
+                with drop_lock:
+                    drops["count"] += 1
+                    self._total_drops += 1
+                    now = time.monotonic()
+                    if now - drops["last_warn"] >= 60.0:
+                        logger.warning(
+                            f"Log queue full for {container_name}: "
+                            f"dropped {drops['count']} lines (log storm protection)"
+                        )
+                        drops["count"] = 0
+                        drops["last_warn"] = now
+            _wake_consumer()
 
         def stream_to_queue() -> None:
             """Blocking function that streams logs and puts them in the queue."""
             nonlocal log_stream
+            assembler = LineAssembler()
             try:
                 resume_from = self._stream_ended_at.get(container_name)
                 if resume_from is not None:
@@ -272,15 +344,13 @@ class LogWatcher:
                 else:
                     log_stream = container.logs(stream=True, follow=True, tail=0)
                 self._streams.add(log_stream)
-                for line in log_stream:
+                for chunk in log_stream:
                     if not self._running:
                         break
-                    decoded = line.decode("utf-8", errors="replace").strip()
-                    if decoded:  # Skip empty lines
-                        try:
-                            loop.call_soon_threadsafe(_safe_put, decoded)
-                        except RuntimeError:
-                            break  # Event loop closed during shutdown
+                    for line in assembler.feed(chunk):
+                        _push(line)
+                for line in assembler.flush():
+                    _push(line)
             except Exception as e:
                 if self._running:
                     logger.error(f"Error streaming logs from {container_name}: {e}")
@@ -295,51 +365,69 @@ class LogWatcher:
                         log_stream.close()
                     except Exception as e:
                         logger.debug(f"Error closing log stream for {container_name}: {e}")
-                # Signal end of stream. _safe_put drops this if the queue is
-                # full; the consumer also checks stream_task.done() so a
-                # dropped sentinel cannot strand it.
-                try:
-                    loop.call_soon_threadsafe(_safe_put, None)
-                except RuntimeError:
-                    pass  # Event loop closed during shutdown
+                # Signal end of stream. Dropped if the buffer is full; the
+                # consumer also checks stream_task.done() so a dropped
+                # sentinel cannot strand it.
+                _push(_END)
 
         stream_future = loop.run_in_executor(self._thread_pool, stream_to_queue)
         stream_task = asyncio.ensure_future(stream_future)
 
         try:
-            # Process lines from queue as they arrive
-            while self._running:
+            ended = False
+            while self._running and not ended:
                 try:
-                    line = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    await asyncio.wait_for(wake.wait(), timeout=1.0)
                 except asyncio.TimeoutError:
-                    if stream_task.done() and queue.empty():
+                    if stream_task.done() and buf.empty():
                         break  # Stream ended and its sentinel was dropped
                     continue
+                # Clear before draining: a line pushed after this point
+                # schedules a fresh wake, so none is left behind.
+                wake.clear()
+                wake_pending.clear()
+                batch: list[Any] = []
+                while len(batch) < LOG_DRAIN_BATCH:
+                    try:
+                        batch.append(buf.get_nowait())
+                    except queue.Empty:
+                        break
+                if len(batch) == LOG_DRAIN_BATCH:
+                    wake.set()  # More waiting; take it on the next pass
 
-                if line is None:  # End of stream
-                    break
-
-                if continuation.is_quiet_continuation(line):
-                    continue
-
-                if should_alert_for_error(
-                    container=container_name,
-                    line=line,
-                    error_patterns=self.error_patterns,
-                    ignore_patterns=self.ignore_patterns,
-                    ignore_manager=self.ignore_manager,
-                ):
-                    logger.info(f"Error detected in {container_name}: {line[:100]}")
-
-                    # Store in recent errors buffer
-                    if self.recent_errors_buffer:
-                        self.recent_errors_buffer.add(container_name, line)
-
-                    if self.on_error:
-                        await self.on_error(container_name, line)
+                for line in batch:
+                    if line is _END:
+                        ended = True
+                        break
+                    await self._handle_line(container_name, line, continuation)
+                # Let other containers' watchers and the bot run between batches.
+                await asyncio.sleep(0)
         finally:
             stream_task.cancel()
             try:
                 await stream_task
             except asyncio.CancelledError:
                 pass
+
+    async def _handle_line(
+        self, container_name: str, line: str, continuation: "SelfLogContinuation",
+    ) -> None:
+        """Run one complete log line through the ignore and alert checks."""
+        if continuation.is_quiet_continuation(line):
+            return
+
+        if should_alert_for_error(
+            container=container_name,
+            line=line,
+            error_patterns=self.error_patterns,
+            ignore_patterns=self.ignore_patterns,
+            ignore_manager=self.ignore_manager,
+        ):
+            logger.info(f"Error detected in {container_name}: {line[:100]}")
+
+            # Store in recent errors buffer
+            if self.recent_errors_buffer:
+                self.recent_errors_buffer.add(container_name, line)
+
+            if self.on_error:
+                await self.on_error(container_name, line)

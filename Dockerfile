@@ -11,17 +11,20 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gosu && \
     rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
+# Install dependencies: requirements.txt is exported from uv.lock with hashes
+# (uv export --frozen --no-dev --extra ai --format requirements-txt
+# --no-emit-project -o requirements.txt), so the image gets exactly the
+# versions CI tested. CI fails if it drifts from the lock.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements.txt
 
 # Copy application
 COPY src/ ./src/
 COPY config/ ./config/
 
-# Create non-root user with Docker socket access
-# DOCKER_GID should match host's docker.sock group: ls -ln /var/run/docker.sock
-# Default 281 works for Unraid; override via .env or docker-compose build args
+# Create non-root user with Docker socket access. entrypoint.sh also reads
+# the socket's group at start and joins it, so DOCKER_GID only sets a default
+# (281 is Unraid's docker group).
 ARG DOCKER_GID=281
 RUN useradd -m appuser && \
     chown -R appuser:appuser /app && \

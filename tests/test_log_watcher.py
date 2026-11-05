@@ -318,15 +318,21 @@ async def test_dropped_sentinel_does_not_strand_consumer():
     watcher._client = mock_client
     watcher._running = True
 
-    real_put = asyncio.Queue.put_nowait
+    import queue
+    from src.monitors.log_watcher import _END
 
-    def drop_sentinel(self: asyncio.Queue, item: object) -> None:  # type: ignore[type-arg]
-        if item is None:
-            raise asyncio.QueueFull
+    real_put = queue.Queue.put_nowait
+    dropped = []
+
+    def drop_sentinel(self: queue.Queue, item: object) -> None:  # type: ignore[type-arg]
+        if item is _END:
+            dropped.append(item)
+            raise queue.Full
         real_put(self, item)
 
-    with patch.object(asyncio.Queue, "put_nowait", drop_sentinel):
+    with patch.object(queue.Queue, "put_nowait", drop_sentinel):
         await asyncio.wait_for(watcher._stream_logs("c"), timeout=5)
+    assert dropped, "the sentinel was never offered, so this test proved nothing"
 
 
 def test_stop_closes_open_streams():

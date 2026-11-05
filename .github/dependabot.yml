@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Python dependencies (pyproject.toml + uv.lock). After a bump, regenerate
+  # requirements.txt with the uv export line in the Dockerfile; CI fails
+  # until it matches.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # SHA-pinned workflow actions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # The python:3.11-slim base image digest.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

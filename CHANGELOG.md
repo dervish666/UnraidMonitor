@@ -47,6 +47,9 @@ Draft for 0.22.6. Not released; the version is still 0.22.5.
 - **A corrupt state file was silently replaced by defaults.** A mutes, ignores, chat-ID or model-selection file that would not parse was logged once and then overwritten by the next save, losing whatever was in it. It is now moved aside as `<name>.corrupt-<timestamp>` and named on the startup message. One malformed entry no longer discards the whole file: valid entries are kept and the rejected ones are named in the log.
 - **A mute that failed to save looked saved.** The save error was logged, the change was marked clean, and the mute vanished at the next restart. A failed save now stays pending and is retried every 5 minutes and at shutdown, and the reply to /mute, /unmute, the mute buttons and /manage says the change only lasts until restart.
 - **State files could be left half-written by a power cut.** Every data file is now written through one helper that fsyncs the file and its directory around the atomic rename.
+- **A log storm could stall the whole bot.** Every log line scheduled its own callback on the event loop, so a container printing thousands of lines a second queued callbacks faster than they ran, and alerts and commands waited behind them. Lines now collect in a bounded buffer that wakes the loop once per batch of 500. A line over 4,000 characters is cut.
+- **Errors from containers started with a TTY were matched in pieces.** A TTY log stream arrives as raw chunks, so an error split across two chunks was missed and two lines in one chunk were matched as one. Chunks are now joined and split on newlines first, and a last line with no newline is still checked when the stream ends.
+- **The README claimed CPU temperature alerts and per-core temperatures.** Unraid's API does not report CPU temperature, so neither has ever worked; the README now says so, and `/mute-server` is described as muting system, array and UPS alerts.
 - **A stale delete button in /manage → Ignores could delete the wrong pattern.** Buttons carried a list position, which shifted after another delete. They now carry a key derived from the pattern.
 
 ### Added
@@ -56,6 +59,9 @@ Draft for 0.22.6. Not released; the version is still 0.22.5.
 - An unknown slash command gets a reply pointing at /help instead of silence. /help lists /ups.
 
 ### Changed
+- **The Docker image installs exactly the locked dependency versions.** `requirements.txt` is now exported from `uv.lock` with hashes, and the image refuses anything else; it used to resolve its own ranges at build time, so the image could ship versions CI never ran. CI fails when the two disagree and audits the file the image installs.
+- CI installs with `uv sync --locked`, runs on a read-only token, pins every action by commit SHA, and builds the Docker image on each push. Dependabot watches Python dependencies, actions and the base image. A new tag-triggered release workflow checks the tag against both version strings and publishes `:vX.Y.Z` and `:latest`.
+- The container finds the Docker socket's group at start, so the published image reaches Docker on hosts whose docker group is not Unraid's 281. A failure to switch to `PUID`/`PGID` now stops the container with the reason instead of running as the wrong user.
 - Every LLM call logs its token usage at INFO (input, output and, for Anthropic, prompt-cache reads and writes), so spend shows up in the container log.
 - Image-update registry failures are counted and logged as a warning ("could not reach the registry for 3 of 12 containers") instead of one debug line each, so a rate-limited registry no longer reads as "everything up to date".
 

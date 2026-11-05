@@ -16,7 +16,7 @@ A Telegram bot for monitoring Docker containers and Unraid servers. Get real-tim
 - **Container Control** - Start, stop, restart, and pull containers with inline confirmation buttons
 - **Image-Update Detection** - Opt-in daily digest of containers with newer images available, with Pull buttons
 - **Auto-Heal** - Opt-in automatic restart of unhealthy containers (HEALTHCHECK failures) with storm guard
-- **Unraid Server Monitoring** - CPU/memory, temperatures, array health, and parity-operation progress
+- **Unraid Server Monitoring** - CPU/memory, disk temperatures, array health, and parity-operation progress
 - **Unraid Notification Relay** - Opt-in forwarding of Unraid's own notification feed (SMART, disk errors, share full) with an adjustable importance floor
 - **UPS Monitoring (NUT)** - Reads your UPS over the network from a [NUT](https://networkupstools.org/) server: mains loss, low battery, overload and bypass alerts, plus `/ups` for battery and runtime
 - **Memory Pressure Management** - Automatic container priority handling during high memory
@@ -123,6 +123,7 @@ See the [changelog](CHANGELOG.md) for full details.
 - [Alert Examples](#alert-examples)
 - [User Guide](#user-guide)
 - [Troubleshooting](#troubleshooting)
+- [Releasing](#releasing)
 
 ---
 
@@ -316,7 +317,7 @@ Models are auto-discovered from Ollama at startup. Note: some local models don't
 
 ### 4. Get an Unraid API Key (Optional)
 
-Required for Unraid server monitoring (CPU, memory, temps, array status).
+Required for Unraid server monitoring (CPU, memory, disk temperatures, array status).
 
 1. In Unraid web UI, go to **Settings** → **Management Access**
 2. Generate an API key
@@ -469,7 +470,7 @@ unraid:
     # ups: 60    # IGNORED - UPS polling lives under the `nut:` section below
 
   thresholds:
-    cpu_temp: 80         # Alert above this temp (C)
+    cpu_temp: 80         # Not used yet: Unraid's API does not report CPU temperature
     cpu_usage: 95        # Alert above this %
     memory_usage: 90     # Alert above this %
     disk_temp: 50        # Alert above this temp (C)
@@ -571,8 +572,8 @@ auto_heal:
 
 | Command | Description |
 |---------|-------------|
-| `/server` | Server overview (CPU, memory, temps) |
-| `/server detailed` | Full metrics including per-core temps |
+| `/server` | Server overview (CPU, memory, uptime) |
+| `/server detailed` | Full metrics: memory breakdown, disk cache and array summary |
 | `/array` | Array status and disk health |
 | `/disks` | Detailed disk information |
 | `/ups` | UPS status, battery, runtime and load |
@@ -584,8 +585,8 @@ auto_heal:
 |---------|-------------|
 | `/mute <name> <duration>` | Mute container (e.g., `/mute plex 2h`, `/mute handbrake 1w`; max 7 days) |
 | `/unmute <name>` | Unmute a container |
-| `/mute-server <duration>` | Mute server alerts |
-| `/unmute-server` | Unmute server alerts |
+| `/mute-server <duration>` | Mute system, array and UPS alerts together |
+| `/unmute-server` | Unmute all three |
 | `/mute-array <duration>` | Mute array alerts |
 | `/unmute-array` | Unmute array alerts |
 | `/mutes` | Show all active mutes |
@@ -804,8 +805,7 @@ config/
 data/
 ├── ignored_errors.json     # Ignore patterns
 ├── mutes.json              # Container mutes
-├── server_mutes.json       # Server mutes
-├── array_mutes.json        # Array mutes
+├── server_mutes.json       # System, array and UPS mutes (an old array_mutes.json is imported once and renamed .migrated)
 ├── model_selection.json    # Active LLM provider/model choice
 ├── chat_ids.json           # Persistent Telegram chat IDs for alert delivery across restarts
 ├── announced_version.json  # Last-announced version (gates the startup "What's new" message)
@@ -821,6 +821,26 @@ data/
 - (Optional) LLM provider for AI features: Anthropic API key, OpenAI API key, or Ollama instance
 - (Optional) Unraid API key for server monitoring
 - (Optional) A NUT server for UPS monitoring
+
+---
+
+## Releasing
+
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. It checks the tag matches the version in both `pyproject.toml` and `src/__init__.py`, builds `linux/amd64`, and pushes `dervish/unraidmonitorbot:vX.Y.Z` and `:latest` to Docker Hub.
+
+The workflow needs two repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|--------|-------|
+| `DOCKERHUB_USERNAME` | The Docker Hub account that owns `dervish/unraidmonitorbot` |
+| `DOCKERHUB_TOKEN` | A Docker Hub access token with read/write on that repository |
+
+The image installs `requirements.txt`, which is exported from `uv.lock` with hashes. After changing dependencies, regenerate it and commit both files; CI fails while they disagree:
+
+```bash
+uv lock
+uv export --frozen --no-dev --extra ai --format requirements-txt --no-emit-project -o requirements.txt
+```
 
 ---
 

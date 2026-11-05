@@ -64,7 +64,7 @@ src/bot/ups_command.py - /ups command and the mute buttons on UPS alerts
 
 # Monitors
 src/monitors/docker_events.py - DockerEventMonitor with CrashTracker for container events
-src/monitors/log_watcher.py - LogWatcher for streaming container logs, error detection
+src/monitors/log_watcher.py - LogWatcher for streaming container logs, error detection; LineAssembler turns TTY/split chunks into capped lines
 src/monitors/resource_monitor.py - ResourceMonitor for per-container CPU/memory polling
 src/monitors/memory_monitor.py - MemoryMonitor for system memory pressure management
 src/monitors/image_update_monitor.py - ImageUpdateMonitor for daily image digest polling and batched update alerts
@@ -139,7 +139,12 @@ The container runs as non-root via `entrypoint.sh`:
 - `PUID`/`PGID` env vars control the runtime user (default: 99:100, Unraid's `nobody:users`)
 - `gosu` drops privileges from root to `appuser` after fixing directory ownership
 - umask is 0022 — config and data files are owner-writable only
+- A failed `usermod`/`groupmod` stops the container with the reason (it used to be swallowed and the bot ran as the wrong user)
+- The entrypoint reads the Docker socket's GID with `stat` at start and adds `appuser` to that group, so the published image works on hosts whose docker group is not 281
 - Base image is `python:3.11-slim` pinned by SHA digest in the Dockerfile
+- **`requirements.txt` is generated, never hand-edited.** It is `uv export --frozen --no-dev --extra ai --format requirements-txt --no-emit-project -o requirements.txt` with hashes, and the Dockerfile installs it with `--require-hashes --no-deps`. Change dependencies in `pyproject.toml`, run `uv lock`, then re-export; CI fails while the committed file differs from the lock, and pip-audits it.
+- **Releases are tag-driven.** Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which refuses unless the tag equals both version strings, then pushes `:vX.Y.Z` and `:latest` for linux/amd64 using the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets. Workflow actions are pinned by SHA; Dependabot bumps them, the uv lock and the base image.
+- **Log streams are bounded on the producer side.** Each container's stream thread fills a 10,000-line `queue.Queue` and wakes the event loop once per drain (`LOG_DRAIN_BATCH` lines), never once per line; lines over `LOG_MAX_LINE_CHARS` are cut.
 
 ## Architecture
 

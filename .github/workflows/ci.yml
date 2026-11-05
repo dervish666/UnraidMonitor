@@ -7,20 +7,30 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# Read-only token for every job unless a job asks for more.
+permissions:
+  contents: read
+
+# Actions are pinned to commit SHAs (tag in the trailing comment); Dependabot
+# bumps them. A moved tag cannot change what runs here.
 jobs:
   test:
     name: Lint, type-check & test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
 
+      # --locked fails if pyproject.toml and uv.lock disagree, instead of
+      # quietly re-resolving to something nobody reviewed.
       - name: Install dependencies
-        run: uv sync --extra dev --python 3.11
+        run: uv sync --locked --extra dev --python 3.11
 
       # ruff is not a project dependency (configured under [tool.ruff] only),
       # so run it as a pinned ephemeral tool rather than via `uv run`.
@@ -33,9 +43,39 @@ jobs:
       - name: Test (pytest)
         run: uv run pytest tests/
 
-      # Audits the project venv for known CVEs. Blocking, so new CVEs surface
-      # immediately. No ignores: the long-standing aiohttp exceptions were
-      # dropped in v0.18.1 when aiogram 3.30 lifted its aiohttp<3.14 cap and
-      # we moved to aiohttp>=3.14.1.
-      - name: Dependency audit (pip-audit)
+      # The Docker image installs requirements.txt, exported from uv.lock with
+      # hashes. Regenerate it and fail if the committed copy differs, so the
+      # image never ships versions CI did not test.
+      - name: requirements.txt matches uv.lock
+        run: |
+          uv export --frozen --no-dev --extra ai --format requirements-txt --no-emit-project -o requirements.txt
+          git diff --exit-code requirements.txt || {
+            echo "::error::requirements.txt is stale. Run the uv export line in the Dockerfile and commit it."
+            exit 1
+          }
+
+      # Blocking, so new CVEs surface immediately, and with no ignore list.
+      # The venv audit covers dev tooling; the requirements audit is exactly
+      # what the image installs.
+      - name: Dependency audit, dev venv (pip-audit)
         run: uv run pip-audit
+
+      - name: Dependency audit, image requirements (pip-audit)
+        run: uv run pip-audit --disable-pip -r requirements.txt
+
+  docker:
+    name: Docker build (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build linux/amd64 image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false

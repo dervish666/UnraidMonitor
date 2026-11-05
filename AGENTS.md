@@ -1,10 +1,10 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Codex when working with code in this repository. It is generated from CLAUDE.md; edit that file and regenerate this one.
 
 ## Codebase Structure Index
 
-The file map below provides instant orientation. For detailed export signatures and dependencies, read the relevant `.Codex/structure/*.yaml` file for the directory you're working in (files: alerts.yaml, bot.yaml, llm.yaml, monitors.yaml, nut.yaml, root.yaml, services.yaml, unraid.yaml, utils.yaml).
+The file map below provides instant orientation. For detailed export signatures and dependencies, read the relevant `.claude/structure/*.yaml` file for the directory you're working in (files: alerts.yaml, bot.yaml, llm.yaml, monitors.yaml, nut.yaml, root.yaml, services.yaml, unraid.yaml, utils.yaml).
 
 After adding, removing, or renaming source files or public classes/functions, update both the file map below and the relevant structure YAML file.
 
@@ -28,8 +28,7 @@ src/state.py - ContainerStateManager for thread-safe container state tracking
 src/alerts/manager.py - AlertManager, AlertSender protocol, ChatIdStore
 src/alerts/rate_limiter.py - RateLimiter for deduplicating container alerts
 src/alerts/mute_manager.py - MuteManager for temporary container alert mutes
-src/alerts/server_mute_manager.py - ServerMuteManager for Unraid server/array mutes
-src/alerts/array_mute_manager.py - ArrayMuteManager for array/disk alert mutes
+src/alerts/server_mute_manager.py - ServerMuteManager, the one mute store for system/array/UPS alerts (imports legacy array_mutes.json once)
 src/alerts/base_mute_manager.py - BaseMuteManager with JSON persistence for mutes
 src/alerts/ignore_manager.py - IgnoreManager for ignoring regex patterns in logs
 src/alerts/recent_errors.py - RecentErrorsBuffer for tracking recent container errors
@@ -39,7 +38,7 @@ src/analysis/pattern_analyzer.py - AI-powered pattern generation for ignores
 
 # LLM Providers
 src/services/llm/provider.py - LLMProvider protocol, LLMResponse, ToolCall, ModelInfo
-src/services/llm/anthropic_provider.py - Anthropic Codex provider (tool use, prompt caching)
+src/services/llm/anthropic_provider.py - Anthropic Claude provider (tool use, prompt caching)
 src/services/llm/openai_provider.py - OpenAI GPT provider (function calling translation)
 src/services/llm/ollama_provider.py - Ollama local provider with model discovery
 src/services/llm/registry.py - ProviderRegistry for model selection and per-feature overrides
@@ -57,7 +56,7 @@ src/bot/ignore_command.py - /ignore, /ignores, /ignore-similar for pattern manag
 src/bot/manage_command.py - /manage dashboard with status, resources, ignores, mutes
 src/bot/alert_callbacks.py - Quick-action button handlers for alert buttons
 src/bot/nl_handler.py - Natural language message handler with NL filter
-src/bot/health_command.py - /health command showing bot version, uptime, monitor status
+src/bot/health_command.py - /health command, collect_status() collector, collapsed startup message renderer (build_startup_lines, ai_summary)
 src/bot/setup_wizard.py - Interactive first-run setup for Unraid and containers
 src/bot/memory_commands.py - /cancel-kill command for canceling memory-based kills
 src/bot/model_command.py - /model command for runtime LLM provider/model switching
@@ -65,7 +64,7 @@ src/bot/ups_command.py - /ups command and the mute buttons on UPS alerts
 
 # Monitors
 src/monitors/docker_events.py - DockerEventMonitor with CrashTracker for container events
-src/monitors/log_watcher.py - LogWatcher for streaming container logs, error detection
+src/monitors/log_watcher.py - LogWatcher for streaming container logs, error detection; LineAssembler turns TTY/split chunks into capped lines
 src/monitors/resource_monitor.py - ResourceMonitor for per-container CPU/memory polling
 src/monitors/memory_monitor.py - MemoryMonitor for system memory pressure management
 src/monitors/image_update_monitor.py - ImageUpdateMonitor for daily image digest polling and batched update alerts
@@ -77,8 +76,8 @@ src/nut/monitor.py - UpsMonitor poll loop, alert ladder, "unavailable is not hea
 
 # Services
 src/services/docker_client.py - SharedDockerClient wrapper for reconnectable Docker access
-src/services/nl_processor.py - NLProcessor for Codex-powered natural language chat
-src/services/nl_tools.py - Tool definitions and executor for Codex tool use
+src/services/nl_processor.py - NLProcessor for Claude-powered natural language chat
+src/services/nl_tools.py - Tool definitions and executor for Claude tool use
 src/services/container_control.py - ContainerController for safe restart/stop/start
 src/services/container_classifier.py - ContainerClassifier using patterns and AI for roles
 src/services/diagnostic.py - DiagnosticService for AI container log analysis
@@ -88,21 +87,24 @@ src/services/auto_healer.py - AutoHealer for opt-in auto-restart of unhealthy co
 src/unraid/client.py - UnraidClientWrapper with direct GraphQL API access
 src/unraid/monitors/system_monitor.py - UnraidSystemMonitor for CPU/memory/temp alerts
 src/unraid/monitors/array_monitor.py - ArrayMonitor for disk health, usage, and parity-operation progress
+src/unraid/monitors/availability.py - UnraidAvailability: shared API-outage ladder (alert once after N failed polls, once on recovery)
 src/unraid/monitors/notification_monitor.py - UnraidNotificationMonitor relaying Unraid's own notification feed (opt-in, importance floor)
 
 # Utils
 src/utils/api_errors.py - LLM API error handling (Anthropic + OpenAI) with user-friendly messages
 src/utils/formatting.py - Bytes/uptime formatting, safe_reply/safe_edit, format_mute_expiry
-src/utils/heartbeat.py - heartbeat_loop() touching the liveness file the Docker HEALTHCHECK reads
+src/utils/heartbeat.py - heartbeat_loop() touching the liveness file the Docker HEALTHCHECK reads; stops while no monitor task is alive
+src/utils/poll_health.py - PollHealth/describe_poll: last success, failure streak and last error per monitor, rendered by /health
 src/utils/rate_limiter.py - PerUserRateLimiter for per-user API rate limiting
 src/utils/sanitize.py - Prompt injection prevention, sensitive data redaction
 src/utils/telegram_format.py - markdown_to_telegram_html: escape-first rendering of LLM output for HTML parse mode
 src/utils/telegram_retry.py - Telegram API retry logic for rate limit handling
 src/utils/version_store.py - read/write data/announced_version.json for startup What's new gate (atomic)
+src/utils/json_store.py - atomic_write_json (fsync + rename + dir fsync), load_json (quarantines unreadable files as .corrupt-<ts>), quarantined_files() for the startup message
 
 ## Project Overview
 
-Unraid Server Monitor Bot (v0.22.0) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources), Unraid server health (CPU, memory, disks, array) and UPS state over NUT. Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
+Unraid Server Monitor Bot (v0.22.5) - A Docker-based Telegram bot for monitoring Unraid servers. Monitors Docker containers (events, logs, resources), Unraid server health (CPU, memory, disks, array) and UPS state over NUT. Uses multi-provider LLM support (Anthropic, OpenAI, Ollama) for AI-powered diagnostics and natural language interaction. Sends alerts via Telegram with quick-action buttons.
 
 UPS has a history worth knowing: the README once advertised UPS alerts that did not exist (removed in v0.19.0), and v0.21.0 built them for real against a NUT server (`src/nut/`). Do not reintroduce the "UPS was never implemented" line.
 
@@ -137,7 +139,12 @@ The container runs as non-root via `entrypoint.sh`:
 - `PUID`/`PGID` env vars control the runtime user (default: 99:100, Unraid's `nobody:users`)
 - `gosu` drops privileges from root to `appuser` after fixing directory ownership
 - umask is 0022 — config and data files are owner-writable only
+- A failed `usermod`/`groupmod` stops the container with the reason (it used to be swallowed and the bot ran as the wrong user)
+- The entrypoint reads the Docker socket's GID with `stat` at start and adds `appuser` to that group, so the published image works on hosts whose docker group is not 281
 - Base image is `python:3.11-slim` pinned by SHA digest in the Dockerfile
+- **`requirements.txt` is generated, never hand-edited.** It is `uv export --frozen --no-dev --extra ai --format requirements-txt --no-emit-project -o requirements.txt` with hashes, and the Dockerfile installs it with `--require-hashes --no-deps`. Change dependencies in `pyproject.toml`, run `uv lock`, then re-export; CI fails while the committed file differs from the lock, and pip-audits it.
+- **Releases are tag-driven.** Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which refuses unless the tag equals both version strings, then pushes `:vX.Y.Z` and `:latest` for linux/amd64 using the `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets. Workflow actions are pinned by SHA; Dependabot bumps them, the uv lock and the base image.
+- **Log streams are bounded on the producer side.** Each container's stream thread fills a 10,000-line `queue.Queue` and wakes the event loop once per drain (`LOG_DRAIN_BATCH` lines), never once per line; lines over `LOG_MAX_LINE_CHARS` are cut.
 
 ## Architecture
 
@@ -161,6 +168,8 @@ Startup is split across three files:
 Key behaviours:
 - **First-run path:** If no `config.yaml` exists, calls `register_setup_wizard()` instead of `register_commands()`. `SetupModeMiddleware` blocks all non-wizard commands during setup. The wizard writes config via `ConfigWriter`, then restarts via `os.execv`.
 - **Normal path:** Loads config and calls `start_monitoring()` which initializes all monitors.
+- **Docker is optional at boot.** If the socket does not answer, `start_monitoring()` logs it and carries on: Unraid and UPS monitoring start anyway, `DockerEventMonitor.start()` and `LogWatcher.start()` retry with backoff, and consumers hold the event monitor's one `SharedDockerClient` for its whole life (built disconnected, filled in by `replace()` on connect). A Docker call before then raises `DockerException`, handled like any daemon outage. Consumers are typed `DockerClientLike` (Protocol in `src/services/docker_client.py`), so no `type: ignore` hides a missing proxy.
+- **Background tasks report their death.** `_BackgroundTasks.add_task()` attaches a done-callback that logs a task dying with an exception by name; `any_monitor_alive()` turns False once every monitor task has ended and one crashed, and the heartbeat stops so the HEALTHCHECK restarts the container. Pass `monitor=False` for tasks that are not monitors (startup, heartbeat, mute maintenance). Shutdown isolates each stop so mutes are always flushed.
 - `AlertManagerProxy` (`src/alert_proxy.py`) wraps `AlertManager` to lazily resolve chat IDs. Queues alerts until a user sends `/start`.
 - `_BackgroundTasks` (`src/background.py`) tracks all running monitors for graceful shutdown.
 - `ProviderRegistry` manages LLM providers (Anthropic, OpenAI, Ollama) with per-feature model overrides and JSON persistence.
@@ -194,12 +203,12 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `ctrl_confirm:action:container_name`, `ctrl_cancel`
 - `diag_details:container_name`
 - `ign_toggle:index`, `ign_all`, `ign_done`, `ign_cancel`
-- `mdi:container:index` (manage delete ignore), `mdm:type:key` (manage delete mute)
+- `mdi:container:key` (manage delete ignore; key is `ignore_key(pattern)`, 8 hex chars, so a stale list never deletes the wrong pattern), `mdm:type:key` (manage delete mute; type is `container`, `server` (system only), `array` or `ups`)
 - `help:section_key`, `help:back`
 - `res_limit:container_name:metric:threshold` (show threshold options; the CPU ladder runs to `cores * 100`, from `cpu_threshold_steps()` in `src/constants.py`)
 - `res_set:container_name:metric:value` (apply threshold, 0 = reset to default)
-- `mem_kill:container_name`, `mem_restart:container_name` (restart to reclaim memory), `mem_restart_yes:container_name`, `mem_restart_no:container_name`, `mem_cancel_kill` (exact match, no container)
-- `nl_confirm:action:container` (e.g., `nl_confirm:restart:plex`), `nl_cancel`
+- `mem_kill:container_name`, `mem_restart:container_name` (restart to reclaim memory; both fall back to `ctrl_confirm:stop|restart:name` when the alert is stale), `mem_restart_yes:container_name`, `mem_restart_no:container_name`, `mem_cancel_kill` (exact match, no container)
+- `nl_confirm:<token>`, `nl_cancel:<token>` (the token names a `PendingAction` held by `NLProcessor`, bound to the user and the message carrying the buttons, single-use, 10-minute TTL, retired by the user's next message; the button never carries the action or container)
 - `manage:section` (e.g., `manage:status`, `manage:resources`, `manage:server`, `manage:disks`, `manage:ignores`, `manage:mutes`, `manage:features`, `manage:back`), plus `manage:ignores:container_name` (one container's ignores)
 - `feat:notif:on` / `feat:notif:off` (enable/disable the Unraid notification relay; persists + restarts) / `feat:notif:level` (cycle WARNING→ALERT→INFO, applies live)
 - `feat:img:on` / `feat:img:off` (enable/disable image updates from /manage → Features; persists + restarts), `feat:heal` (open auto-heal container picker), `feat:memres` (open memory-restart container picker)
@@ -208,14 +217,16 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `arr_mute:minutes` (mute array alerts, e.g., `arr_mute:60`)
 - `arr_thresh:metric:current` (show array threshold options, e.g., `arr_thresh:capacity:85`)
 - `arr_set:metric:value` (apply array threshold, e.g., `arr_set:array_usage:90`, 0 = reset to default)
-- `srv_mute:minutes` (mute server alerts, e.g., `srv_mute:60`)
+- `srv_mute:minutes` (mute **system** alerts only, e.g., `srv_mute:60`; array and UPS stay live. `/mute-server` is the mute-everything command)
 - `srv_thresh:metric:current` (show server threshold options, e.g., `srv_thresh:cpu_temp:80`)
 - `srv_set:metric:value` (apply server threshold, e.g., `srv_set:cpu_temp:90`, 0 = reset to default)
-- `ups_mute:minutes` (mute UPS alerts, e.g., `ups_mute:60`) — shares `category_mute_callback` with `arr_mute:`/`srv_mute:` (30-day clamp). Mutes the UPS category only, but the undo hint points at `/unmute-server`, which clears system + array + UPS together. There is no UPS-only unmute yet.
+- `ups_mute:minutes` (mute UPS alerts, e.g., `ups_mute:60`) — shares `category_mute_callback` with `arr_mute:`/`srv_mute:` (30-day clamp). Mutes the UPS category only. `/unmute-server` clears system + array + UPS together; /manage → Mutes lists each category with its own unmute button (`mdm:ups:ups`).
 - `feat:ups:on` / `feat:ups:off` (enable/disable UPS monitoring from /manage → Features; persists + restarts)
 - `model:provider_name`, `model_select:provider:model`, `model:back`
 - `setup:confirm`, `setup:toggle:category:container_name` (e.g., `setup:toggle:watched:plex`), `setup:adjust:category`, `setup:adjust_done`
 - `pull:container_name` (image-update digest -> shows pull confirmation)
+
+Callback data is capped at 64 bytes by Telegram, and an over-long one makes the whole message fail to send. Any callback carrying a container or model name is built with `fit_callback(prefix, name, suffix)` (`src/utils/formatting.py`), which cuts the name and marks it with `…`; its handler maps it back with `resolve_cut_name(value, candidates)`, which accepts a cut name only when exactly one candidate starts with it.
 
 Callback handlers are registered with `F.data.startswith("prefix:")` filters in `register_commands()` and its `_register_*` helpers (same file).
 
@@ -225,13 +236,18 @@ In `register_commands()` (`src/bot/telegram_bot.py`), order matters:
 1. Command handlers (`Command("status")`, etc.)
 2. Callback query handlers (`F.data.startswith(...)`)
 3. **NL handler must be last** — it catches all non-command text via `NLFilter`
-4. **`unhandled_callback` must be the last callback registration** — it has no filter, so anything registered after it is unreachable. It answers callbacks nothing else claimed, because an unanswered callback leaves the button spinning in the client forever.
+4. **`unknown_command` must be the last message registration.** It matches any text starting with "/" and replies with a pointer to /help. `/health` is registered in `start_monitoring()` after `register_commands()`, so `register_unknown_command(dp)` runs there, right after it.
+5. **`unhandled_callback` must be the last callback registration** — it has no filter, so anything registered after it is unreachable. It answers callbacks nothing else claimed, because an unanswered callback leaves the button spinning in the client forever.
 
 After registration, `publish_command_menu(bot, dp)` (called from `start_monitoring`) reads the dispatcher's `Command` filters and pushes them to Telegram's "/" menu. A new command shows up automatically once it has an entry in `COMMAND_DESCRIPTIONS` (`src/bot/command_menu.py`); hyphenated names like `/mute-server` work when typed but cannot appear in the menu.
 
-**A disk status is not a verdict without its context.** `DISK_INVALID` means "being written to" during a parity sync and "broken" outside one; the array API has no per-disk rebuild flag, so `parityCheckStatus` is the only way to tell. Alerting on `status != DISK_OK` alone paged the user for a routine rebuild (confirmed live, v0.20.0). Related: the same payload returns `running`/`paused`/`errors` as **null** while `status` correctly reads RUNNING — verify which fields a live server actually populates before keying logic on them.
+**A disk status is not a verdict without its context.** `DISK_INVALID` means "being written to" during a parity sync and "broken" outside one; the array API has no per-disk rebuild flag, so `parityCheckStatus` is the only way to tell. Alerting on `status != DISK_OK` alone paged the user for a routine rebuild (confirmed live, v0.20.0). Related: the same payload returns `running`/`paused`/`errors` as **null** while `status` correctly reads RUNNING — verify which fields a live server actually populates before keying logic on them. `parityCheckStatus.correcting: false` is the one value that proves a read-only check, which writes nothing and so excuses no disk status; `parity_writing()` in `array_monitor.py` is the test every caller uses.
 
 **A rendered button needs a registered handler in the same conditions.** Alerts are built in `src/monitor_callbacks.py` from one set of flags and handlers are registered in `register_commands()` from another; when those disagree the button silently does nothing. `mem_kill:` is the cautionary tale — it was rendered whenever Unraid monitoring was on but registered only when `memory_management.enabled`. `MemoryMonitor` is now constructed unconditionally (inert until `start()`) with `bg.memory_monitor` as the sole signal for "the pressure loop is running".
+
+**A Docker health event carries its status in the Action.** dockerd emits `Action: "health_status: unhealthy"` (verb, colon, status in one string; moby `daemon/health.go`) and there is no `health_status` attribute. Comparing the raw Action to `"health_status"` matched nothing, so unhealthy alerts and auto-heal were dead in production while every test passed, because the tests built events by hand in the shape the code expected. Parse with `split_event_action()` (`src/monitors/docker_events.py`), and feed tests the real wire shape through `_event_loop` (`tests/test_event_sequences.py`). Docker only emits a health event when the status changes, so a container that goes unhealthy during a mute, or whose alert is lost to a Telegram outage, is held in `_unhealthy_pending` and re-checked by `_reconcile_unhealthy()` every 30s.
+
+**Delivery state follows what Telegram accepted.** `AlertManager.send_*`, `AlertManagerProxy.send_*` and the server-alert callback return `True` only when a chat received the alert (or it was queued before `/start`). Monitors commit dedup and cooldown state (array `_alerted_disks`, system cooldowns, UPS known flags and outage flag, image-update digests, relayed notification ids) only on `True`, so an alert lost to an outage is retried next poll. `send_with_retry` retries `TelegramNetworkError` and `TelegramServerError` (both subclass `TelegramAPIError`, so they must be caught first) with 1/2/4s backoff.
 
 **A reply arrives with the formatting stripped.** Telegram puts the plain text in `Message.text` and the markup in `entities`, so an alert sent as `*ERRORS IN:* plex` comes back as `ERRORS IN: plex`. Any pattern matching a replied-to alert must target the rendered text, never the source. `/diagnose` kept a private pattern list that required literal asterisks and therefore matched nothing in production for months, while its tests passed because they fed it raw source strings. One shared list now lives in `extract_alert_container()` (`src/utils/formatting.py`), and `tests/test_alert_reply_extraction.py` drives real `AlertManager` sends through a render step so a headline change in `manager.py` fails a test.
 
@@ -241,7 +257,15 @@ Two rules that list depends on: anchor patterns to the start of a line, and requ
 
 **Every monitor state must handle both directions, and shared limiters need distinct keys.** The 2026-09-22 audit found four ways alerting went quiet for good, none visible to single-transition tests: the memory monitor parked in RECOVERING or CRITICAL with no way out; a log-error alert silencing the crash alert that followed because both keyed the shared `RateLimiter` on the bare container name (crashes now use `name:crash`, resources `name:metric`); UPS flags raised during a mute never alerting after it; and the log watcher re-following a stopped container 4,645 times in half a second because it only slept on exceptions. Test sequences (critical, kill, decline, critical again), not single steps.
 
-**Destructive quick actions confirm, same as the commands.** An alert sits in the chat for days, so a one-tap Restart on a stale alert is a mis-tap waiting to happen. The `restart:` alert button routes through `build_confirmation()` and the shared `ctrl_confirm:` handler, exactly like `/restart`.
+**One alert per episode.** A threshold alert (server CPU/memory/temperature, UPS load, container resources) opens an episode on delivery, stays quiet while the problem lasts except for one reminder every `ALERT_REMINDER_SECONDS` (6h), and closes with one recovery message once the reading is under `threshold * EPISODE_RECOVERY_RATIO` (0.9). The 5-minute cooldown it replaced re-paged a sustained problem up to 288 times a day. The memory monitor uses hysteresis instead: Warning holds until under `safe_threshold`, Critical until `MEMORY_CRITICAL_EXIT_MARGIN` points under its line. A die within `INTENTIONAL_STOP_WINDOW` (30s) of a kill/stop event is a stop, not a crash, unless an `oom` event or `State.OOMKilled` says the kernel did it.
+
+**Model output is data, never code or authority.** An AI-proposed ignore pattern is stored as a literal substring that must occur in the error it was asked about (`_literal_text()` in `pattern_analyzer.py`); no regex written by a model is ever compiled. A regex hand-edited into `ignored_errors.json` is validated on load (nested quantifiers, alternation under a quantifier, an adversarial probe set) and dropped with an ERROR log if unsafe; Python's `re` has no timeout, so a probe that hangs leaves a daemon thread spinning until restart, which is why the static check runs first. NL tool arguments are checked against the tool schema in `NLToolExecutor.execute()`, and one container action per message reaches the confirmation step. Credentials are redacted (`redact_secrets()` in `src/utils/sanitize.py`) inside `sanitize_for_prompt` and in log-error alerts.
+
+**Destructive quick actions confirm, same as the commands.** An alert sits in the chat for days, so a one-tap Restart on a stale alert is a mis-tap waiting to happen. The `restart:` alert button routes through `build_confirmation()` and the shared `ctrl_confirm:` handler, exactly like `/restart`. `mem_kill:` and `mem_restart:` keep their one-tap fast path only while the alert is under 10 minutes old *and* `MemoryMonitor.pressure_active`; otherwise they route through the same confirmation.
+
+**Never-kill beats killable.** Priority and globally protected containers are excluded when the memory monitor picks a target and again immediately before it stops one (the lists are live-editable). `MemoryConfig.from_dict` drops a name listed as both priority and killable, the wizard refuses the contradictory toggle, and `kill_container()` refuses a protected name.
+
+**`/pull` never deletes the original until the replacement runs.** `pull_and_recreate()` refuses up front if `unsupported_recreate_settings()` finds a HostConfig field it cannot carry, then stops the original and renames it aside, `create()`s the replacement (primary network endpoint, anonymous volumes by name, structured mounts, read-only rootfs and the rest), joins secondary networks, and `start()`s it. Any failure removes only the replacement and renames the original back. Tests use a stateful fake daemon (`tests/test_pull_recreate_safety.py`) where `create()` leaves a container behind when `start()` fails, which is what the real one does.
 
 ### Telegram Message Formatting
 
@@ -265,7 +289,7 @@ Messages use Markdown parse mode. Use `safe_reply()` and `safe_edit()` from `src
 - **All async** - Every component uses async/await. Tests use `pytest-asyncio` with `asyncio_mode = "auto"`
 - **Partial name matching** - Container commands accept partial names (e.g., `/logs rad` matches `radarr`)
 - **Graceful degradation** - Bot works without any LLM API keys; AI features just disable. Models without tool support get a note appended to NL responses
-- **JSON persistence** - Mutes and ignores stored in `data/*.json` files (IgnoreManager uses `batch_updates()` context manager to defer saves)
+- **JSON persistence** - Every `data/*.json` file is written with `atomic_write_json()` and read with `load_json()` (`src/utils/json_store.py`); never `json.dump` to a data file directly. A file that does not parse, or has the wrong root type, is renamed `.corrupt-<ts>` and listed on the startup message instead of being overwritten by the next save; loaders keep valid entries and log rejected ones with `log_rejected()`. Mute managers set `_dirty` before saving and clear it only when the write succeeds, so a failed save is retried by `flush()`; `save_note_of(manager)` gives the line a reply appends when the change is not on disk. IgnoreManager uses `batch_updates()` to defer saves
 - **Protected containers** - Listed in `config.yaml`, cannot be controlled via Telegram
 - **Confirmation prompts** - Destructive actions (restart, stop, start, pull) require inline button confirmation (✅ Confirm / ❌ Cancel)
 - **Europe/London timezone** - Default timezone for displayed timestamps (configurable via `TZ` env var)
@@ -293,7 +317,7 @@ Work in the main checkout on a feature branch. Do not create worktrees (`orca wo
 ```bash
 TELEGRAM_BOT_TOKEN=           # Required - from @BotFather
 TELEGRAM_ALLOWED_USERS=       # Required - comma-separated Telegram user IDs (e.g., 123456,789012)
-ANTHROPIC_API_KEY=            # Optional - enables AI features via Codex models
+ANTHROPIC_API_KEY=            # Optional - enables AI features via Claude models
 OPENAI_API_KEY=               # Optional - enables AI features via OpenAI models
 OLLAMA_HOST=                  # Optional - Ollama server URL (default: http://localhost:11434)
 DEFAULT_MODEL=                # Optional - override default AI model (e.g. qwen2.5:7b, gpt-4o)
@@ -309,7 +333,7 @@ Environment variables can also be set via `config/.env` (loaded by pydantic-sett
 
 ## Configuration
 
-`config/config.yaml` - Created by the setup wizard on first run (or via `/setup`). Key sections:
+`config/config.yaml` - Created by the setup wizard on first run (or via `/setup`). Every section is read through `_Section` in `src/config.py`: an empty section (`unraid:` with nothing under it) takes defaults, `"false"`/`"no"` are false, numeric strings are numbers, a wrong type raises `ConfigError` naming the path, unknown keys are logged by path, and the example host `your-unraid-ip` counts as unset. `config/.env` keys pydantic does not know are logged and ignored. Key sections:
 - `ai` - LLM model names, token limits, NL processor settings
 - `log_watching` - Watched containers, error/ignore patterns, cooldown
 - `unraid` - Host, polling intervals, alert thresholds (CPU temp, disk temp, memory, etc.)
@@ -321,7 +345,7 @@ Environment variables can also be set via `config/.env` (loaded by pydantic-sett
 - `auto_heal` - Opt-in auto-restart of unhealthy containers (enabled, containers, max_restarts, window_minutes)
 - `nut` - UPS monitoring over NUT (enabled, host, port, ups_name, poll_seconds, thresholds.battery_charge, thresholds.load). On by default but dormant: `host` falls back to the Unraid host, and a host that never answers is logged, not alerted about, so it stays quiet for the majority who run no UPS.
 
-Data files in `data/`: `mutes.json`, `server_mutes.json`, `array_mutes.json`, `ignored_errors.json`, `model_selection.json` (runtime LLM choice), `chat_ids.json` (persistent Telegram chat IDs for alert delivery), `announced_version.json` (last-announced bot version for startup What's new gate), `announced_updates.json` (image-update dedup map so restarts don't re-announce), `announced_notifications.json` (relayed Unraid notification ids, bounded at 500)
+Data files in `data/`: `mutes.json`, `server_mutes.json` (system, array and UPS categories; a pre-0.23 `array_mutes.json` is imported once and renamed `.migrated`), `ignored_errors.json`, `model_selection.json` (runtime LLM choice), `chat_ids.json` (persistent Telegram chat IDs for alert delivery), `announced_version.json` (last-announced bot version for startup What's new gate), `announced_updates.json` (image-update dedup map so restarts don't re-announce), `announced_notifications.json` (relayed Unraid notification ids, bounded at 500)
 
 ## Design Context
 
