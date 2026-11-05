@@ -410,7 +410,8 @@ class SetupWizard:
                 ignored.append(c.name)
             if "priority" in c.categories:
                 priority.append(c.name)
-            if "killable" in c.categories:
+            # A classifier can tag one container both ways; never-kill wins.
+            if "killable" in c.categories and not c.categories & {"priority", "protected"}:
                 killable.append(c.name)
 
         writer = ConfigWriter(self._config_path)
@@ -761,9 +762,23 @@ def create_toggle_callback(
             return
 
         # Toggle the category
+        never_kill = {"priority", "protected"}
         if category in target.categories:
             target.categories.discard(category)
             await callback.answer(f"Removed {container_name} from {category}")
+        elif category == "killable" and target.categories & never_kill:
+            clash = sorted(target.categories & never_kill)[0]
+            await callback.answer(
+                f"{container_name} is {clash}, so it can't be killable. Remove it from {clash} first.",
+                show_alert=True,
+            )
+            return
+        elif category in never_kill and "killable" in target.categories:
+            await callback.answer(
+                f"{container_name} is killable. Remove it from killable first.",
+                show_alert=True,
+            )
+            return
         else:
             # Handle conflicts: ignored <-> watched are mutually exclusive
             if category == "ignored" and "watched" in target.categories:

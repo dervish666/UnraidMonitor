@@ -5,7 +5,7 @@ import html
 import logging
 import os
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Awaitable, Any, TYPE_CHECKING
 
 from aiogram.types import CallbackQuery, Message
@@ -28,7 +28,7 @@ from src.state import ContainerStateManager
 from src.services.container_control import ContainerController
 from src.bot.control_commands import build_confirmation
 from src.services.diagnostic import DiagnosticService
-from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes, format_bytes
+from src.utils.formatting import validate_container_name, escape_markdown, truncate_callback_data, format_duration_minutes, format_bytes, safe_reply
 from src.utils.sanitize import sanitize_logs_for_display
 from src.utils.telegram_format import markdown_to_telegram_html
 
@@ -371,6 +371,34 @@ def mute_callback(
     return handler
 
 
+# A memory alert's buttons act at once only while the pressure event they were
+# sent for is still open and the alert is recent. An alert sits in the chat for
+# days; a one-tap Stop on yesterday's alert is a mis-tap waiting to happen.
+_MEMORY_ALERT_LIVE_SECONDS = 600
+
+
+def _memory_alert_is_live(callback: CallbackQuery, memory_monitor: "MemoryMonitor") -> bool:
+    sent = getattr(callback.message, "date", None)
+    if not isinstance(sent, datetime):
+        return False
+    if sent.tzinfo is None:
+        sent = sent.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - sent).total_seconds()
+    return age <= _MEMORY_ALERT_LIVE_SECONDS and memory_monitor.pressure_active
+
+
+async def _confirm_stale_memory_action(
+    callback: CallbackQuery, action: str, container_name: str,
+) -> None:
+    """Route a stale memory button through the same confirmation as /stop."""
+    text, keyboard = build_confirmation(
+        action, container_name, "memory alert is no longer current, so this needs a confirm",
+    )
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await safe_reply(callback.message, text, reply_markup=keyboard)
+
+
 def mem_kill_callback(
     memory_monitor: "MemoryMonitor",
     protected_containers: list[str] | None = None,
@@ -386,6 +414,10 @@ def mem_kill_callback(
 
         if container_name in _protected:
             await callback.answer(f"{container_name} is a protected container")
+            return
+
+        if not _memory_alert_is_live(callback, memory_monitor):
+            await _confirm_stale_memory_action(callback, "stop", container_name)
             return
 
         await callback.answer(f"Stopping {container_name}...")
@@ -441,6 +473,10 @@ def mem_restart_callback(
 
         if container_name not in memory_config.restart_containers:
             await callback.answer(f"{container_name} is not in the memory restart list")
+            return
+
+        if not _memory_alert_is_live(callback, memory_monitor):
+            await _confirm_stale_memory_action(callback, "restart", container_name)
             return
 
         await callback.answer(f"Restarting {container_name}...")

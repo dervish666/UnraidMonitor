@@ -198,7 +198,7 @@ Inline keyboard buttons use `prefix:data` format, parsed with `split(":", 1)` to
 - `help:section_key`, `help:back`
 - `res_limit:container_name:metric:threshold` (show threshold options; the CPU ladder runs to `cores * 100`, from `cpu_threshold_steps()` in `src/constants.py`)
 - `res_set:container_name:metric:value` (apply threshold, 0 = reset to default)
-- `mem_kill:container_name`, `mem_restart:container_name` (restart to reclaim memory), `mem_restart_yes:container_name`, `mem_restart_no:container_name`, `mem_cancel_kill` (exact match, no container)
+- `mem_kill:container_name`, `mem_restart:container_name` (restart to reclaim memory; both fall back to `ctrl_confirm:stop|restart:name` when the alert is stale), `mem_restart_yes:container_name`, `mem_restart_no:container_name`, `mem_cancel_kill` (exact match, no container)
 - `nl_confirm:action:container` (e.g., `nl_confirm:restart:plex`), `nl_cancel`
 - `manage:section` (e.g., `manage:status`, `manage:resources`, `manage:server`, `manage:disks`, `manage:ignores`, `manage:mutes`, `manage:features`, `manage:back`), plus `manage:ignores:container_name` (one container's ignores)
 - `feat:notif:on` / `feat:notif:off` (enable/disable the Unraid notification relay; persists + restarts) / `feat:notif:level` (cycle WARNING→ALERT→INFO, applies live)
@@ -245,7 +245,11 @@ Two rules that list depends on: anchor patterns to the start of a line, and requ
 
 **Every monitor state must handle both directions, and shared limiters need distinct keys.** The 2026-09-22 audit found four ways alerting went quiet for good, none visible to single-transition tests: the memory monitor parked in RECOVERING or CRITICAL with no way out; a log-error alert silencing the crash alert that followed because both keyed the shared `RateLimiter` on the bare container name (crashes now use `name:crash`, resources `name:metric`); UPS flags raised during a mute never alerting after it; and the log watcher re-following a stopped container 4,645 times in half a second because it only slept on exceptions. Test sequences (critical, kill, decline, critical again), not single steps.
 
-**Destructive quick actions confirm, same as the commands.** An alert sits in the chat for days, so a one-tap Restart on a stale alert is a mis-tap waiting to happen. The `restart:` alert button routes through `build_confirmation()` and the shared `ctrl_confirm:` handler, exactly like `/restart`.
+**Destructive quick actions confirm, same as the commands.** An alert sits in the chat for days, so a one-tap Restart on a stale alert is a mis-tap waiting to happen. The `restart:` alert button routes through `build_confirmation()` and the shared `ctrl_confirm:` handler, exactly like `/restart`. `mem_kill:` and `mem_restart:` keep their one-tap fast path only while the alert is under 10 minutes old *and* `MemoryMonitor.pressure_active`; otherwise they route through the same confirmation.
+
+**Never-kill beats killable.** Priority and globally protected containers are excluded when the memory monitor picks a target and again immediately before it stops one (the lists are live-editable). `MemoryConfig.from_dict` drops a name listed as both priority and killable, the wizard refuses the contradictory toggle, and `kill_container()` refuses a protected name.
+
+**`/pull` never deletes the original until the replacement runs.** `pull_and_recreate()` refuses up front if `unsupported_recreate_settings()` finds a HostConfig field it cannot carry, then stops the original and renames it aside, `create()`s the replacement (primary network endpoint, anonymous volumes by name, structured mounts, read-only rootfs and the rest), joins secondary networks, and `start()`s it. Any failure removes only the replacement and renames the original back. Tests use a stateful fake daemon (`tests/test_pull_recreate_safety.py`) where `create()` leaves a container behind when `start()` fails, which is what the real one does.
 
 ### Telegram Message Formatting
 

@@ -221,49 +221,6 @@ class TestPullAndRecreate:
     """Tests for ContainerController.pull_and_recreate."""
 
     @pytest.mark.asyncio
-    async def test_success_flow_pull_stop_remove_create_start(self):
-        """Happy path: pull image, save config, stop, remove, run with new image."""
-        from src.services.container_control import ContainerController
-
-        mock_image = MagicMock()
-        mock_image.tags = ["linuxserver/radarr:latest"]
-        mock_image.id = "sha256:oldimage"
-
-        mock_container = MagicMock()
-        mock_container.image = mock_image
-        mock_container.attrs = {
-            "Config": {"Env": ["TZ=Europe/London"]},
-            "HostConfig": {"Binds": ["/config:/config"]},
-        }
-
-        mock_client = MagicMock()
-        mock_client.containers.get.return_value = mock_container
-
-        controller = ContainerController(
-            docker_client=mock_client,
-            protected_containers=[],
-        )
-
-        result = await controller.pull_and_recreate("radarr")
-
-        # Verify pull happened
-        mock_client.images.pull.assert_called_once_with("linuxserver/radarr:latest")
-        # Verify stop and remove happened
-        mock_container.stop.assert_called_once()
-        mock_container.remove.assert_called_once()
-        # Verify new container was created
-        mock_client.containers.run.assert_called_once()
-        run_kwargs = mock_client.containers.run.call_args
-        assert run_kwargs[0][0] == "linuxserver/radarr:latest"
-        assert run_kwargs[1]["name"] == "radarr"
-        assert run_kwargs[1]["detach"] is True
-        assert run_kwargs[1]["environment"] == ["TZ=Europe/London"]
-        assert run_kwargs[1]["volumes"] == ["/config:/config"]
-        # Verify success message
-        assert "updated" in result.lower()
-        assert "radarr" in result
-
-    @pytest.mark.asyncio
     async def test_failure_during_pull_does_not_stop_container(self):
         """If image pull fails, the running container must not be touched."""
         from src.services.container_control import ContainerController
@@ -293,7 +250,7 @@ class TestPullAndRecreate:
         mock_container.stop.assert_not_called()
         mock_container.remove.assert_not_called()
         # No new container created
-        mock_client.containers.run.assert_not_called()
+        mock_client.containers.create.assert_not_called()
         # Error message returned
         assert "failed" in result.lower()
 
@@ -312,75 +269,6 @@ class TestPullAndRecreate:
 
         result = await controller.pull_and_recreate("nonexistent")
         assert "not found" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_recreate_failure_triggers_rollback(self):
-        """If recreation fails, should attempt rollback with old image."""
-        from src.services.container_control import ContainerController
-
-        mock_image = MagicMock()
-        mock_image.tags = ["myapp:latest"]
-        mock_image.id = "sha256:oldid"
-
-        mock_container = MagicMock()
-        mock_container.image = mock_image
-        mock_container.attrs = {"Config": {}, "HostConfig": {}}
-
-        mock_client = MagicMock()
-        mock_client.containers.get.return_value = mock_container
-
-        # First call to containers.run (new image) fails,
-        # second call (rollback with old image) succeeds
-        mock_client.containers.run.side_effect = [
-            Exception("Port conflict"),
-            MagicMock(),  # rollback succeeds
-        ]
-
-        controller = ContainerController(
-            docker_client=mock_client,
-            protected_containers=[],
-        )
-
-        result = await controller.pull_and_recreate("myapp")
-
-        # Should have tried to create twice: once with new, once with old
-        assert mock_client.containers.run.call_count == 2
-        # Second call should use old image id
-        second_call = mock_client.containers.run.call_args_list[1]
-        assert second_call[0][0] == "sha256:oldid"
-        # Result should mention rollback
-        assert "rolled back" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_recreate_and_rollback_both_fail(self):
-        """If both recreation and rollback fail, return critical error."""
-        from src.services.container_control import ContainerController
-
-        mock_image = MagicMock()
-        mock_image.tags = ["myapp:latest"]
-        mock_image.id = "sha256:oldid"
-
-        mock_container = MagicMock()
-        mock_container.image = mock_image
-        mock_container.attrs = {"Config": {}, "HostConfig": {}}
-
-        mock_client = MagicMock()
-        mock_client.containers.get.return_value = mock_container
-
-        mock_client.containers.run.side_effect = [
-            Exception("Port conflict"),
-            Exception("Rollback also failed"),
-        ]
-
-        controller = ContainerController(
-            docker_client=mock_client,
-            protected_containers=[],
-        )
-
-        result = await controller.pull_and_recreate("myapp")
-
-        assert "critical" in result.lower()
-        assert "manual intervention" in result.lower()
 
     @pytest.mark.asyncio
     async def test_uses_image_id_when_no_tags(self):

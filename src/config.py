@@ -318,6 +318,17 @@ class MemoryConfig:
             killable_containers=data.get("killable_containers", []),
             restart_containers=data.get("restart_containers", []) or [],
         )
+        overlap = [c for c in config.killable_containers if c in set(config.priority_containers)]
+        if overlap:
+            # Priority means never kill. A name in both lists used to become
+            # the first automatic target.
+            logger.warning(
+                "Containers listed as both priority and killable will not be killed: %s",
+                ", ".join(overlap),
+            )
+            config.killable_containers = [
+                c for c in config.killable_containers if c not in set(overlap)
+            ]
         # Validate threshold ordering: critical > warning > safe
         if not (config.critical_threshold > config.warning_threshold > config.safe_threshold):
             logger.warning(

@@ -434,6 +434,7 @@ def build_memory_monitor(
     docker_client: Any,
     chat_id_store: ChatIdStore,
     bot: Bot,
+    protected_containers: list[str] | None = None,
 ) -> MemoryMonitor:
     """Build the MemoryMonitor regardless of ``memory_config.enabled``.
 
@@ -449,6 +450,7 @@ def build_memory_monitor(
         config=memory_config,
         on_alert=make_memory_alert_handler(chat_id_store, bot, escape_markdown),
         on_ask_restart=make_ask_restart_handler(chat_id_store, bot, escape_markdown),
+        protected_containers=protected_containers,
     )
 
 
@@ -617,6 +619,7 @@ async def start_monitoring(
     memory_config = config.memory_management
     memory_monitor = build_memory_monitor(
         memory_config, monitor.shared_client, chat_id_store, bot,
+        protected_containers=list(config.protected_containers or []),
     )
 
     if memory_config.enabled:

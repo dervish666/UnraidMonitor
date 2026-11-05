@@ -54,6 +54,7 @@ class MemoryMonitor:
         check_interval: int = 10,
         error_sleep: int = 30,
         stats_timeout: float = 8.0,
+        protected_containers: list[str] | None = None,
     ):
         """Initialize memory monitor.
 
@@ -70,6 +71,8 @@ class MemoryMonitor:
             error_sleep: Seconds to sleep after an error.
             stats_timeout: Max seconds to spend reading killable container memory
                 before falling back to showing names without memory figures.
+            protected_containers: The global protected list. Never stopped,
+                even when also listed as killable.
         """
         self._docker = docker_client
         self._config = config
@@ -78,6 +81,7 @@ class MemoryMonitor:
         self._check_interval = check_interval
         self._error_sleep = error_sleep
         self._stats_timeout = stats_timeout
+        self._protected = set(protected_containers or [])
         self._state = MemoryState.NORMAL
         self._killed_containers: list[str] = []
         # Stops that failed in this pressure event. Skipped when choosing the
@@ -94,6 +98,11 @@ class MemoryMonitor:
     def is_running(self) -> bool:
         return self._running
 
+    @property
+    def pressure_active(self) -> bool:
+        """True while a pressure event is open (anything but NORMAL)."""
+        return self._state != MemoryState.NORMAL
+
     def is_enabled(self) -> bool:
         """Check if memory monitoring is enabled."""
         return self._config.enabled
@@ -101,6 +110,10 @@ class MemoryMonitor:
     def get_memory_percent(self) -> float:
         """Get current system memory usage percentage."""
         return float(psutil.virtual_memory().percent)
+
+    def _never_kill(self) -> set[str]:
+        """Priority and protected containers. Read live: /manage edits apply."""
+        return set(self._config.priority_containers) | self._protected
 
     async def _get_running_killable(self) -> list[str]:
         """Return killable containers that are currently running.
@@ -111,10 +124,12 @@ class MemoryMonitor:
         running_names = await asyncio.to_thread(
             lambda: {c.name for c in self._docker.containers.list()}
         )
+        never = self._never_kill()
         return [
             name
             for name in self._config.killable_containers
             if name in running_names
+            and name not in never
             and name not in self._killed_containers
             and name not in self._failed_kills
         ]
@@ -318,10 +333,11 @@ class MemoryMonitor:
         snapshot = await self._memory_snapshot()
         if snapshot:
             by_name = dict(snapshot)
+            never = self._never_kill()
             killable = self._sorted_by_memory([
                 (name, by_name[name])
                 for name in self._config.killable_containers
-                if name in by_name and name not in self._killed_containers
+                if name in by_name and name not in self._killed_containers and name not in never
             ])
             restartable = self._sorted_by_memory([
                 (name, by_name[name])
@@ -414,7 +430,13 @@ class MemoryMonitor:
             killed = False
             stop_failed = False
             percent = self.get_memory_percent()
-            if percent >= self._config.critical_threshold:
+            if container_name in self._never_kill():
+                # Re-checked at the last moment: the lists can change during
+                # the countdown, and the selection-time filter is not enough.
+                logger.warning(f"Not stopping {container_name}: it is priority or protected")
+                self._failed_kills.add(container_name)
+                stop_failed = True
+            elif percent >= self._config.critical_threshold:
                 result = await self._stop_container(container_name)
                 killed = result.success
                 now_percent, available = self._system_memory()
@@ -471,6 +493,10 @@ class MemoryMonitor:
         Returns a KillResult carrying how much memory the container was using
         and the system memory level after the stop, so the user gets feedback.
         """
+        if name in self._protected:
+            logger.warning(f"Refusing to stop protected container {name}")
+            return KillResult(False, name)
+
         # Cancel any pending auto-kill to avoid double-stopping
         await self.cancel_pending_kill()
 

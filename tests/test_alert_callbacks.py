@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram.types import Message
 
@@ -507,6 +507,7 @@ class TestMemKillCallback:
         callback.data = "mem_kill:plex"
         callback.answer = AsyncMock()
         callback.message = MagicMock()
+        callback.message.date = datetime.now(timezone.utc)  # a live alert
         callback.message.answer = AsyncMock()
 
         await handler(callback)
@@ -527,6 +528,7 @@ class TestMemKillCallback:
         callback.data = "mem_kill:plex"
         callback.answer = AsyncMock()
         callback.message = MagicMock()
+        callback.message.date = datetime.now(timezone.utc)  # a live alert
         callback.message.answer = AsyncMock()
 
         await handler(callback)
@@ -547,6 +549,7 @@ class TestMemKillCallback:
         callback.data = "mem_kill:plex"
         callback.answer = AsyncMock()
         callback.message = MagicMock()
+        callback.message.date = datetime.now(timezone.utc)  # a live alert
         callback.message.answer = AsyncMock()
 
         await handler(callback)
@@ -574,6 +577,7 @@ class TestMemKillCallback:
         callback.data = "mem_kill:plex"
         callback.answer = AsyncMock()
         callback.message = MagicMock()
+        callback.message.date = datetime.now(timezone.utc)  # a live alert
         callback.message.answer = AsyncMock()
 
         await handler(callback)
@@ -732,6 +736,7 @@ class TestMemRestartCallback:
         callback.data = data
         callback.answer = AsyncMock()
         callback.message = MagicMock()
+        callback.message.date = datetime.now(timezone.utc)  # a live alert
         callback.message.answer = AsyncMock()
         return callback
 

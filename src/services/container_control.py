@@ -82,6 +82,167 @@ def _attached_networks(container: Any) -> set[str]:
     return set(networks) if isinstance(networks, dict) else set()
 
 
+# HostConfig fields copied straight across: inspect key -> docker-py kwarg.
+_SIMPLE_HOST_FIELDS: dict[str, str] = {
+    "CpusetCpus": "cpuset_cpus",
+    "CpusetMems": "cpuset_mems",
+    "CpuPeriod": "cpu_period",
+    "CpuQuota": "cpu_quota",
+    "CpuRealtimePeriod": "cpu_rt_period",
+    "CpuRealtimeRuntime": "cpu_rt_runtime",
+    "BlkioWeight": "blkio_weight",
+    "BlkioWeightDevice": "blkio_weight_device",
+    "BlkioDeviceReadBps": "device_read_bps",
+    "BlkioDeviceWriteBps": "device_write_bps",
+    "BlkioDeviceReadIOps": "device_read_iops",
+    "BlkioDeviceWriteIOps": "device_write_iops",
+    "MemorySwap": "memswap_limit",
+    "MemorySwappiness": "mem_swappiness",
+    "OomKillDisable": "oom_kill_disable",
+    "OomScoreAdj": "oom_score_adj",
+    "PublishAllPorts": "publish_all_ports",
+    "UTSMode": "uts_mode",
+    "UsernsMode": "userns_mode",
+    "CgroupParent": "cgroup_parent",
+    "AutoRemove": "auto_remove",
+    "VolumeDriver": "volume_driver",
+    "StorageOpt": "storage_opt",
+    "DeviceCgroupRules": "device_cgroup_rules",
+    "DnsOptions": "dns_opt",
+}
+
+# HostConfig fields _extract_run_config carries itself.
+_HANDLED_HOST_FIELDS: frozenset[str] = frozenset({
+    "Binds", "Mounts", "ReadonlyRootfs", "VolumesFrom", "PidsLimit", "Init",
+    "PortBindings", "RestartPolicy", "NetworkMode", "Privileged", "CapAdd",
+    "CapDrop", "Devices", "DeviceRequests", "Runtime", "GroupAdd", "Dns",
+    "DnsSearch", "ExtraHosts", "LogConfig", "Tmpfs", "Ulimits", "Sysctls",
+    "SecurityOpt", "PidMode", "IpcMode", "ShmSize", "NanoCpus", "CpuShares",
+    "Memory", "MemoryReservation", "Links",
+}) | frozenset(_SIMPLE_HOST_FIELDS)
+
+# Filled in by the daemon (or Windows-only), not chosen by the user; a fresh
+# container gets the same values on its own.
+_DAEMON_HOST_FIELDS: frozenset[str] = frozenset({
+    "ConsoleSize", "CgroupnsMode", "Isolation", "ContainerIDFile", "MaskedPaths",
+    "ReadonlyPaths", "KernelMemory", "KernelMemoryTCP", "Cgroup", "CpuCount",
+    "CpuPercent", "IOMaximumIOps", "IOMaximumBandwidth",
+})
+
+_EMPTY_VALUES: tuple[Any, ...] = (None, "", 0, False, [], {})
+
+
+def unsupported_recreate_settings(attrs: dict[str, Any]) -> list[str]:
+    """HostConfig settings a /pull recreate would silently drop.
+
+    Checked before the original is stopped. Anything listed here is refused,
+    because a replacement that quietly loses a setting (a memory cap, a
+    capability, a mount) looks healthy and is not the container you had.
+    """
+    host_config = attrs.get("HostConfig") or {}
+    return sorted(
+        key for key, value in host_config.items()
+        if key not in _HANDLED_HOST_FIELDS
+        and key not in _DAEMON_HOST_FIELDS
+        and value not in _EMPTY_VALUES
+    )
+
+
+def _primary_endpoint_config(attrs: dict[str, Any]) -> dict[str, Any]:
+    """API-shape endpoint config for the primary network, or {} if none needed.
+
+    Only user-defined networks take aliases or a static address; the built-in
+    modes (bridge, host, none, container:x) are recreated by name alone.
+    """
+    mode = (attrs.get("HostConfig") or {}).get("NetworkMode") or ""
+    if mode in ("", "default", "bridge", "host", "none") or mode.startswith("container:"):
+        return {}
+    networks = (attrs.get("NetworkSettings") or {}).get("Networks") or {}
+    endpoint = networks.get(mode) if isinstance(networks, dict) else None
+    if not endpoint:
+        return {}
+    kw = _endpoint_connect_kwargs(endpoint, (attrs.get("Id") or "")[:12])
+    config: dict[str, Any] = {}
+    if kw.get("aliases"):
+        config["Aliases"] = kw["aliases"]
+    if kw.get("links"):
+        config["Links"] = [f"{name}:{alias}" if alias else name for name, alias in kw["links"]]
+    ipam = {
+        api_key: kw[kwarg]
+        for api_key, kwarg in (
+            ("IPv4Address", "ipv4_address"),
+            ("IPv6Address", "ipv6_address"),
+            ("LinkLocalIPs", "link_local_ips"),
+        )
+        if kw.get(kwarg)
+    }
+    if ipam:
+        config["IPAMConfig"] = ipam
+    if kw.get("driver_opt"):
+        config["DriverOpts"] = kw["driver_opt"]
+    return config
+
+
+def _mount_targets(attrs: dict[str, Any]) -> set[str]:
+    """Container paths already covered by Binds or structured HostConfig.Mounts."""
+    host_config = attrs.get("HostConfig") or {}
+    covered: set[str] = set()
+    for bind in host_config.get("Binds") or []:
+        parts = str(bind).split(":")
+        if len(parts) >= 2:
+            covered.add(parts[1])
+    for mount in host_config.get("Mounts") or []:
+        if isinstance(mount, dict) and mount.get("Target"):
+            covered.add(mount["Target"])
+    return covered
+
+
+def _unbound_volume_binds(attrs: dict[str, Any]) -> list[str]:
+    """Bind strings naming volumes that Binds/HostConfig.Mounts do not cover.
+
+    These are the anonymous volumes Docker made for an image's VOLUME lines.
+    Naming them keeps the service on its existing data.
+    """
+    covered = _mount_targets(attrs)
+    binds: list[str] = []
+    for mount in attrs.get("Mounts") or []:
+        if not isinstance(mount, dict) or mount.get("Type") != "volume":
+            continue
+        dest, name = mount.get("Destination"), mount.get("Name")
+        if dest and name and dest not in covered:
+            binds.append(f"{name}:{dest}:{'rw' if mount.get('RW', True) else 'ro'}")
+    return binds
+
+
+def _resolved_host_mounts(attrs: dict[str, Any]) -> list[dict[str, Any]]:
+    """HostConfig.Mounts with anonymous volume sources filled in by identity."""
+    resolved = {
+        m.get("Destination"): m.get("Name")
+        for m in attrs.get("Mounts") or []
+        if isinstance(m, dict) and m.get("Type") == "volume"
+    }
+    mounts: list[dict[str, Any]] = []
+    for mount in (attrs.get("HostConfig") or {}).get("Mounts") or []:
+        mount = dict(mount)
+        if mount.get("Type") == "volume" and not mount.get("Source"):
+            name = resolved.get(mount.get("Target"))
+            if name:
+                mount["Source"] = name
+        mounts.append(mount)
+    return mounts
+
+
+def _legacy_links(links: list[str]) -> dict[str, str]:
+    """HostConfig.Links ("/db:/app/db") to docker-py's {name: alias}."""
+    result: dict[str, str] = {}
+    for link in links:
+        name, _, alias = str(link).partition(":")
+        name = name.lstrip("/")
+        if name:
+            result[name] = alias.rsplit("/", 1)[-1] or name
+    return result
+
+
 class ContainerController:
     """Controls Docker containers with protection support."""
 
@@ -158,12 +319,19 @@ class ContainerController:
     async def pull_and_recreate(self, container_name: str) -> str:
         """Pull latest image and recreate container. Returns a status message.
 
-        Uses a safe approach:
-        1. Pull the new image first (no changes to running container)
-        2. Save full container config
-        3. Stop and remove old container
-        4. Attempt recreation with new image
-        5. If recreation fails, attempt rollback with old image
+        The original is never deleted until its replacement is running:
+        1. Refuse, before touching anything, if inspect shows settings the
+           extractor cannot carry (a silent drop is worse than no update).
+        2. Pull the new image (no changes to the running container).
+        3. Stop the original and rename it aside.
+        4. Create the replacement (primary network endpoint included), join
+           its secondary networks, then start it. Create and start are
+           separate calls so a start failure leaves a known container to
+           remove, instead of a half-made one blocking the name.
+        5. On any failure: remove only the replacement this call created,
+           rename the original back and start it. Its networks, volumes and
+           anonymous volumes were never detached.
+        6. On success, remove the original.
         """
         try:
             def _get_container_info() -> tuple[Any, str, str | None]:
@@ -181,9 +349,21 @@ class ContainerController:
                     old_image_id = None
                 return container, image_name, old_image_id
 
-            container, image_name, old_image_id = await asyncio.to_thread(_get_container_info)
+            container, image_name, _old_image_id = await asyncio.to_thread(_get_container_info)
+            attrs = container.attrs
 
-            # Step 1: Pull latest image BEFORE touching the running container
+            unsupported = unsupported_recreate_settings(attrs)
+            if unsupported:
+                logger.warning(
+                    f"Refusing to recreate {container_name}: cannot carry {', '.join(unsupported)}"
+                )
+                return (
+                    f"❌ Not updating {container_name}: it uses settings this bot can't carry "
+                    f"over to a new container ({', '.join(unsupported)}). Container unchanged. "
+                    f"Update it from the Unraid Docker tab instead."
+                )
+
+            # Step 2: Pull latest image BEFORE touching the running container
             logger.info(f"Pulling image for {container_name}: {image_name}")
             try:
                 await asyncio.wait_for(
@@ -193,85 +373,103 @@ class ContainerController:
             except asyncio.TimeoutError:
                 return f"❌ Timed out pulling image for {container_name} (>5 min). Container unchanged."
 
-            # Step 2: Save full container config while still running
-            attrs = container.attrs
             run_config = self._extract_run_config(attrs)
             secondary_networks = self._get_secondary_networks(attrs)
+            was_running = (attrs.get("State") or {}).get("Running", True) is not False
+            backup_name = f"{container_name}-pre-update-{(attrs.get('Id') or 'x')[:8]}"
 
-            # Step 3: Stop and remove old container
+            # Step 3: stop and set the original aside under a new name.
             await asyncio.to_thread(container.stop)
-            await asyncio.to_thread(container.remove)
-
-            # Step 4: Recreate container with new image
             try:
-                await asyncio.to_thread(
-                    self.docker_client.containers.run,  # type: ignore[arg-type]
-                    image_name,
-                    name=container_name,
-                    detach=True,
-                    **run_config,
-                )
-                # Reconnect secondary networks
-                failed_networks: list[str] = []
-                if secondary_networks:
-                    new_container = await asyncio.to_thread(
-                        self.docker_client.containers.get, container_name
-                    )
-                    attached = _attached_networks(new_container)
-                    for net_name, endpoint in secondary_networks.items():
-                        if net_name in attached:
-                            # run() already joined it, e.g. NetworkMode "default"
-                            # is reported as the "bridge" network.
-                            continue
-                        try:
-                            network = await asyncio.to_thread(
-                                self.docker_client.networks.get, net_name
-                            )
-                            await asyncio.to_thread(
-                                network.connect, new_container, **endpoint
-                            )
-                        except Exception as net_err:
-                            failed_networks.append(net_name)
-                            logger.warning(
-                                f"Failed to reconnect {container_name} to network {net_name}: {net_err}"
-                            )
+                await asyncio.to_thread(container.rename, backup_name)
+            except Exception as rename_err:
+                logger.error(f"Could not rename {container_name} aside: {rename_err}", exc_info=True)
+                if was_running:
+                    await asyncio.to_thread(container.start)
+                return f"❌ Failed to update {container_name}: could not set the old container aside. Container unchanged."
 
-                logger.info(f"Recreated container: {container_name}")
-                msg = f"✅ {container_name} updated (pulled {image_name} and recreated)"
-                if failed_networks:
-                    msg += f"\n⚠️ Failed to reconnect networks: {', '.join(failed_networks)}"
-                return msg
-
-            except Exception as recreate_err:
-                # Step 5: Rollback -- try to recreate with old image
-                logger.error(
-                    f"Failed to recreate {container_name} with new image: {recreate_err}",
-                    exc_info=True,
-                )
-                # Use old_image_id if available, fall back to image_name
-                rollback_image = old_image_id or image_name
+            async def _restore(reason: str) -> str:
                 try:
-                    await asyncio.to_thread(
-                        self.docker_client.containers.run,  # type: ignore[arg-type]
-                        rollback_image,
-                        name=container_name,
-                        detach=True,
-                        **run_config,
-                    )
-                    logger.info(f"Rolled back {container_name} to previous image")
-                    return (
-                        f"❌ Failed to recreate {container_name} with new image. "
-                        f"Rolled back to previous version. Check logs for details."
-                    )
-                except Exception as rollback_err:
+                    await asyncio.to_thread(container.rename, container_name)
+                    if was_running:
+                        await asyncio.to_thread(container.start)
+                except Exception as restore_err:
                     logger.error(
-                        f"CRITICAL: Rollback also failed for {container_name}: {rollback_err}",
+                        f"CRITICAL: could not restore {container_name} from {backup_name}: {restore_err}",
                         exc_info=True,
                     )
                     return (
-                        f"❌ CRITICAL: {container_name} was removed but could not be recreated. "
-                        f"Manual intervention required. Check logs for details."
+                        f"❌ CRITICAL: {container_name} could not be updated or restored. "
+                        f"The original is stopped as `{backup_name}`; rename it back and start it."
                     )
+                logger.info(f"Restored original {container_name} after failed update")
+                return (
+                    f"❌ Failed to update {container_name} ({reason}). "
+                    f"The original container was restored unchanged. Check logs for details."
+                )
+
+            # Step 4: create the replacement.
+            try:
+                new_container = await asyncio.to_thread(
+                    self.docker_client.containers.create,
+                    image_name,
+                    name=container_name,
+                    **run_config,
+                )
+            except Exception as create_err:
+                logger.error(f"Failed to create {container_name}: {create_err}", exc_info=True)
+                return await _restore("could not create the new container")
+
+            failed_networks: list[str] = []
+            if secondary_networks:
+                try:
+                    attached = _attached_networks(
+                        await asyncio.to_thread(self.docker_client.containers.get, container_name)
+                    )
+                except Exception:
+                    attached = set()
+                for net_name, endpoint in secondary_networks.items():
+                    if net_name in attached:
+                        # create() already joined it, e.g. NetworkMode "default"
+                        # is reported as the "bridge" network.
+                        continue
+                    try:
+                        network = await asyncio.to_thread(self.docker_client.networks.get, net_name)
+                        await asyncio.to_thread(network.connect, new_container, **endpoint)
+                    except Exception as net_err:
+                        failed_networks.append(net_name)
+                        logger.warning(
+                            f"Failed to reconnect {container_name} to network {net_name}: {net_err}"
+                        )
+
+            try:
+                await asyncio.to_thread(new_container.start)
+            except Exception as start_err:
+                logger.error(f"New {container_name} failed to start: {start_err}", exc_info=True)
+                try:
+                    # Only the container this call created; never the original.
+                    await asyncio.to_thread(new_container.remove, force=True)
+                except Exception as rm_err:
+                    logger.error(f"Could not remove failed replacement for {container_name}: {rm_err}")
+                    return (
+                        f"❌ CRITICAL: the new {container_name} would not start and could not be "
+                        f"removed. The original is stopped as `{backup_name}`."
+                    )
+                return await _restore("the new container would not start")
+
+            # Step 6: the replacement is running; drop the original.
+            leftover = ""
+            try:
+                await asyncio.to_thread(container.remove)
+            except Exception as rm_err:
+                logger.warning(f"Could not remove old {container_name} ({backup_name}): {rm_err}")
+                leftover = f"\n⚠️ The old container is still there as `{backup_name}`; remove it when happy."
+
+            logger.info(f"Recreated container: {container_name}")
+            msg = f"✅ {container_name} updated (pulled {image_name} and recreated)"
+            if failed_networks:
+                msg += f"\n⚠️ Failed to reconnect networks: {', '.join(failed_networks)}"
+            return msg + leftover
 
         except docker.errors.NotFound:
             return f"❌ Container '{container_name}' not found"
@@ -335,15 +533,47 @@ class ContainerController:
         if config.get("OpenStdin"):
             run_config["stdin_open"] = config["OpenStdin"]
 
-        # From HostConfig
-        if host_config.get("Binds"):
-            run_config["volumes"] = host_config["Binds"]
+        # From HostConfig. Volumes are carried by identity: an image-declared
+        # VOLUME gets an anonymous volume, and recreating without naming it
+        # would start the service on a fresh, empty one.
+        volumes = list(host_config.get("Binds") or []) + _unbound_volume_binds(attrs)
+        if volumes:
+            run_config["volumes"] = volumes
+        if host_config.get("Mounts"):
+            run_config["mounts"] = _resolved_host_mounts(attrs)
+        if host_config.get("ReadonlyRootfs"):
+            run_config["read_only"] = True
+        if host_config.get("VolumesFrom"):
+            run_config["volumes_from"] = list(host_config["VolumesFrom"])
+        if host_config.get("PidsLimit") and host_config["PidsLimit"] > 0:
+            run_config["pids_limit"] = host_config["PidsLimit"]
+        if host_config.get("Init"):
+            run_config["init"] = True
+        if host_config.get("Links"):
+            run_config["links"] = _legacy_links(host_config["Links"])
+        for api_key, kwarg in _SIMPLE_HOST_FIELDS.items():
+            value = host_config.get(api_key)
+            if value not in _EMPTY_VALUES:
+                run_config[kwarg] = value
         if host_config.get("PortBindings"):
             run_config["ports"] = host_config["PortBindings"]
         if host_config.get("RestartPolicy"):
             run_config["restart_policy"] = host_config["RestartPolicy"]
         if host_config.get("NetworkMode"):
-            run_config["network_mode"] = host_config["NetworkMode"]
+            mode = host_config["NetworkMode"]
+            endpoint = _primary_endpoint_config(attrs)
+            if endpoint:
+                # A user-defined network (br0, a compose network) with a static
+                # IP or aliases: set them at create time, or the replacement
+                # comes up on a random address.
+                run_config["network"] = mode
+                run_config["networking_config"] = {mode: endpoint}
+            else:
+                run_config["network_mode"] = mode
+        if config.get("MacAddress"):
+            # Only present when someone set it; a Docker-assigned MAC lives in
+            # NetworkSettings and is deliberately not pinned.
+            run_config["mac_address"] = config["MacAddress"]
         if host_config.get("Privileged"):
             run_config["privileged"] = host_config["Privileged"]
         if host_config.get("CapAdd"):
