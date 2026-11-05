@@ -2,17 +2,16 @@ import hashlib
 import logging
 import re
 import threading
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
-import re._compiler as _sre_compile
 import re._constants as _sre  # stdlib regex parser, as used by re.compile
 import re._parser as _sre_parse
 
+from src.alerts.regex_worker import REGEX_MATCH_TIMEOUT_SECONDS, RegexWorkerError, regex_worker
 from src.utils.formatting import strip_log_timestamps
 from src.utils.json_store import atomic_write_json, load_json, log_rejected
 
@@ -90,159 +89,18 @@ def _backtracking_risk(items: Any) -> str:
     return ""
 
 
-def _literal_codes(items: Any) -> set[int]:
-    """Every literal code point and range end written in a parsed pattern."""
-    codes: set[int] = set()
-    for op, av in items:
-        if op is _sre.LITERAL or op is _sre.NOT_LITERAL:
-            codes.add(av)
-        elif op is _sre.IN:
-            codes |= _literal_codes(av)
-        elif op is _sre.RANGE:
-            codes.update(av)
-        for sub in _children(op, av):
-            codes |= _literal_codes(sub)
-    return codes
-
-
-# The domain one-character bodies are compared over: the whole Basic
-# Multilingual Plane (a Latin-1 sample let Ж*Ж*Ж*$ through), any astral code
-# point the pattern itself names, and astral letters, digits and symbols that
-# \\w, \\d and negated classes reach (an astral-only class sampled as empty and
-# looked disjoint from \\w).
-_BMP = range(0x10000)
-_ASTRAL_SAMPLES = (0x10400, 0x1D7CE, 0x1F600, 0x20000, 0x10FFFF)
-
-
-def _char_set(state: Any, items: Any, extra: frozenset[int]) -> frozenset[int] | None:
-    """Code points a one-character item matches; None if it is not one character."""
-    sub = _sre_parse.SubPattern(state, list(items))
-    if sub.getwidth() != (1, 1):
-        return None
-    compiled = _sre_compile.compile(sub, re.IGNORECASE)
-    return frozenset(c for c in (*_BMP, *_ASTRAL_SAMPLES, *extra) if compiled.fullmatch(chr(c)))
-
-
-def _inline(items: Any) -> Iterator[tuple[Any, Any]]:
-    """Items in sequence, with plain groups opened so (z*)(z*) reads as z*z*."""
-    for op, av in items:
-        if op is _sre.SUBPATTERN:
-            yield from _inline(av[3])
-        else:
-            yield op, av
-
-
-def _adjacent_repeat_risk(state: Any, items: Any, top: bool = True) -> str:
-    """Why two unbounded repeats in one sequence can split the same text many ways, or ''.
-
-    z*z*z*$ or \\d+\\s*\\d+x is polynomial, not exponential, so the nesting check
-    above passes it, yet each repeat in the run multiplies the work by the line
-    length and a log line of a few thousand characters stalls the event loop.
-    A run of unbounded repeats is broken only by a required item none of them
-    can match, because a separator the repeats can swallow (the z in
-    z*zz*z) keeps the ambiguity; a second repeat whose characters overlap the
-    run is refused. So \\d+\\s+\\d+ and ^\\[\\w+\\] .*error load, .*foo.*x does
-    not (on a line of repeated "foo" it is cubic). Anything this cannot
-    reduce to one character counts as overlapping. A possessive repeat never
-    gives text back, so it does not start a run. Any repeat of varying
-    length counts (z{0,16} as much as z*). The last item of the whole
-    pattern is exempt: with nothing after it left to fail, its split with the
-    run is settled by the first success, so 0.22-style
-    "Connection refused to .* on port \\d+" still loads (z*z*$ does not: $ can
-    fail), and so is a final .* before $, so ^.*error.*$ loads.
-    """
-    extra = frozenset(c for c in _literal_codes(items) if c >= 0x10000)
-    # Keyed by id() but holding the body itself, so a freed list's id cannot
-    # be reused by another body and hit a stale entry.
-    sets: dict[int, tuple[Any, frozenset[int] | None]] = {}
-
-    def char_set(body: Any) -> frozenset[int] | None:
-        hit = sets.get(id(body))
-        if hit is None or hit[0] is not body:
-            hit = (body, _char_set(state, body, extra))
-            sets[id(body)] = hit
-        return hit[1]
-
-    def overlaps(a: Any, b: Any) -> bool:
-        set_a, set_b = char_set(a), char_set(b)
-        return set_a is None or set_b is None or bool(set_a & set_b)
-
-    def scan(seq: Any, run: list[Any], top: bool) -> tuple[str, list[Any]]:
-        """Walk one sequence carrying the run it was entered with; return the run it leaves."""
-        flat = list(_inline(seq))
-
-        def settled(index: int) -> bool:
-            """Nothing after this item can fail: it ends the pattern, or it is .*
-            followed only by $ (a log line has no newline for . to stop at)."""
-            if not top:
-                return False
-            rest = flat[index + 1:]
-            if not rest:
-                return True
-            op, av = flat[index]
-            return (
-                op in _REPEATS and av[1] == _sre.MAXREPEAT and list(av[2]) == [(_sre.ANY, None)]
-                and all(o is _sre.AT and a in (_sre.AT_END, _sre.AT_END_STRING) for o, a in rest)
-            )
-
-        for index, (op, av) in enumerate(flat):
-            is_last = top and index == len(flat) - 1
-            if op is _sre.BRANCH or op is _sre.GROUPREF_EXISTS:
-                # Each alternative continues the run (.*(?:x|.*y)z is .*.*y),
-                # and what follows sees the runs of all of them together.
-                alternatives = av[1] if op is _sre.BRANCH else [av[1], av[2] or []]
-                merged: list[Any] = []
-                for alternative in alternatives:
-                    why, out = scan(alternative, list(run), is_last)
-                    if why:
-                        return why, []
-                    merged += [body for body in out if all(body is not m for m in merged)]
-                run = merged
-                continue
-            if op in (_sre.ASSERT, _sre.ASSERT_NOT):
-                # A lookaround re-reads text the run may still give back.
-                why, _ = scan(av[1], list(run), False)
-                if why:
-                    return why, []
-                continue
-            # Any repeat of varying length joins a run: six z{0,16} in a row
-            # split text as freely as z*, and a backreference matches whatever
-            # its group took.
-            if op is _sre.GROUPREF and run and not settled(index):
-                return "a backreference follows a repeat that can match the same text", []
-            if op in _REPEATS and av[1] > av[0]:
-                if not settled(index) and any(overlaps(prev, av[2]) for prev in run):
-                    return "two repeats in one run can match the same text", []
-                # Overlapping none of the run, a required repeat (+) also ends it.
-                kept = run if av[0] == 0 else []
-                run = kept if op is _sre.POSSESSIVE_REPEAT else [*kept, av[2]]
-            elif run and _sre_parse.SubPattern(state, [(op, av)]).getwidth()[0] > 0:
-                # A required item ends the run only if no repeat in it can match it.
-                body = av[2] if op in _REPEATS else [(op, av)]
-                if not any(overlaps(prev, body) for prev in run):
-                    run = []
-            for sub in _children(op, av):
-                why = _adjacent_repeat_risk(state, sub, top=False)
-                if why:
-                    return why, []
-        return "", run
-
-    return scan(items, [], top)[0]
-
-
 # Inputs that make common backtracking shapes blow up, tried against every
-# regex before it is used. The limit of this check: Python's re has no
-# timeout and holds the GIL while it searches, so the thread's join timeout
-# does not fire until the search ends and a probe that hangs blocks the
-# caller with it. The parsed checks above are the guarantee; this is the net.
-_ADVERSARIAL_PROBES = [
+# regex before it is used, in the worker (src/alerts/regex_worker.py) so a
+# probe that hangs costs its time limit and nothing more. The parse-tree check
+# above refuses the exponential shapes outright; anything slower that slips
+# past both is stopped by the worker's limit at match time and disabled.
+_ADVERSARIAL_PROBES = (
     "a" * 3000 + "!",
     "0" * 3000 + "x",
     " " * 3000 + "x",
     "ab" * 1500 + "!",
     "a1-_." * 600 + "\x00",
-]
-_PROBE_SECONDS = 0.5
+)
 
 
 def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
@@ -258,36 +116,19 @@ def validate_regex_pattern(pattern: str) -> tuple[bool, str]:
         return False, f"Pattern too long (max {MAX_REGEX_LENGTH} chars)"
 
     try:
-        compiled = re.compile(pattern, re.IGNORECASE)  # as IgnorePattern compiles it
-        parsed = _sre_parse.parse(pattern, re.IGNORECASE)
-        why = _backtracking_risk(parsed) or _adjacent_repeat_risk(parsed.state, parsed)
+        re.compile(pattern, re.IGNORECASE)
+        why = _backtracking_risk(_sre_parse.parse(pattern, re.IGNORECASE))
     except re.error as e:
         return False, str(e)
     if why:
         return False, f"Pattern may cause performance issues ({why})"
 
-    # Probe with pathological strings in a daemon thread (signal.SIGALRM is
-    # main-thread only). The join timeout catches a slow probe only between
-    # searches; see the note on _ADVERSARIAL_PROBES.
-    # The thread times its own searches: a search holds the GIL, so join()
-    # cannot time out while one runs, and a slow probe used to finish, fill
-    # the result and pass.
-    budget = _PROBE_SECONDS * len(_ADVERSARIAL_PROBES)
-    result: list[float] = []
-
-    def _test_regex() -> None:
-        started = time.monotonic()
-        for probe in _ADVERSARIAL_PROBES:
-            compiled.search(probe)
-        result.append(time.monotonic() - started)
-
-    t = threading.Thread(target=_test_regex, daemon=True)
-    t.start()
-    t.join(timeout=budget)
-
-    if not result or result[0] > budget:
-        return False, "Pattern causes excessive backtracking"
-
+    try:
+        if regex_worker().search(pattern, _ADVERSARIAL_PROBES) is None:
+            return False, "Pattern causes excessive backtracking"
+    except RegexWorkerError as e:
+        # Says nothing about the pattern; the match-time limit still applies.
+        logger.error(f"Could not probe regex {pattern!r}: {e}")
     return True, ""
 
 
@@ -304,27 +145,33 @@ class IgnorePattern:
     match_type: Literal["substring", "regex"] = "substring"
     explanation: str | None = None
     added: str | None = None  # ISO timestamp
-    # Exclude from serialization and comparison
-    _compiled_regex: re.Pattern[str] | None = field(default=None, init=False, repr=False, compare=False)
+    # Set when a search overran the worker's time limit; never saved.
+    disabled: bool = field(default=False, init=False, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
-        """Pre-compile regex patterns for performance."""
-        if self.match_type == "regex":
-            try:
-                self._compiled_regex = re.compile(self.pattern, re.IGNORECASE)
-            except re.error as e:
-                logger.warning(f"Invalid regex pattern '{self.pattern}': {e}")
-                self._compiled_regex = None
+    def matches(self, *texts: str) -> bool:
+        """Whether this pattern matches any of the texts.
 
-    def matches(self, message: str) -> bool:
-        """Check if this pattern matches the given message."""
-        if self.match_type == "regex":
-            if self._compiled_regex is None:
-                return False
-            return bool(self._compiled_regex.search(message))
-        else:
-            # Substring match (case-insensitive)
-            return self.pattern.lower() in message.lower()
+        A regex runs in the worker with a time limit. One that overruns is
+        disabled for the rest of this run and logged; it stays in the file.
+        """
+        if self.match_type != "regex":
+            needle = self.pattern.lower()
+            return any(needle in text.lower() for text in texts)
+        if self.disabled:
+            return False
+        try:
+            found = regex_worker().search(self.pattern, texts)
+        except RegexWorkerError as e:
+            logger.error(f"Regex ignore {self.pattern!r} not checked: {e}")
+            return False
+        if found is None:
+            self.disabled = True
+            logger.error(
+                f"Regex ignore {self.pattern!r} took over {REGEX_MATCH_TIMEOUT_SECONDS}s on one "
+                "log line and is disabled until restart; simplify it in ignored_errors.json"
+            )
+            return False
+        return found
 
 
 class IgnoreManager:
@@ -382,7 +229,8 @@ class IgnoreManager:
 
             # Check runtime ignores (can be regex or substring)
             for ignore_pattern in self._runtime_ignores.get(container, []):
-                if ignore_pattern.matches(message) or ignore_pattern.matches(message_stripped):
+                texts = (message,) if message_stripped == message else (message, message_stripped)
+                if ignore_pattern.matches(*texts):
                     return True
 
             return False

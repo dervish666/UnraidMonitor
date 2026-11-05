@@ -7,10 +7,12 @@ takes seconds on 38 characters.
 """
 
 import json
+import time
 
 import pytest
 
 from src.alerts.ignore_manager import IgnoreManager, validate_regex_pattern
+from src.alerts.regex_worker import REGEX_MATCH_TIMEOUT_SECONDS, RegexWorker
 
 # What a 0.22 install has on disk: the analyzer's regexes plus a substring.
 PRE_BRANCH_FILE = {
@@ -67,37 +69,8 @@ def test_pre_branch_ignores_load_match_and_survive_a_save(tmp_path):
     r"(\w+\s?)+$",
     r"(?:x+y?)*z",
     r"(a{1,3}){16}",
-    # Polynomial: a run of overlapping repeats, not nested ones (round 3 review).
-    r"z*z*z*z*z*$",
-    r"\w*\w*\w*\w*Q",
-    r"(z*)(z*)x",
-    r"\d+\s*\d+x",
-    r"\w+\w+Q",
-    # Round 4 review: non-Latin-1 bodies, and separators the repeats swallow.
-    r"Ж*Ж*Ж*Ж*Ж*$",
-    "\U0001F600*\U0001F600*x",
-    r"z*zz*zz*zz*zz*$",
-    r".*foo.*bar",
-    r"z*z*+Q",
-    r"(z*z*)x",  # last in its group, not in the pattern
-    # Round 4 review (Opus): a huge bound splits like +, a backreference
-    # matches what its group took.
-    r"\d{1,9999}\d+q",
-    r"(\d+)\1q",
-    r"\d+.\d+ms",
-    r"\w+.\w+=",
-    # Round 5 review (Sol): small bounded repeats in a row, and an
-    # astral-only class that a BMP sample saw as empty.
-    r"z{0,16}z{0,16}z{0,16}z{0,16}z{0,16}z{0,16}Q",
-    "[^\x00-\uffff]+\\w+[^\x00-\uffff]+\\w+Q",
-    # Round 5 review (Opus): a run carried into an alternation, a
-    # conditional or a lookahead.
-    r"(?:.*error|.*fail).*timeout",
-    r"\d+(?:\d+|x)q",
-    r"\w+(?=.*error)x",
-    r"(\d+)(?(1)\d+q|z)",
 ])
-def test_backtracking_shapes_are_refused(pattern):
+def test_exponential_shapes_are_refused_on_load(pattern):
     ok, why = validate_regex_pattern(pattern)
     assert not ok and "performance" in why
 
@@ -111,8 +84,8 @@ def test_backtracking_shapes_are_refused(pattern):
     r"^\[\w+\] .*error",
     r"error:\s*\d+",
     r"^z*+z*+Q$",
-    r"Connection refused to .* on port \d+",  # the trailing repeat has nothing after it to fail
-    r".*foo.*",
+    r"Connection refused to .* on port \d+",
+    r".*foo.*bar",
     r"\S+@\S+",
     r"^.*error.*$",
     r"(?i)^.*(error|fail).*$",
@@ -124,27 +97,63 @@ def test_backtracking_shapes_are_refused(pattern):
     r"\d{1,20}:\d{1,20}",
     r"upstream timed out .* client: (\d{1,3}\.){3}\d{1,3}",
     r"\d+\s+\d+",
+    # Round 6 review (Sol): ordinary filters the static run check refused.
+    r"^duration=\d+(?:ms|s)? timeout$",
+    r"^duration=\d+(?:\.\d+)?ms$",
 ])
 def test_ordinary_patterns_are_allowed(pattern):
     assert validate_regex_pattern(pattern) == (True, "")
 
 
-def test_overlapping_repeat_run_hand_edited_into_file_is_never_used(tmp_path):
-    """z*z*z*z*z*$ passed the nesting check, loaded, and stalled on 150 z's + '!'."""
-    path = tmp_path / "ignored_errors.json"
-    entry = {"pattern": "z*z*z*z*z*$", "match_type": "regex", "explanation": None, "added": None}
-    path.write_text(json.dumps({"sonarr": [entry]}))
-    manager = IgnoreManager({}, str(path))
+def test_probe_that_overruns_refuses_the_pattern():
+    r"""\d+0\d+q passes the parse check; on the "0"*3000 probe it is cubic.
 
-    assert not manager.is_ignored("sonarr", "z" * 150 + "!")  # returns at once
-    manager.add_ignore_pattern("radarr", "disk quota", "substring")
-    assert json.loads(path.read_text())["sonarr"] == [entry]
-
-
-def test_probe_slower_than_its_budget_is_refused(monkeypatch):
-    """A search holds the GIL, so join() never timed out and a slow probe passed."""
-    import src.alerts.ignore_manager as im
-
-    monkeypatch.setattr(im, "_PROBE_SECONDS", 0.0)
-    ok, why = validate_regex_pattern(r"timeout after \d+ms")
+    A search holds the GIL, so the old in-process probe could not time out:
+    it blocked startup for 9s and then accepted the pattern.
+    """
+    started = time.monotonic()
+    ok, why = validate_regex_pattern(r"\d+0\d+q")
     assert not ok and "backtracking" in why
+    assert time.monotonic() - started < 15  # the limit plus one worker restart
+
+
+# Every polynomial shape six review rounds found past a static check, with a
+# character that makes it backtrack. None can be told apart from a slow but
+# fair pattern by reading it; the worker's time limit stops all of them.
+SLOW_PATTERNS = [
+    ("z*z*z*z*z*$", "z"),
+    ("Ж*Ж*Ж*Ж*Ж*$", "Ж"),
+    ("z{0,16}z{0,16}z{0,16}z{0,16}z{0,16}z{0,16}Q", "z"),
+    ("[^\\x00-\\U0001d7ff]+\\d+[^\\x00-\\U0001d7ff]+\\d+Q", "\U0001E950"),
+    ("z+(?>z+Q)", "z"),
+    ("(?:.*error|.*fail).*timeout", "error"),
+]
+
+
+@pytest.mark.parametrize(("pattern", "char"), SLOW_PATTERNS)
+def test_slow_hand_edited_regex_is_stopped_and_disabled(tmp_path, pattern, char):
+    path = tmp_path / "ignored_errors.json"
+    entry = {"pattern": pattern, "match_type": "regex", "explanation": None, "added": None}
+    path.write_text(json.dumps({"sonarr": [entry]}, ensure_ascii=False))
+    manager = IgnoreManager({}, str(path))
+    line = "ERROR " + char * (3994 // len(char)) + "!"
+
+    started = time.monotonic()
+    assert not manager.is_ignored("sonarr", line)
+    assert time.monotonic() - started < REGEX_MATCH_TIMEOUT_SECONDS + 2
+    started = time.monotonic()
+    assert not manager.is_ignored("sonarr", line)  # disabled: not searched again
+    assert time.monotonic() - started < 0.1
+
+    manager.add_ignore_pattern("radarr", "disk quota", "substring")
+    assert json.loads(path.read_text())["sonarr"] == [entry]  # still on disk to fix
+
+
+def test_worker_answers_again_after_an_overrun():
+    worker = RegexWorker(timeout=0.25)
+    try:
+        assert worker.search(r"(?:.*error|.*fail).*timeout", ("error" * 800,)) is None
+        assert worker.search(r"timeout after \d+ms", ("timeout after 30ms",)) is True
+        assert worker.search(r"timeout after \d+ms", ("all good",)) is False
+    finally:
+        worker.close()
