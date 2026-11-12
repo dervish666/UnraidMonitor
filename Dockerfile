@@ -2,7 +2,7 @@
 #   docker pull python:3.11-slim
 #   docker inspect --format='{{index .RepoDigests 0}}' python:3.11-slim
 # Then use: FROM python:3.11-slim@sha256:<digest>
-FROM python:3.11-slim@sha256:d6e4d224f70f9e0172a06a3a2eba2f768eb146811a349278b38fff3a36463b47
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 WORKDIR /app
 
